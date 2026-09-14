@@ -1,58 +1,91 @@
-# 肥鱼娘 App · 独立便携版（E:/feiyu_standalone）
+# 肥鱼娘 App · 独立便携版
 
-**全便携**独立项目：自带 Python 解释器、运行引擎（依赖库）、插件库、桌面窗口界面、
-本地 TTS 模型。**整包拷到任何 Windows 10/11 机器即可运行**，不需要安装 Python。
+**全便携**桌面 AI 伴侣：主体软件自带 Python 解释器与运行引擎，**clone 后即可运行**
+（纯文字聊天 + 云端 TTS）；16 个能力插件 + 4 类资源大件通过**插件市场**按需安装。
 
 ```
-E:/feiyu_standalone/
-├─ FeiyuApp.exe           双击启动（内置自举：自动把 venv 指向包内解释器）
-├─ start_app.bat          命令行启动（带控制台日志，自举逻辑同 exe）
-├─ app.py / server.py / settings_store.py   APP 壳（界面、桥接、覆盖式配置）
-├─ bridge/                                 桥接层（核心宿主/记忆/总结/插件/配置 API）
-├─ webui/                                  前端（仪表盘/聊天/记忆/总结/插件/配置）
-├─ plugins/            ★ 插件库（16 个可插拔插件包）
-├─ libs/               ★ 依赖库（~17 GB，全部自包含）
-│  └─ qq_bot_runtime/
-│     ├─ runtime/python/       基础 Python 3.13 解释器（51MB，venv 重定位目标）
-│     ├─ venv/                 Python 依赖（5.45GB，pyvenv.cfg 由启动器动态指向包内解释器）
-│     ├─ models/ + venv_vox/   本地 VoxCPM2 TTS（9.7GB，可选：vox_tts 插件用）
-│     ├─ tools/                ffmpeg + silk 编解码（语音功能，config 按包内路径推导）
-│     ├─ *.py                  智能体引擎源
-│     ├─ data/                 运行数据（hf_cache/video_tmp 等，首次自动填充）
-│     └─ emojis/               表情资源
-├─ pvz_games/             （可选）放 PlantsVsZombies.exe 供 PVZ 大脑自动开局
-└─ data/                  APP 覆盖层配置（纯净：全部插件默认关、无任何密钥）
+feiyu_standalone/            ← 本仓库（软件主体，~1.5GB）
+├─ FeiyuApp.exe              双击启动（首启自动建环境，之后秒开）
+├─ start_app.bat             命令行启动（带控制台日志，排障用）
+├─ app.py / server.py / settings_store.py   APP 壳（界面/桥接/覆盖式配置）
+├─ bridge/                   桥接层（核心宿主/记忆/总结/插件市场/配置 API）
+├─ webui/                    前端（仪表盘/聊天/记忆/总结/插件/配置）
+├─ plugins/                  插件库（**初始为空**——从插件市场安装）
+└─ libs/
+   ├─ offline_deps_core.zip  首启依赖离线包 5.46GB（Releases 下载，见下）
+   └─ qq_bot_runtime/        引擎（含 51MB 基础解释器；模型/资源不在仓库）
+
+<盘>:\plugins\               ← 插件仓库（包外，Releases 下载后解压到此处）
+├─ plugins/     16 个插件代码包（也可从市场装）
+├─ mc_pack/     Minecraft 资源（mc_bot + mc_mod + _mc_ref）
+├─ tools_pack/  语音转码（ffmpeg + silk）
+├─ voice_pack/  本地语音（VoxCPM2 模型 + venv_vox 推理环境）
+└─ vl_pack/     本地视频理解模型（Qwen2.5-VL）
 ```
 
-## 启动（拷到任何 Windows 机器）
+## 快速开始
 
-1. 把整个 `feiyu_standalone` 文件夹拷到目标机器任意位置（如 `D:\feiyu_standalone`）
-2. 双击 **`FeiyuApp.exe`** → 桌面窗口弹出 → 「配置」页填入你的 DeepSeek（或 GLM）Key → 保存
-3. 聊天。首次启动自动完成：venv 指向包内解释器（无需装 Python）、数据目录创建
+1. **clone 本仓库**（或 Releases 下载主包 zip）
+2. **下载依赖离线包**：Releases 的 `feiyu_core.part1/2/3`，合并后放到
+   `libs/offline_deps_core.zip`（不下载也能跑——首启自动转 pip 在线装，约 30-90 分钟）
+3. 双击 `FeiyuApp.exe` → 首启自动配置（进度窗口，约 2-3 分钟）→ 「配置」页填 DeepSeek/GLM
+   Key → 保存 → 聊天
+4. 需要插件时：插件资源包解压到 `<盘>:\plugins\`（与主包同盘）→ App「插件」页 →
+   **插件市场**点「安装」→ 列表中启用。也可点「**寻找插件**」全盘自动扫描安装
 
-也可双击 `start_app.bat`（带控制台日志，排障用）。
-路径解析优先级：`libs\qq_bot_runtime`（本依赖库）→ 环境变量 `FEIYU_QQ_BOT` → `f:\qq_bot`。
+> 分卷合并：Windows `copy /b feiyu_core.part1+feiyu_core.part2+feiyu_core.part3 feiyu_core.zip`
+> 或 `python _split_release.py merge feiyu_core`（自动 sha256 校验）。
 
-## 分开下载（主包 + 可选插件资源包）
+## 插件一览（市场内按需安装）
 
-主体核心与插件大资源已分离，可分开下载（用 `python _make_packs.py all` 在本机生成 `dist/` 各 zip）：
+每个插件独立安装/卸载，互不影响；插件代码装入主包 `plugins/`，
+资源大件以**目录联接**挂入引擎（不复制、不占双份空间）。
 
-| 包 | 内容 | 体积约 | 对应功能 |
+### 平台类（接入聊天渠道）
+| 插件 | 功能 | 需下载资源包 | 额外依赖 |
 |---|---|---|---|
-| `feiyu_core.zip` | 引擎 + Python + 界面（**不含插件**） | ~8 GB | **必下**。纯文字聊天 + 云端 TTS 即开即用 |
-| `plugins_pack.zip` | 16 个插件包装器 + 依赖分组 | <1 MB | 插件页（不解压则插件页为空，核心功能不受影响） |
-| `voice_pack.zip` | VoxCPM2 模型 + venv_vox | 9.7 GB | vox_tts 本地语音插件（需 NVIDIA 卡） |
-| `mc_pack.zip` | mc_bot（mineflayer）+ mc_mod | 0.65 GB | Minecraft 两大脑插件 |
-| `tools_pack.zip` | ffmpeg + silk 编解码 | 0.68 GB | 语音消息转码（QQ 语音链路） |
-| `vl_pack.zip` | Qwen2.5-VL 视频理解模型 | 7 GB | 本地视频理解回退（云端优先不受影响） |
+| `qq_platform` | QQ 聊天（NapCat/OneBot v11 协议） | — | QQ NT + NapCat |
+| `bilibili_platform` | B 站直播弹幕互动 | — | B 站 cookie |
+| `console_platform` | 控制台调试 | — | — |
 
-**安装方式**：解压 `feiyu_core.zip` 后即可使用（纯文字聊天 + 云端 TTS）。
-需要插件时：把插件资源包解压到 `<盘>:\plugins\`（与主包同盘，如
-`voice_pack.zip` → `E:\plugins\voice_pack`，`plugins_pack.zip` → `E:\plugins\plugins`），
-然后打开 App「插件」页 → **插件市场**，点「安装」即可——
-插件代码装入主包插件库（`plugins/`，初始为空），资源大件以目录联接挂入引擎
-（不复制、不占双份空间），装完在插件列表中启用即可。也可「卸载」随时移除。
-**缺插件不影响启动**：插件页/市场为空、语音走 GLM 云端、其余功能完好。
+### 功能类
+| 插件 | 功能 | 需下载资源包 | 额外依赖 |
+|---|---|---|---|
+| `vox_tts` | 本地 VoxCPM2 语音合成 | `voice_pack`（7.3GB） | **NVIDIA 显卡**（无卡自动降级 GLM 云端语音） |
+| `bilibili_dm` / `bilibili_learn` | B 站私信/直播间学习 | — | bilibili_platform |
+| `balance_monitor` / `proactive_speaker` / `greeting_demo` | 余额监控/主动搭话/问好示例 | — | — |
+
+### 大脑类（游戏与桌面智能体，含大脑实现）
+| 插件 | 功能 | 需下载资源包 | 额外依赖 |
+|---|---|---|---|
+| `brain_mc_mod` | 模组世界 MC 自主生存大脑 | `mc_pack`（0.25GB） | FeiyuAPI mod 服务 |
+| `brain_mc_bot` | 原版世界 MC Bot（状态通道） | `mc_pack` | mineflayer 独立进程 |
+| `brain_pc` | 电脑操控（截屏→决策→键鼠） | — | /电脑做 命令 |
+| `brain_pvz` | 植物大战僵尸自动对局 | — | **需先装 brain_pc**；游戏本体放 `pvz_games/` |
+
+### 资源包（供上述插件使用，解压到 `<盘>:\plugins\` 后市场安装/自动接线）
+| 资源包 | 内容 | 体积 | Releases 分卷 |
+|---|---|---|---|
+| `voice_pack` | VoxCPM2 模型 + venv_vox 推理环境 | 7.3 GB | part1/2/3 |
+| `vl_pack` | Qwen2.5-VL 本地视频理解模型（云端优先时仅回退） | 6.1 GB | part1/2/3/4 |
+| `mc_pack` | mineflayer node_modules + MC mod | 0.25 GB | 单文件 |
+| `tools_pack` | ffmpeg + silk 语音转码 | 0.29 GB | 单文件 |
+| `plugins_pack` | 16 个插件代码包（**不解压也可用市场逐个安装**） | 0.2 MB | 单文件 |
+
+### 「寻找插件」全盘扫描
+插件页点「寻找插件」：自动扫描所有本地硬盘（限深 3 层、跳系统目录与联接、120 秒超时），
+发现特征匹配的插件包/资源大件即**自动安装接线**——把你手里任何位置的插件丢进
+任意目录都能被找到。
+
+## 从源码发布（维护者）
+
+```powershell
+python _split_release.py build   # 生成 dist/：各 pack zip + >1.9GB 自动分卷 + SHA256SUMS.txt
+python _split_release.py merge feiyu_core   # 合并分卷并校验
+```
+Releases 上传 dist/ 全部文件即可（单资产 <2GiB）。
+
+## 目标机器需求（唯一的外部依赖）
 
 ## 目标机器需求（唯一的外部依赖）
 
@@ -78,11 +111,11 @@ E:/feiyu_standalone/
 两个 App 同时运行时注意端口：默认都占 8900（后启动的会提示端口占用），用
 `--port 8901` 错开。QQ 平台插件（8080 端口）同理，两个实例不要同时启用。
 
-## 可选大件（本包已含，无需补齐）
+## 可选大件（不在仓库，按需下载）
 
-本地 VoxCPM2 TTS 的 `venv_vox/`（5.08 GB）与 `models/`（4.7 GB）**已包含在
-libs/qq_bot_runtime/ 内**，在「插件」页启用 `vox_tts` 包即可（需 NVIDIA 显卡）。
-云端 TTS / 纯文字聊天不依赖这些。
+本地语音（voice_pack 7.3GB）、视频理解模型（vl_pack 6.1GB）、MC 资源、转码工具
+均不在本仓库——从 Releases 下载解压到 `<盘>:\plugins\` 后在插件市场安装。
+纯文字聊天与云端 TTS **不依赖任何大件**。
 
 ## 日常维护
 
