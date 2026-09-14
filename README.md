@@ -26,7 +26,7 @@ feiyu_standalone/            ← 本仓库（软件主体，~1.5GB）
 ## 快速开始
 
 1. **clone 本仓库**（或 Releases 下载主包 zip）
-2. **下载依赖离线包**：Releases 的 `feiyu_core.part1/2/3`，合并后放到
+2. **下载依赖离线包**：Releases 的 `feiyu_core.part1/2/3`（已发布 ✓），合并后放到
    `libs/offline_deps_core.zip`（不下载也能跑——首启自动转 pip 在线装，约 30-90 分钟）
 3. 双击 `FeiyuApp.exe` → 首启自动配置（进度窗口，约 2-3 分钟）→ 「配置」页填 DeepSeek/GLM
    Key → 保存 → 聊天
