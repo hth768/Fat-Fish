@@ -1,0 +1,16 @@
+websockets>=12.0
+httpx>=0.27.0
+Pillow>=10.0.0
+# B站推流用的稳定版 ffmpeg（自带静态二进制）；
+# 极新的 ffmpeg git 构建对实时管道音频会攒缓冲不出流，推流不能用
+imageio-ffmpeg>=0.6.0
+mss>=9.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+pygetwindow>=0.0.9
+dxcam>=0.3.0
+torch>=2.0.0
+torchvision>=0.15.0
+# 实时语音对话(GLM-Realtime 全双工)需要 sounddevice(麦克风/音箱)与 keyboard(全局热键)
+sounddevice>=0.5.0
+keyboard>=0.13.5

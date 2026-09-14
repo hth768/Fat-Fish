@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>肥鱼娘 · App 控制台</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="layout">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">🐟</div>
+      <div class="brand-text">
+        <div class="brand-name">肥鱼娘</div>
+        <div class="brand-sub">智能体控制台</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <a class="nav-item active" data-page="dashboard"><span class="nav-ico">◈</span>仪表盘</a>
+      <a class="nav-item" data-page="chat"><span class="nav-ico">✦</span>聊天</a>
+      <a class="nav-item" data-page="memory"><span class="nav-ico">❑</span>记忆</a>
+      <a class="nav-item" data-page="summary"><span class="nav-ico">≡</span>总结</a>
+      <a class="nav-item" data-page="plugins"><span class="nav-ico">⚙</span>插件</a>
+      <a class="nav-item" data-page="config"><span class="nav-ico">✎</span>配置</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="core-pill" id="corePill"><span class="dot"></span><span id="corePillText">检测中…</span></div>
+    </div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="main">
+    <!-- 仪表盘 -->
+    <section class="page" id="page-dashboard">
+      <header class="page-head">
+        <h1>仪表盘</h1>
+        <div class="head-actions">
+          <button class="btn primary" id="btnCoreToggle">启动核心</button>
+        </div>
+      </header>
+      <div class="cards">
+        <div class="card"><div class="card-k">核心状态</div><div class="card-v" id="stCore">—</div></div>
+        <div class="card"><div class="card-k">运行插件</div><div class="card-v" id="stPlugins">—</div></div>
+        <div class="card"><div class="card-k">人物档案</div><div class="card-v" id="stProfiles">—</div></div>
+        <div class="card"><div class="card-k">重要事项</div><div class="card-v" id="stNotes">—</div></div>
+        <div class="card"><div class="card-k">知识主题</div><div class="card-v" id="stKnowledge">—</div></div>
+        <div class="card"><div class="card-k">反思记录</div><div class="card-v" id="stReflection">—</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">插件 / 大脑状态</div>
+        <div class="table-wrap"><table id="tblStatus"><thead>
+          <tr><th>名称</th><th>类型</th><th>状态</th><th>说明</th></tr>
+        </thead><tbody></tbody></table></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">最近事件</div>
+        <div class="event-log" id="eventLog"></div>
+      </div>
+    </section>
+
+    <!-- 聊天 -->
+    <section class="page hidden" id="page-chat">
+      <header class="page-head">
+        <h1>聊天</h1>
+        <div class="head-actions">
+          <span class="chip" id="chatState">空闲</span>
+          <button class="btn ghost" id="btnClearChat">清屏</button>
+        </div>
+      </header>
+      <div class="chat-wrap">
+        <div class="chat-log" id="chatLog"></div>
+        <div class="chat-input-row">
+          <textarea id="chatInput" rows="2" placeholder="和肥鱼娘说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button class="btn primary" id="btnSend">发送</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 记忆 -->
+    <section class="page hidden" id="page-memory">
+      <header class="page-head">
+        <h1>记忆中心</h1>
+        <div class="head-actions">
+          <select id="memUser" class="select"><option value="">全部用户</option></select>
+          <input id="memSearch" class="input" placeholder="搜索…">
+        </div>
+      </header>
+      <div class="tabs">
+        <a class="tab active" data-tab="profiles">人物档案</a>
+        <a class="tab" data-tab="notes">重要事项</a>
+        <a class="tab" data-tab="persona">人格记忆</a>
+        <a class="tab" data-tab="reflection">反思记忆</a>
+        <a class="tab" data-tab="knowledge">知识库</a>
+        <a class="tab" data-tab="history">全文历史</a>
+        <a class="tab" data-tab="sessions">会话记忆</a>
+      </div>
+      <div class="tab-body" id="memBody">加载中…</div>
+    </section>
+
+    <!-- 总结 -->
+    <section class="page hidden" id="page-summary">
+      <header class="page-head"><h1>总结中心</h1></header>
+      <div class="panel">
+        <div class="panel-title">当前会话摘要（app_owner，实时注入上下文）</div>
+        <textarea id="liveSummary" class="textarea" rows="6" placeholder="（空）"></textarea>
+        <div class="row-actions">
+          <button class="btn primary" id="btnSaveSummary">保存摘要</button>
+          <span class="hint" id="liveSummaryMeta"></span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">手动总结对话（LLM 提炼并沉淀）</div>
+        <div class="form-grid">
+          <label>用户 <select id="sumUser" class="select"></select></label>
+          <label>最近条数 <input id="sumCount" class="input" type="number" value="60" min="5" max="500"></label>
+          <label>关键词检索 <input id="sumKeyword" class="input" placeholder="可选"></label>
+          <label>沉淀到
+            <select id="sumSaveTo" class="select">
+              <option value="none">仅展示</option>
+              <option value="notes">重要事项</option>
+              <option value="knowledge">知识库</option>
+            </select>
+          </label>
+        </div>
+        <div class="row-actions">
+          <button class="btn primary" id="btnRunSummary">生成总结</button>
+        </div>
+        <div class="result-box hidden" id="sumResult"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">所有会话摘要（落盘）</div>
+        <div class="table-wrap"><table id="tblSummaries"><thead>
+          <tr><th>会话</th><th>轮数</th><th>话题</th><th>摘要</th></tr>
+        </thead><tbody></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- 插件 -->
+    <section class="page hidden" id="page-plugins">
+      <header class="page-head">
+        <h1>活动插件</h1>
+        <div class="head-actions">
+          <span class="hint" id="pkgSummary"></span>
+          <button class="btn ghost" id="btnRefreshMarket">刷新市场</button>
+          <button class="btn ghost" id="btnRescan">重新扫描</button>
+        </div>
+      </header>
+      <div class="panel" id="marketPanel">
+        <div class="panel-title">插件市场
+          <span class="hint" id="marketSummary"></span>
+          <button class="btn ghost" id="btnSeek" style="float:right">寻找插件</button>
+        </div>
+        <div class="hint wrap" id="marketEmpty" style="margin-bottom:8px"></div>
+        <div class="result-box hidden" id="seekResult"></div>
+        <div class="table-wrap"><table id="tblMarket"><thead>
+          <tr><th style="width:150px">名称</th><th>说明</th><th style="width:90px">大小</th><th style="width:110px">操作</th></tr>
+        </thead><tbody></tbody></table></div>
+      </div>
+      <div id="pkgGroups">
+        <!-- 已安装插件按依赖分组渲染（groups.json） -->
+      </div>
+      <div class="panel">
+        <div class="panel-title">说明</div>
+        <div class="hint wrap">主体内置（不可卸载）：智能体核心、聊天大脑、记忆、总结、Web 界面。
+          其余能力在上方<b>插件市场</b>按需安装——插件代码装入本包插件库，
+          资源大件（语音/游戏/转码/视觉模型）以目录联接挂入，不占双份空间。
+          把自己的插件做成包：新建文件夹放 manifest.json + plugin.py
+          （create_plugin / create_brain），点「重新扫描」即可出现；
+          归入分组可编辑 plugins/groups.json。</div>
+      </div>
+    </section>
+
+    <!-- 配置 -->
+    <section class="page hidden" id="page-config">
+      <header class="page-head">
+        <h1>配置中心</h1>
+        <div class="head-actions">
+          <button class="btn primary" id="btnSaveConfig">保存全部</button>
+        </div>
+      </header>
+      <div id="configBody">加载中…</div>
+    </section>
+  </main>
+</div>
+<div class="toast hidden" id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+{
+  "_comment": "插件依赖分组：同组共享同一批外部依赖/资源。基础组必需，其余按需。",
+  "groups": {
+    "core": {
+      "title": "核心引擎",
+      "required": true,
+      "description": "智能体本体：引擎 + 聊天 + 记忆 + 总结（内置不可卸载），加轻量配套插件",
+      "packages": ["console_platform", "balance_monitor", "proactive_speaker", "greeting_demo"]
+    },
+    "voice": {
+      "title": "本地语音",
+      "description": "VoxCPM2 本地 TTS：免费无限语音。依赖 libs/voice_pack 大件（9.7GB）+ NVIDIA 显卡；无 N 卡自动降级 GLM 云端",
+      "packages": ["vox_tts"]
+    },
+    "qq": {
+      "title": "QQ 平台",
+      "description": "接入 QQ：需要目标机器装有 QQ NT 客户端 + NapCat（NapCat 配置在应急包 P3_NapCat）",
+      "packages": ["qq_platform"]
+    },
+    "bilibili": {
+      "title": "B 站全家",
+      "description": "B 站直播/私信/学习三件套，共享 B 站账号配置（SESSDATA）与风控层；platform 是其余两个的依赖",
+      "packages": ["bilibili_platform", "bilibili_dm", "bilibili_learn"]
+    },
+    "mc": {
+      "title": "Minecraft",
+      "description": "MC 两大脑：模组世界（需 Minecraft + feiyuapi mod，mod 源码在引擎 mc_mod/）与原版世界（需 mineflayer node_modules）",
+      "packages": ["brain_mc_mod", "brain_mc_bot"]
+    },
+    "desktop": {
+      "title": "桌面与游戏",
+      "description": "电脑操控（截屏→决策→键鼠）与 PvZ 自主对局（需把 PlantsVsZombies.exe 放 pvz_games/）",
+      "packages": ["brain_pc", "brain_pvz"]
+    },
+    "services": {
+      "title": "后台服务",
+      "description": "sidecar 子进程：向量记忆加速（可缺）、监控聚合（依赖记忆服务）、遥测",
+      "packages": ["sidecar_memory", "sidecar_monitor", "sidecar_telemetry"]
+    }
+  }
+}

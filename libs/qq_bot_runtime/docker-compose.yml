@@ -1,0 +1,23 @@
+# 肥鱼娘 · Web 控制台容器编排
+#
+# 仅提供跨平台的网页控制台（只读模式，--no-core）。
+# 完整能力（QQ/NapCat、TTS、MC、PVZ 等）请在 Windows 宿主机直接运行 start.bat。
+#
+# 用法：
+#   docker compose up -d --build      # 构建并后台启动
+#   http://localhost:8800             # 打开网页控制台
+#   docker compose down               # 停止并移除
+services:
+  feiyu-web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: feiyu-web:latest
+    container_name: feiyu-web
+    ports:
+      - "8800:8800"
+    environment:
+      - TZ=Asia/Shanghai
+      # 如需让控制台读取宿主机已有的记忆数据，可把下列文件映射到 /app 下对应文件
+      # （默认容器为只读查看，数据不持久化）。
+    restart: unless-stopped

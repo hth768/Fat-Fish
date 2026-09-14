@@ -1,0 +1,45 @@
+{
+  "_comment": "AI 供应商配置中心模板（对标 N.E.K.O config/api_providers.json）。本文件不会被自动加载。复制为 ai_providers.json 后才会生效，作为 config.py 默认值的【覆盖层】：只写你想改的键即可，其余沿用 config.py 默认值。api_key 支持 ${ENV_VAR} 语法从环境变量读取。改完保存后调用 /api/config/reload 或重启生效，无需改代码。\n特性：(①) 每个供应商的 models 可含【角色名】键（如 summary/judge/proactive），被选中时自动作为该角色模型——换供应商即换角色模型，无需改全局 AI_ROLE_ROUTING；(②) extra_body 始终随请求发送、think_body 仅思考时发送（泛化原 think_param，合并进请求体顶层），可承载 thinking/reasoning_effort/enable_search 等各厂商方言。think_param 仍兼容（未配 think_body 时退化为 enabled/disabled 开关）。",
+
+  "AI_PROVIDERS": {
+    "deepseek": {
+      "api_key": "${DEEPSEEK_API_KEY}",
+      "think_param": true,
+      "extra_body": {},
+      "think_body": {"thinking": {"type": "enabled"}},
+      "models": {
+        "reasoning": "${DEEPSEEK_REASONER_MODEL}",
+        "vision": "${VISION_MODEL}",
+        "summary": "${DEEPSEEK_REASONER_MODEL}",
+        "judge": "deepseek-chat"
+      }
+    }
+  },
+
+  "AI_CAPABILITY_ROUTING": {
+    "chat": ["deepseek"],
+    "reasoning": ["deepseek"],
+    "vision": ["deepseek", "gemini"],
+    "tools": ["deepseek"]
+  },
+
+  "AI_VISION_ROUTING": {
+    "image": ["glm", "gemini"],
+    "gif": ["glm"],
+    "emoji": ["glm"],
+    "emotion": ["glm"],
+    "frames": ["gemini", "glm"],
+    "text": ["gemini", "glm"]
+  },
+
+  "AI_ROLE_ROUTING": {
+    "judge": {"capability": "chat", "model": ""},
+    "memory_extract": {"capability": "chat", "model": ""},
+    "memory_merge": {"capability": "chat", "model": ""},
+    "retrieval": {"capability": "chat", "model": ""},
+    "summary": {"capability": "chat", "model": ""},
+    "reflection": {"capability": "chat", "model": ""},
+    "proactive": {"capability": "chat", "model": ""},
+    "main": {"capability": "", "model": ""}
+  }
+}

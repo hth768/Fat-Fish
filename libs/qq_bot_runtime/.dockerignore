@@ -1,0 +1,36 @@
+# 依赖与虚拟环境
+venv/
+venv_vox/
+node_modules/
+__pycache__/
+*.pyc
+
+# 大体积资源 / 数据 / 备份
+data/
+caches/
+backup_*/
+chat_history_backup_*/
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.lock
+*.jsonl
+
+# 与容器化网页控制台无关的模块
+mc_bot/
+mc_mod/
+mc_bot_brain/
+_mc_ref/
+_legacy/
+models/
+emojis/
+音色试听/
+SteamLibrary/
+
+# 版本控制 / 杂项
+.git/
+.codebuddy/
+*.md
+_*.py
+@echo

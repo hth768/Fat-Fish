@@ -1,0 +1,38 @@
+# ===== 依赖 / 运行时（巨大，分发走 offline_deps 离线包方案）=====
+venv/
+venv_vox/
+venv_old_bak/
+hf_cache/
+chat_history/
+video_tmp/
+voice_tmp/
+models/
+mc_bot/
+mc_mod/
+_mc_ref/
+tools/
+emojis/
+libs/offline_deps_core.zip
+libs/offline_deps_vox.zip
+pvz_games/
+
+# ===== 运行数据（用户隐私，不入库）=====
+data/
+*.log
+
+# ===== 构建产物 =====
+_build/
+dist/
+*.spec.bak
+__pycache__/
+*.pyc
+
+# ===== 系统 / 编辑器 =====
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+.scan_log.txt
+
+# ===== 打包临时脚本（本地用）=====
+_scan_log.txt

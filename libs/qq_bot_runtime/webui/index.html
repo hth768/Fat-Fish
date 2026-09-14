@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>肥鱼娘 · Web 控制台</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐱</text></svg>" />
+</head>
+<body>
+  <div id="app">
+    <!-- 侧边栏 -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="cat-avatar" id="brandAvatar">
+          <svg viewBox="0 0 120 120" width="56" height="56" aria-hidden="true">
+            <ellipse cx="60" cy="68" rx="42" ry="38" fill="#ffd9e6"/>
+            <polygon points="20,30 40,55 18,55" fill="#ffb6cd"/>
+            <polygon points="100,30 80,55 102,55" fill="#ffb6cd"/>
+            <circle cx="44" cy="64" r="6" fill="#5b4a52"/>
+            <circle cx="76" cy="64" r="6" fill="#5b4a52"/>
+            <path d="M52 80 Q60 88 68 80" stroke="#5b4a52" stroke-width="3" fill="none" stroke-linecap="round"/>
+            <circle cx="38" cy="78" r="5" fill="#ff9ab5" opacity=".6"/>
+            <circle cx="82" cy="78" r="5" fill="#ff9ab5" opacity=".6"/>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <div class="brand-name">肥鱼娘</div>
+          <div class="brand-sub">肥鱼娘 · 控制台</div>
+        </div>
+      </div>
+
+      <nav id="nav">
+        <button class="nav-item active" data-view="chat"><span class="ico">💬</span>对话</button>
+        <button class="nav-item" data-view="brains"><span class="ico">🧠</span>大脑状态</button>
+        <button class="nav-item" data-view="memory"><span class="ico">💾</span>记忆</button>
+        <button class="nav-item" data-view="knowledge"><span class="ico">📚</span>知识库</button>
+        <button class="nav-item" data-view="emotion"><span class="ico">😊</span>情绪</button>
+        <button class="nav-item" data-view="identity"><span class="ico">🪪</span>身份绑定</button>
+        <button class="nav-item" data-view="mc"><span class="ico">🎮</span>我的世界</button>
+        <button class="nav-item" data-view="pc"><span class="ico">🖥️</span>电脑操控</button>
+        <button class="nav-item" data-view="pvz"><span class="ico">🌻</span>植物大战僵尸</button>
+        <button class="nav-item" data-view="bili"><span class="ico">📡</span>直播</button>
+        <button class="nav-item" data-view="voice"><span class="ico">🔊</span>语音 / TTS</button>
+        <button class="nav-item" data-view="vision"><span class="ico">👁️</span>视觉感知</button>
+        <button class="nav-item" data-view="plugins"><span class="ico">🧩</span>插件 / 服务</button>
+        <button class="nav-item" data-view="config"><span class="ico">⚙️</span>配置</button>
+        <button class="nav-item" data-view="system"><span class="ico">🛡️</span>系统 / 日志</button>
+              <button class="nav-item" data-view="memory_browser"><span class="ico">馃</span>璁板繂娴忚</button>
+</nav>
+
+      <div class="sidebar-foot">
+        <div class="status-dot" id="connDot" title="连接状态"></div>
+        <span id="connText">连接中…</span>
+      </div>
+    </aside>
+
+    <!-- 主区域 -->
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-title" id="viewTitle">对话</div>
+        <div class="topbar-meta" id="coreMeta">核心：…</div>
+      </header>
+      <section class="content" id="content"><!-- 动态渲染 --></section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
