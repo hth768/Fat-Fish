@@ -1577,7 +1577,8 @@ class ChatService:
                 try:
                     memory_result = await extract_memory(
                         text, reply_text,
-                        include_mood=bool(getattr(config, "EMOTION_ENABLED", False)))
+                        include_mood=bool(getattr(config, "EMOTION_ENABLED", False)),
+                        user_id=user_id)
                     if config.ENABLE_PROFILE and memory_result.get("facts"):
                         merged = await merge_profile_facts(user_id, memory_result["facts"])
                         long_term_memory.replace_profile(user_id, merged)
@@ -1617,7 +1618,7 @@ class ChatService:
                                 if reflections and getattr(config, "ENABLE_PERSONA", True):
                                     try:
                                         import persona_memory
-                                        persona_memory.extract_persona_from_reflection(user_id, reflections)
+                                        await persona_memory.extract_persona_from_reflection(user_id, reflections)
                                     except Exception as e:
                                         print(f"[PERSONA] 人格提取失败: {e}")
                             asyncio.create_task(_reflect_and_extract_persona())
@@ -2006,17 +2007,28 @@ async def wants_voice_reply(text: str) -> bool:
         return False
 
 
-async def extract_memory(user_text: str, reply: str, include_mood: bool = False) -> dict:
+async def extract_memory(user_text: str, reply: str, include_mood: bool = False, user_id: str = "") -> dict:
     """一次 AI 调用，同时提取「人物档案事实」「重要信息」，可选再加「AI 此刻的心情」。
 
     include_mood=True 时（情绪模块 emotion.py），让模型顺带分析用户这句话让 AI
     产生了什么情绪——不新增 LLM 调用，解析逻辑在 parse_memory_output()。
+    user_id：当前对话用户的 ID，仅用于提示模型「正在为谁整理档案」，不参与事实内容。
     """
+    subject_tip = (f"当前正在为「用户 {user_id}」整理长期记忆；下面所有「用户」都指这一位。\n\n"
+                   if user_id else "")
     prompt = (
         "请分析下面的对话，同时提取两类信息，用于长期记忆。\n\n"
-        "第一类【人物档案】：用户长期稳定的事实，如姓名/称呼、职业、兴趣爱好、"
+        + subject_tip +
+        "主体说明（先读三遍，最关键）：本段对话里有两方——「用户」（人类，即下方『用户说』那一方）"
+        "和「AI」（肥鱼娘，即下方『AI回复』那一方），二者绝不是同一人。\n\n"
+        "第一类【人物档案】：只记录「用户」本人的长期稳定事实，如姓名/称呼、职业、兴趣爱好、"
         "喜欢的食物、居住城市、生日、宠物、性格等。\n"
-        "第二类【重要信息】：用户值得长期记住的事，如明确要求记住的内容、重要日期/约定/待办、"
+        "★ 人物档案绝对不能写 AI（肥鱼娘）的任何特征或喜好；如果用户是在描述 AI"
+        "（例如『你真可爱』『你总是很耐心』『你和别的 AI 不一样』），那是关于 AI 的，"
+        "一律不要写进人物档案（该区块写：无）。\n"
+        "★ 每条必须以「用户」为主语（如『用户喜欢猫』『用户叫小明』）；若一条事实分不清"
+        "属于用户还是 AI，宁可丢弃，不要猜。\n"
+        "第二类【重要信息】：「用户」值得长期记住的事，如明确要求记住的内容、重要日期/约定/待办、"
         "关键信息（手机号/地址）、重要偏好/决定/长期计划。\n\n"
         "输出格式（严格按下面格式）：\n"
         "【人物档案】\n"
@@ -2028,7 +2040,8 @@ async def extract_memory(user_text: str, reply: str, include_mood: bool = False)
         "注意：\n"
         "- 没有的内容区块就写【人物档案】或【重要信息】后紧跟：无\n"
         "- 重要信息每行用「分类|内容」格式，分类可以是生日、约定、偏好、待办、信息等\n"
-        "- 不要保存临时闲聊、情绪表达、一次性话题、普通问候\n\n"
+        "- 不要保存临时闲聊、情绪表达、一次性话题、普通问候\n"
+        "- 再次强调：人物档案只关于『用户』，绝不关于『AI（肥鱼娘）』\n\n"
     )
     if include_mood:
         prompt += (

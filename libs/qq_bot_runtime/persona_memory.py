@@ -153,8 +153,11 @@ def build_persona_hint(user_id: str) -> str:
     return "\n".join(lines)
 
 
-def extract_persona_from_reflection(user_id: str, reflections: List[dict]) -> bool:
+async def extract_persona_from_reflection(user_id: str, reflections: List[dict]) -> bool:
     """从反思记忆中提取人格相关规则，更新人格记忆。
+
+    写记忆前先与既有人格记忆比对：旧事实（已确认）优先，若新增特征与任一旧事实
+    矛盾，则否定（丢弃）该新增特征，绝不覆盖已确认的事实。
 
     Args:
         user_id: 用户 ID
@@ -180,10 +183,68 @@ def extract_persona_from_reflection(user_id: str, reflections: List[dict]) -> bo
                 style_traits.append(trait)
 
     if style_traits:
-        update_persona(user_id, style_traits)
-        return True
+        # 与既有人格记忆比对：旧事实优先，冲突的新增特征被否定
+        accepted = await reconcile_persona_traits(user_id, style_traits)
+        if accepted:
+            update_persona(user_id, accepted)
+            return True
+        return False
 
     return False
+
+
+async def reconcile_persona_traits(user_id: str, candidates: List[str]) -> List[str]:
+    """人格记忆冲突裁决：旧事实（已确认）优先，新增若与旧事实矛盾则否定（丢弃）。
+
+    与 merge_profile_facts（用户档案：新覆盖旧）相反，人格记忆采用「旧优先」策略——
+    已确认的人机相处模式不应被一次新的反思随意推翻。
+
+    Args:
+        user_id: 用户 ID
+        candidates: 本轮想新增的特征列表
+    Returns:
+        经裁决后保留（不矛盾）的新增特征列表；若裁决失败则回退为全部保留。
+    """
+    existing = get_persona(user_id).get("traits", [])
+    if not existing or not candidates:
+        return list(candidates)
+
+    try:
+        from ai_provider import get_llm
+        llm = get_llm()
+        existing_text = "\n".join(f"- {t}" for t in existing)
+        candidate_text = "\n".join(f"- {t}" for t in candidates)
+        prompt = (
+            "下面是一份已经确认的人格记忆（关于 AI 如何与某用户相处，属旧事实，不可推翻）：\n"
+            f"{existing_text}\n\n"
+            "下面是新提取、想补充的特征：\n"
+            f"{candidate_text}\n\n"
+            "请逐条判断每个【新特征】是否与【旧事实】矛盾（冲突、相反、互斥、无法共存）。\n"
+            "裁决规则：旧事实优先——只要与任一条旧事实矛盾，该【新特征】判定为「reject」"
+            "（否定、不采纳）；其余不矛盾的新特征判定为「keep」。\n"
+            "只输出一个 JSON 数组，每个元素为 "
+            '{"trait": 新特征原文, "verdict": "keep" 或 "reject", "reason": 简短理由}，'
+            "不要输出其他任何文字。"
+        )
+        resp = await llm.chat([{"role": "user", "content": prompt}],
+                              capability="chat", role="persona_reconcile", think=False)
+        resp = resp.strip()
+        if resp.startswith("```"):
+            resp = resp.split("```")[1]
+            if resp.startswith("json"):
+                resp = resp[4:]
+        decisions = json.loads(resp)
+        kept = []
+        for d in decisions:
+            trait = (d.get("trait") or "").strip()
+            if d.get("verdict") == "keep" and trait:
+                kept.append(trait)
+            else:
+                print(f"[PERSONA] 因与既有事实冲突，已否定新特征：{trait}（{d.get('reason','')}）")
+        return kept
+    except Exception as e:
+        print(f"[PERSONA] 人格冲突裁决失败，回退为直接追加：{e}")
+        return list(candidates)
 
 
 def clear_persona(user_id: str = ""):
