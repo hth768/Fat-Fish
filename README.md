@@ -64,6 +64,9 @@ feiyu_standalone/            ← 本仓库（软件主体，~1.5GB）
 | `brain_pvz` | 植物大战僵尸自动对局 | — | **需先装 brain_pc**；游戏本体放 `pvz_games/` |
 
 ### 资源包（供上述插件使用，解压到 `<盘>:\plugins\` 后市场安装/自动接线）
+全部资产已发布在 [Releases](https://github.com/hth768/Fat-Fish/releases) ✓
+（分卷合并用 `copy /b xxx.part1+xxx.part2+... xxx.zip`，或 `python _split_release.py merge <前缀>` 自动校验）
+
 | 资源包 | 内容 | 体积 | Releases 分卷 |
 |---|---|---|---|
 | `voice_pack` | VoxCPM2 模型 + venv_vox 推理环境 | 7.3 GB | part1/2/3 |
