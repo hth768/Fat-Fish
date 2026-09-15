@@ -44,9 +44,15 @@ feiyu_standalone/            ← 本仓库（软件主体，~1.5GB）
 ### 平台类（接入聊天渠道）
 | 插件 | 功能 | 需下载资源包 | 额外依赖 |
 |---|---|---|---|
-| `qq_platform` | QQ 聊天（NapCat/OneBot v11 协议） | — | QQ NT + NapCat |
+| `qq_platform` | QQ 聊天（NapCat/OneBot v11 协议） | `napcat_pack`（130MB，含 NapCat 框架本体） | QQ NT（NapCat 内置） |
 | `bilibili_platform` | B 站直播弹幕互动 | — | B 站 cookie |
 | `console_platform` | 控制台调试 | — | — |
+
+> **QQ 平台安装流程**：Release 下载 `napcat_pack.zip` → 解压到任意位置
+> （如 `E:\NapCat`）→ 插件市场安装并启用 `qq_platform`（WS 服务端
+> `ws://127.0.0.1:8080` 自动启动）→ 运行 NapCat 目录的 `napcat.bat` 登录 QQ →
+> 在 NapCat 网络配置里添加反向 WebSocket 指向 `ws://127.0.0.1:8080`。
+> NapCat 独立运行，无需市场「安装」接线——下载解压即可。
 
 ### 功能类
 | 插件 | 功能 | 需下载资源包 | 额外依赖 |
@@ -74,6 +80,7 @@ feiyu_standalone/            ← 本仓库（软件主体，~1.5GB）
 | `mc_pack` | mineflayer node_modules + MC mod | 0.25 GB | 单文件 |
 | `tools_pack` | ffmpeg + silk 语音转码 | 0.29 GB | 单文件 |
 | `plugins_pack` | 16 个插件代码包（**不解压也可用市场逐个安装**） | 0.2 MB | 单文件 |
+| `napcat_pack` | NapCat 框架（QQ NT 协议端，qq_platform 配套） | 0.13 GB | 单文件 |
 
 ### 「寻找插件」全盘扫描
 插件页点「寻找插件」：自动扫描所有本地硬盘（限深 3 层、跳系统目录与联接、120 秒超时），

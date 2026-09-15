@@ -34,6 +34,8 @@ TARGETS = [
     ("feiyu_core",   os.path.join(BASE, "libs", "offline_deps_core.zip"), None),
     ("voice_pack",   os.path.join(REPO, "voice_pack"),  "voice_pack"),
     ("vl_pack",      os.path.join(REPO, "vl_pack"),     "vl_pack"),
+    # NapCat（QQ NT 框架）：qq_platform 插件的配套运行时，独立运行无需接线
+    ("napcat_pack",  os.path.join(os.path.splitdrive(BASE)[0] + "\\", "NapCat"), "napcat"),
 ]
 
 
@@ -103,9 +105,12 @@ def build():
            (not vol_exists and os.path.exists(single) and os.path.getsize(single) > 0):
             print(f"[skip] {name}: 产物已存在")
             if os.path.exists(single):
-                manifest.append((name, single, sha256(single)))
+                digest = sha256(single)
+            elif root is None:
+                digest = sha256(src)  # core 等文件型产物：分卷合并目标与源同内容
             else:
-                manifest.append((name, single, "N/A (merged from parts)"))
+                digest = "N/A (merged from parts)"
+            manifest.append((name, single, digest))
             continue
         if not os.path.exists(src):
             print(f"[skip] {name}: {src} 不存在")
