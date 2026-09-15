@@ -32,6 +32,19 @@ def _diag(msg: str):
         pass
 
 
+class _AppearanceApi:
+    """暴露给前端（仅 pywebview 模式）的接口：实时修改窗口标题栏。"""
+    def set_title(self, title):
+        try:
+            for w in getattr(webview, "windows", []):
+                try:
+                    w.set_title(str(title)[:40])
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+
 def _edge_candidates() -> list:
     """常见 Edge 可执行文件路径（新→旧）。"""
     pf = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
@@ -95,6 +108,7 @@ def run_window(url: str, title: str = WINDOW_TITLE) -> str:
                 width=WIDTH, height=HEIGHT,
                 min_size=(MIN_W, MIN_H),
                 background_color="#0d1220",
+                js_api=_AppearanceApi(),
             )
             webview.start()
             _diag("pywebview 窗口正常退出（用户关闭）")

@@ -31,7 +31,7 @@ body {
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
 .brand-icon {
   width: 42px; height: 42px; border-radius: 12px; font-size: 22px;
-  background: linear-gradient(135deg, #2b5fd9, #4f8cff);
+  background: linear-gradient(135deg, var(--accent2), var(--accent));
   display: flex; align-items: center; justify-content: center;
 }
 .brand-name { font-weight: 700; font-size: 16px; }
@@ -166,6 +166,20 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .switch input:checked + .track::after { left: 21px; background: #fff; }
 .cfg-bool { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
 .cfg-bool .cfg-label { font-size: 13px; color: var(--text); }
+
+/* ---------- 外观设置 ---------- */
+#bgDim { position: fixed; inset: 0; z-index: -1; background: var(--bg); opacity: .82; display: none; pointer-events: none; }
+.bg-preview { display: none; width: 100%; height: 120px; border-radius: var(--radius); border: 1px solid var(--line); background-size: cover; background-position: center; margin-bottom: 12px; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+.theme-swatch {
+  display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel2); cursor: pointer; user-select: none; transition: .15s;
+}
+.theme-swatch:hover { border-color: var(--accent); }
+.theme-swatch.selected { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(127,140,255,.25); }
+.sw-dot { width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 2px rgba(255,255,255,.08); }
+.sw-label { font-size: 13px; }
 
 /* ---------- 结果 / 提示 ---------- */
 .result-box {

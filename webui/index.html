@@ -7,13 +7,14 @@
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-<div class="layout">
+  <div id="bgDim"></div>
+  <div class="layout">
   <!-- 侧边栏 -->
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-icon">🐟</div>
       <div class="brand-text">
-        <div class="brand-name">肥鱼娘</div>
+        <div class="brand-name" id="brandName">肥鱼娘</div>
         <div class="brand-sub">智能体控制台</div>
       </div>
     </div>
@@ -24,6 +25,7 @@
       <a class="nav-item" data-page="summary"><span class="nav-ico">≡</span>总结</a>
       <a class="nav-item" data-page="plugins"><span class="nav-ico">⚙</span>插件</a>
       <a class="nav-item" data-page="config"><span class="nav-ico">✎</span>配置</a>
+      <a class="nav-item" data-page="appearance"><span class="nav-ico">❖</span>外观</a>
     </nav>
     <div class="sidebar-foot">
       <div class="core-pill" id="corePill"><span class="dot"></span><span id="corePillText">检测中…</span></div>
@@ -181,6 +183,46 @@
         </div>
       </header>
       <div id="configBody">加载中…</div>
+    </section>
+
+    <!-- 外观 -->
+    <section class="page hidden" id="page-appearance">
+      <header class="page-head">
+        <h1>外观设置</h1>
+        <div class="head-actions">
+          <button class="btn primary" id="btnSaveAppearance">保存外观</button>
+        </div>
+      </header>
+      <div class="panel">
+        <div class="panel-title">主题色</div>
+        <div class="hint wrap" style="margin-bottom:12px">选择界面配色，点击即时预览，保存后长期生效。</div>
+        <div class="theme-grid" id="themeGrid"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">窗口标题</div>
+        <div class="hint wrap" style="margin-bottom:12px">设置窗口标题栏 / 侧栏品牌名 / 浏览器标签显示的标题（最长 40 字）。</div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <input id="titleInput" class="input" style="flex:1;min-width:240px" maxlength="40" placeholder="肥鱼娘 · App 控制台">
+          <button class="btn ghost" id="btnResetTitle">恢复默认</button>
+        </div>
+        <div class="hint" style="margin-top:10px">预览：<b id="titlePreview"></b></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">背景图</div>
+        <div class="hint wrap" style="margin-bottom:12px">支持本地上传（PNG/JPG/GIF/WEBP，≤8MB）或填入图片链接；留空则使用纯色背景。</div>
+        <div id="bgPreview" class="bg-preview"></div>
+        <div class="row-actions">
+          <label class="btn ghost" style="cursor:pointer">
+            选择本地图片
+            <input id="bgFile" type="file" accept="image/*" hidden>
+          </label>
+          <input id="bgUrl" class="input" style="flex:1;min-width:220px" placeholder="https://.../bg.jpg（可选）">
+          <button class="btn ghost" id="btnApplyBgUrl">应用链接</button>
+          <button class="btn danger" id="btnClearBg">清除背景</button>
+        </div>
+        <div class="hint" id="bgMsg" style="margin-top:8px"></div>
+      </div>
     </section>
   </main>
 </div>

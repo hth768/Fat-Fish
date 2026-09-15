@@ -180,7 +180,8 @@ def main():
                 time.sleep(3600)
         else:
             # 桌面窗口模式（默认）：阻塞直到窗口关闭
-            app_window.run_window(url)
+            from bridge import appearance_api
+            app_window.run_window(url, title=appearance_api.get_window_title())
     except KeyboardInterrupt:
         print("[APP] 收到退出信号")
     finally:

@@ -13,7 +13,7 @@ WEBUI_DIR = os.path.join(APP_DIR, "webui")
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
-from bridge import config_api, memory_api, plugins_api, summary_api  # noqa: E402
+from bridge import appearance_api, config_api, memory_api, plugins_api, summary_api  # noqa: E402
 
 
 class QuietServer(ThreadingHTTPServer):
@@ -83,6 +83,18 @@ def make_handler(bridge):
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            try:
+                self.wfile.write(data)
+            except Exception:
+                pass
+
+        def _serve_raw(self, data: bytes, ctype: str, code: int = 200):
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "keep-alive")
             self.end_headers()
             try:
                 self.wfile.write(data)
@@ -195,6 +207,14 @@ def make_handler(bridge):
                     return self._json(plugins_api.market_list(bridge))
                 if path == "/api/config":
                     return self._json(config_api.config_view())
+                if path == "/api/appearance":
+                    return self._json(appearance_api.get_appearance(
+                        (q.get("theme") or [""])[0] or None))
+                if path == "/api/appearance/bg":
+                    raw = appearance_api.read_bg()
+                    if not raw:
+                        return self._serve_raw(b"", "image/png", 404)
+                    return self._serve_raw(raw, appearance_api._bg_content_type(raw))
                 return self._json({"error": "not found"}, 404)
             except Exception as e:
                 return self._json({"error": repr(e)}, 500)
@@ -250,6 +270,11 @@ def make_handler(bridge):
                     return self._json(config_api.config_save(body.get("values") or {}))
                 if path == "/api/app/settings":
                     return self._json(config_api.save_app_settings(body))
+                if path == "/api/appearance":
+                    return self._json(appearance_api.save(
+                        theme=body.get("theme"), title=body.get("title"),
+                        bg=body.get("bg"), bg_data=body.get("bg_data"),
+                        clear_bg=bool(body.get("clear_bg"))))
                 return self._json({"error": "not found"}, 404)
             except Exception as e:
                 return self._json({"error": repr(e)}, 500)

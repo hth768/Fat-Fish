@@ -42,7 +42,7 @@ $$(".nav-item").forEach(el => el.addEventListener("click", () => {
   $$(".nav-item").forEach(x => x.classList.toggle("active", x === el));
   $$(".page").forEach(p => p.classList.add("hidden"));
   $("#page-" + el.dataset.page).classList.remove("hidden");
-  const loaders = { dashboard: loadDashboard, chat: null, memory: loadMemory, summary: loadSummary, plugins: loadPlugins, config: loadConfig };
+  const loaders = { dashboard: loadDashboard, chat: null, memory: loadMemory, summary: loadSummary, plugins: loadPlugins, config: loadConfig, appearance: loadAppearance };
   const fn = loaders[el.dataset.page];
   if (fn) fn().catch(e => toast(e.message, true));
 }));
@@ -669,9 +669,165 @@ $("#btnSaveConfig").addEventListener("click", async () => {
   btn.disabled = false;
 });
 
+/* ---------------- 外观设置（主题色 + 窗口标题） ---------------- */
+const appearance = { theme: "midnight", title: "肥鱼娘 · App 控制台", themes: {}, vars: {} };
+
+function applyVars(vars) {
+  const root = document.documentElement;
+  for (const k in (vars || {})) root.style.setProperty(k, vars[k]);
+}
+function brandShort(t) {
+  const part = String(t || "").split(/[·•・]/)[0].trim();
+  return part || t || "肥鱼娘";
+}
+function applyTitle(t) {
+  document.title = t;
+  const b = $("#brandName");
+  if (b) b.textContent = brandShort(t);
+}
+
+async function loadAppearance() {
+  try {
+    const d = await GET("/api/appearance");
+    appearance.theme = d.theme; appearance.title = d.title; appearance.bg = d.bg || "";
+    appearance.themes = d.themes || {}; appearance.vars = d.vars || {};
+    applyVars(appearance.vars);
+    applyTitle(d.title);
+    applyBg(appearance.bg);
+    setBgPreview(appearance.bg);
+    renderThemeGrid();
+    $("#titleInput").value = d.title;
+    $("#titlePreview").textContent = d.title;
+  } catch (e) { /* 兜底用 CSS 默认主题 */ }
+}
+
+function applyBg(bg) {
+  const body = document.body, dim = $("#bgDim");
+  if (!bg) {
+    body.style.backgroundImage = "";
+    if (dim) dim.style.display = "none";
+    return;
+  }
+  const url = bg === "local" ? "/api/appearance/bg" : bg;
+  body.style.backgroundImage = `url("${url}")`;
+  body.style.backgroundSize = "cover";
+  body.style.backgroundPosition = "center";
+  body.style.backgroundAttachment = "fixed";
+  if (dim) dim.style.display = "block";
+}
+
+function setBgPreview(bg) {
+  const el = $("#bgPreview");
+  if (!el) return;
+  if (!bg) { el.style.display = "none"; el.style.backgroundImage = ""; return; }
+  el.style.display = "block";
+  el.style.backgroundImage = `url("${bg === "local" ? "/api/appearance/bg" : bg}")`;
+}
+
+async function uploadBg(file) {
+  const msg = $("#bgMsg");
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) { msg.textContent = "图片过大，上限 8MB"; return; }
+  msg.textContent = "上传中…";
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const r = await POST("/api/appearance", { bg_data: reader.result });
+      appearance.bg = r.bg; applyBg(r.bg); setBgPreview(r.bg);
+      msg.textContent = "背景已应用";
+    } catch (e) { msg.textContent = (e.message || "上传失败"); }
+  };
+  reader.onerror = () => { msg.textContent = "读取文件失败"; };
+  reader.readAsDataURL(file);
+}
+
+$("#bgFile").addEventListener("change", e => {
+  const f = e.target.files && e.target.files[0];
+  uploadBg(f);
+  e.target.value = "";
+});
+
+$("#btnApplyBgUrl").addEventListener("click", async () => {
+  const msg = $("#bgMsg");
+  const url = $("#bgUrl").value.trim();
+  if (!url) { msg.textContent = "请先填写图片链接"; return; }
+  msg.textContent = "应用中…";
+  try {
+    const r = await POST("/api/appearance", { bg: url });
+    appearance.bg = r.bg; applyBg(r.bg); setBgPreview(r.bg);
+    msg.textContent = "背景已应用";
+  } catch (e) { msg.textContent = (e.message || "应用失败"); }
+});
+
+$("#btnClearBg").addEventListener("click", async () => {
+  const msg = $("#bgMsg");
+  msg.textContent = "清除中…";
+  try {
+    const r = await POST("/api/appearance", { clear_bg: true });
+    appearance.bg = r.bg; applyBg(r.bg); setBgPreview(r.bg);
+    $("#bgUrl").value = "";
+    msg.textContent = "已清除背景";
+  } catch (e) { msg.textContent = (e.message || "清除失败"); }
+});
+
+async function previewTheme(name) {
+  try {
+    const d = await GET("/api/appearance?theme=" + encodeURIComponent(name));
+    appearance.vars = d.vars; applyVars(d.vars);
+  } catch (e) { }
+}
+
+function renderThemeGrid() {
+  const grid = $("#themeGrid");
+  if (!grid) return;
+  grid.innerHTML = Object.entries(appearance.themes).map(([key, t]) => {
+    const sel = key === appearance.theme ? " selected" : "";
+    return `<div class="theme-swatch${sel}" data-theme="${esc(key)}" title="${esc(t.label)}">
+      <span class="sw-dot" style="background:${t.accent || "#4f8cff"}"></span>
+      <span class="sw-label">${esc(t.label)}</span>
+    </div>`;
+  }).join("");
+  $$("#themeGrid .theme-swatch").forEach(el => el.addEventListener("click", () => {
+    appearance.theme = el.dataset.theme;
+    $$("#themeGrid .theme-swatch").forEach(x => x.classList.toggle("selected", x === el));
+    previewTheme(el.dataset.theme).catch(() => { });
+  }));
+}
+
+function setWindowTitle(t) {
+  try {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.set_title) {
+      window.pywebview.api.set_title(t);
+    }
+  } catch (e) { }
+}
+
+$("#btnSaveAppearance").addEventListener("click", async () => {
+  const btn = $("#btnSaveAppearance");
+  const t = $("#titleInput").value.trim() || "肥鱼娘 · App 控制台";
+  btn.disabled = true; btn.textContent = "保存中…";
+  try {
+    const r = await POST("/api/appearance", { theme: appearance.theme, title: t });
+    appearance.title = r.title; appearance.vars = r.vars || appearance.vars;
+    applyVars(appearance.vars);
+    applyTitle(r.title);
+    setWindowTitle(r.title);
+    $("#titleInput").value = r.title;
+    $("#titlePreview").textContent = r.title;
+    toast("外观已保存");
+  } catch (e) { toast(e.message, true); }
+  btn.disabled = false; btn.textContent = "保存外观";
+});
+
+$("#btnResetTitle").addEventListener("click", () => {
+  $("#titleInput").value = "肥鱼娘 · App 控制台";
+  $("#titlePreview").textContent = "肥鱼娘 · App 控制台";
+});
+
 /* ---------------- 启动 ---------------- */
 window.addEventListener("DOMContentLoaded", async () => {
   connectSSE();
+  loadAppearance().catch(() => { });
   await refreshStatus();
   try {
     const recent = await GET("/api/recent");
