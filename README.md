@@ -23,6 +23,7 @@
   - [总结](#总结)
   - [插件系统](#插件系统)
   - [外观](#外观)
+- [插件协议（第三方接入规范）](#插件协议第三方接入规范)
 - [MC 功能（模组世界 + 原版世界）](#mc-功能模组世界--原版世界)
 - [安卓版](#安卓版)
 - [发布与安装](#发布与安装)
@@ -213,6 +214,10 @@ python app.py --with-core
 | `services` | 后台服务 | `sidecar_memory` `sidecar_monitor` `sidecar_telemetry` | sidecar 子进程 |
 
 包管理见 `bridge/pkg_manager.py`。
+
+## 插件协议（第三方接入规范）
+
+> **第三方开发插件**：完整接入规范（包目录、`manifest.json` 字段、`platform`/`feature`/`brain`/`sidecar`/`local` 四类契约、消息/事件接口、最小模板）见仓库根目录 **[`PLUGINS.md`](./PLUGINS.md)**。
 
 ### 外观
 
