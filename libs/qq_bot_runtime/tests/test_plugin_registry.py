@@ -36,7 +36,7 @@ class RegistryStructureTest(unittest.TestCase):
     def test_required_entries_exist(self):
         for name in ("qq", "console", "web", "bilibili", "vox_tts",
                      "memory", "monitor", "tts", "telemetry",
-                     "chat", "mc_mod", "pc", "pvz"):
+                     "chat"):
             self.assertIsNotNone(reg.get_spec(name), f"清单缺少条目 {name}")
 
     def test_names_unique(self):

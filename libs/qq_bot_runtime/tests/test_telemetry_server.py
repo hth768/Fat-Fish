@@ -19,6 +19,11 @@ ts._rate = {}
 
 
 class IngestTest(unittest.TestCase):
+    def setUp(self):
+        ts._agg = {}
+        ts._seen = {}
+        ts._rate = {}
+
     def _payload(self, device="d1", ts=None, event="ok", **extra):
         p = {"group": "providers", "key": "deepseek", "event": event,
              "ts": ts if ts is not None else __import__("time").time(),

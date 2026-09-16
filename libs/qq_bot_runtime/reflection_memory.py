@@ -73,6 +73,9 @@ def _default_data() -> dict:
 
 
 def _load_data() -> dict:
+    global _reflection_cache
+    if _reflection_cache is None:
+        _reflection_cache = {}
     aid = agent_ctx.current_agent() or "__default__"
     if aid in _reflection_cache:
         return _reflection_cache[aid]
@@ -94,6 +97,9 @@ def _load_data() -> dict:
 
 
 def _save_data():
+    global _reflection_cache
+    if _reflection_cache is None:
+        _reflection_cache = {}
     aid = agent_ctx.current_agent() or "__default__"
     data = _reflection_cache.get(aid)
     if data is None:

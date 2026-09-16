@@ -357,6 +357,12 @@ class WebPlugin(PlatformPlugin):
                     out["toggles"].append({"key": k, "value": v})
         return out
 
+    def _api_memory_browser(self):
+        return _api_memory_browser()
+
+    def _api_memory_browser_action(self, body):
+        return _api_memory_browser_action(body)
+
     def _api_control_plugins(self, body):
         """控制：重启 sidecar / 启停非 web 插件。"""
         action = body.get("action")
@@ -443,18 +449,6 @@ def _wrap(coro_fn):
 # HTTP 处理器
 # ----------------------------------------------------------------------------
 class _Handler(BaseHTTPRequestHandler):
-
-class _QuietHTTPServer(ThreadingHTTPServer):
-    def handle_error(self, request, client_address):
-        # 客户端（本机浏览器/前端）中断连接属正常现象：关标签页、SSE 长连接
-        # 被断开、健康检查超时等都会触发。这只是让该条请求线程结束，不影响服务，
-        # 默认 BaseServer.handle_error 会把整段 traceback 刷到日志，故对断连静默。
-        exc = sys.exc_info()[1]
-        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError,
-                             BrokenPipeError)):
-            return
-        super().handle_error(request, client_address)
-
     server_version = "NekoWeb/1.0"
 
     def log_message(self, *args, **kwargs):  # 安静日志
@@ -859,8 +853,20 @@ class _QuietHTTPServer(ThreadingHTTPServer):
             return {"ok": False, "error": repr(e)}
 
 
-        # ----------------------------------------------------------------------------
-        # 独立运行入口（自带最小核心）
+class _QuietHTTPServer(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        # 客户端（本机浏览器/前端）中断连接属正常现象：关标签页、SSE 长连接
+        # 被断开、健康检查超时等都会触发。这只是让该条请求线程结束，不影响服务，
+        # 默认 BaseServer.handle_error 会把整段 traceback 刷到日志，故对断连静默。
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError,
+                             BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
+# ----------------------------------------------------------------------------
+# 独立运行入口（自带最小核心）
 # ----------------------------------------------------------------------------
 def build_web_core():
     """构造一个只含 web 平台 + 必要功能插件的最小核心（不连 QQ/NapCat）。

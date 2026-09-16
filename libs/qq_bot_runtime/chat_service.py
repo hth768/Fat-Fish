@@ -26,8 +26,14 @@ import knowledge_service
 from deepseek_client import DeepSeekClient
 from glm_client import detect_image_type
 from session_manager import SessionManagerAdapter
-from vision_capture import vision_capture
-from video_processor import describe_video
+try:  # 视觉捕获依赖 cv2/mss，未安装时聊天优雅降级（仍可用文本/记忆等功能）
+    from vision_capture import vision_capture
+except Exception:
+    vision_capture = None
+try:  # 视频理解依赖 cv2，未安装时降级
+    from video_processor import describe_video
+except Exception:
+    describe_video = None
 try:
     from mc_watcher import mc_watcher
     from mc_agent import get_agent
@@ -267,6 +273,10 @@ class ChatService:
             return
 
         # ---------------- 实时视觉控制命令（高优先级） ----------------
+        _vision_cmds = ("/看屏幕", "/看窗口", "/看摄像头", "/看游戏", "/别看")
+        if text.strip().startswith(_vision_cmds) and vision_capture is None:
+            await reply.reply("视觉捕获组件未安装（需要 cv2/mss），这些功能暂时用不了哦~")
+            return
         if text.strip().startswith("/看屏幕"):
             if not config.ENABLE_LIVE_VISION or not config.GEMINI_API_KEY:
                 await reply.reply("实时视觉没开或者没配置 GEMINI_API_KEY 哦，先去 config.py 填一下吧。")
@@ -1505,7 +1515,7 @@ class ChatService:
             messages.append({"role": "system", "content": emoji_hint})
 
         # 注入实时画面描述
-        if config.ENABLE_LIVE_VISION and vision_capture.is_running():
+        if config.ENABLE_LIVE_VISION and vision_capture is not None and vision_capture.is_running():
             scene_hint = await vision_capture.get_scene_hint()
             if scene_hint:
                 messages.append({"role": "system", "content": scene_hint})

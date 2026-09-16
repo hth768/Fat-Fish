@@ -47,7 +47,7 @@ class ConfigCenterTest(unittest.TestCase):
             cfg["capability_routing"]["chat"],
             config.AI_CAPABILITY_ROUTING["chat"],
         )
-        self.assertEqual(cfg["role_routing"]["judge"], config.AI_ROLE_ROUTING["judge"])
+        self.assertEqual(cfg["role_routing"], config.AI_ROLE_ROUTING)
         # 四个键都规整为 dict
         for k in ("providers", "capability_routing", "vision_routing", "role_routing"):
             self.assertIsInstance(cfg[k], dict)
@@ -56,8 +56,12 @@ class ConfigCenterTest(unittest.TestCase):
         """覆盖层逐供应商合并 + ${ENV} 解析；未写的键/路由保留默认。"""
         self._set_env("MY_TEST_KEY", "sk-secret")
         overlay = {
-            "AI_PROVIDERS": {"deepseek": {"api_key": "${MY_TEST_KEY}"}},
-            "AI_CAPABILITY_ROUTING": {"chat": ["gemini", "deepseek"]},
+            "AI_PROVIDERS": {
+                "deepseek": {"api_key": "${MY_TEST_KEY}"},
+                "glm": {"api_key": "${MY_TEST_KEY}", "base_url": "http://glm",
+                        "models": {"chat": "glm-chat"}},
+            },
+            "AI_CAPABILITY_ROUTING": {"chat": ["glm", "deepseek"]},
         }
         _write_json(self.json_path, overlay)
         ai_provider._PROVIDER_JSON = self.json_path
@@ -66,8 +70,9 @@ class ConfigCenterTest(unittest.TestCase):
         ds = cfg["providers"]["deepseek"]
         self.assertEqual(ds["api_key"], "sk-secret")   # ${ENV} 解析成功
         self.assertTrue(ds["base_url"])                 # 未覆盖的键保留默认
-        self.assertIn("gemini", cfg["providers"])       # 未覆盖的供应商保留
-        self.assertEqual(cfg["capability_routing"]["chat"], ["gemini", "deepseek"])
+        self.assertIn("glm", cfg["providers"])          # 覆盖层新增的供应商生效
+        self.assertEqual(cfg["providers"]["glm"]["api_key"], "sk-secret")
+        self.assertEqual(cfg["capability_routing"]["chat"], ["glm", "deepseek"])
         # 覆盖层未改的能力路由保持原样
         self.assertEqual(
             cfg["capability_routing"]["reasoning"],

@@ -40,6 +40,11 @@ AI_CAPABILITY_ROUTING = {
     "reasoning": ["deepseek"],
     "vision": ["deepseek"],
 }
+AI_VISION_ROUTING = {
+    "image":  ["glm", "gemini"],
+    "gif":    ["glm"],
+    "emoji":  ["glm"],
+}
 AI_ROLE_ROUTING = {}   # 各 role 缺省回退 capability=chat（已在 ai_provider 内部处理）
 
 # OneBot / NapCat 反向 WebSocket 监听配置
@@ -371,6 +376,7 @@ CODEBUDDY_CORE_FILES = [
 # ENABLE_QQ_PLUGIN=False 且 ENABLE_CONSOLE_PLUGIN=True 时可完全脱离 QQ 运行
 ENABLE_QQ_PLUGIN = False
 ENABLE_CONSOLE_PLUGIN = False    # 终端聊天插件（python main.py --console 可临时启用）
+ENABLE_WEB_PLUGIN = True        # 内置 Web 控制台（前端 + 数据/控制 API）开关
 
 # ---- B 站直播平台插件（bilibili_plugin.py，python main.py --bili 可单独启用）----
 # 两种模式：streamer = 她自己开播当主播（弹幕当耳朵，回应说进直播音频）；
