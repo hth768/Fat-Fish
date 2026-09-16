@@ -38,3 +38,22 @@ Thumbs.db
 
 # ===== 打包临时脚本（本地用）=====
 _scan_log.txt
+
+# ===== 捆绑 Python 运行时（随仓库分发，体积巨大，不入库）=====
+libs/qq_bot_runtime/runtime/python/Lib/site-packages/
+libs/qq_bot_runtime/runtime/python/Scripts/
+
+# ===== 安卓构建产物（编译输出，非源码，不入库）=====
+feiyu-android/
+
+# ===== 根目录临时调试/测试脚本（本地用，不入库）=====
+_deps.py
+_pip.err
+_pip2.err
+_settings_store_recovered.py
+_smoke.py
+_smoke2.py
+_syntax_check.py
+_test_out.txt
+libs/qq_bot_runtime/telemetry_server_test.json
+libs/qq_bot_runtime/memory_session_*.json
