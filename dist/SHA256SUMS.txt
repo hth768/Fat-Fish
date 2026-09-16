@@ -1,0 +1,9 @@
+# dist 产物 sha256（合并/下载后校验用；分卷产物为合并目标 zip 的哈希）
+
+plugins_pack: a8ffcf138829b23758cd5be801f9c6e05680607b2eda30aabf3e221d0b391973
+mc_pack: 0e5871abf9ef49c703ba3bac3b7f41ec7a3fe46542db43adf6f33fd4528a2715
+tools_pack: 077393fdadf6615324475ec62c312279b74dcb53484cc87888e19a025ead8e1e
+feiyu_core: c8e79e11800e6cd7ce13bae3bff526b0ab41280b448bad8bc1662516009bf211
+voice_pack: N/A (merged from parts)
+vl_pack: N/A (merged from parts)
+napcat_pack: c9355d17aab4b0694525e88a388452dda7f33cdba0f14528ffdfe043e24d9e8d
