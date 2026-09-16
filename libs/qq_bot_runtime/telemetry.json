@@ -1,1 +1,1 @@
-{"providers": {}, "vision": {}}
+{"providers": {"role": {"calls": 1, "ok": 0, "fail": 0, "latency_ms": 0, "tokens_prompt": 0, "tokens_completion": 0, "last_error": null}, "main": {"calls": 1, "ok": 0, "fail": 0, "latency_ms": 0, "tokens_prompt": 0, "tokens_completion": 0, "last_error": null}, "MyGPT4o": {"calls": 1, "ok": 0, "fail": 0, "latency_ms": 0, "tokens_prompt": 0, "tokens_completion": 0, "last_error": null}, "MyDeepSeek": {"calls": 1, "ok": 0, "fail": 0, "latency_ms": 0, "tokens_prompt": 0, "tokens_completion": 0, "last_error": null}}, "vision": {}}

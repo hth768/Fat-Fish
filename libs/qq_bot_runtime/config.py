@@ -22,23 +22,14 @@ GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 VISION_MODEL = "deepseek-flash"  # DeepSeek 视觉模型（实验版）
 
 # ---- 统一 AI 供应商抽象层（ai_provider.py：能力路由 + 故障转移）----
-# 重构遗留：chat / judge / memory_extract 等 AI 调用已统一走 ai_provider.get_llm().chat()，
-# 但本文件漏注册 AI_PROVIDERS / AI_CAPABILITY_ROUTING，导致 enabled_for() 全空、
-# 所有带 role 的调用（proactive / judge / memory_extract / retrieval / memory_merge / summary）都报
-# "无可用供应商支撑能力「chat」"。下面补齐默认值（复用与旧 deepseek_client 相同的 key，等价替换）。
-AI_PROVIDERS = {
-    "deepseek": {
-        "api_key": DEEPSEEK_API_KEY,
-        "base_url": DEEPSEEK_BASE_URL,
-        "default_model": DEEPSEEK_MODEL,
-        "models": {"vision": VISION_MODEL},
-        "capabilities": ["chat", "reasoning", "vision"],
-    },
-}
+# 供应商不再在源码里写死：默认留空，由统一的「模型注册表」在运行时保存/激活
+# （写入 data/app_settings.json 覆盖层，启动时 setattr 到 config，并 reload_provider_config）。
+# 首轮运行无供应商时，chat() 会明确报「无可用供应商支撑能力」，引导用户在注册表添加模型。
+AI_PROVIDERS = {}
 AI_CAPABILITY_ROUTING = {
-    "chat": ["deepseek"],
-    "reasoning": ["deepseek"],
-    "vision": ["deepseek"],
+    "chat": [],
+    "reasoning": [],
+    "vision": [],
 }
 AI_VISION_ROUTING = {
     "image":  ["glm", "gemini"],

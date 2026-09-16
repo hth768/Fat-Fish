@@ -42,7 +42,7 @@ class ConfigCenterTest(unittest.TestCase):
         """无 JSON 时完全回落 config.py 默认值（零回归）。"""
         ai_provider._PROVIDER_JSON = os.path.join(self.tmp, "nope.json")
         cfg = ai_provider.load_provider_config(reset_cache=True)
-        self.assertIn("deepseek", cfg["providers"])
+        self.assertEqual(cfg["providers"], {})   # 默认无写死供应商，全靠注册表
         self.assertEqual(
             cfg["capability_routing"]["chat"],
             config.AI_CAPABILITY_ROUTING["chat"],
@@ -57,7 +57,8 @@ class ConfigCenterTest(unittest.TestCase):
         self._set_env("MY_TEST_KEY", "sk-secret")
         overlay = {
             "AI_PROVIDERS": {
-                "deepseek": {"api_key": "${MY_TEST_KEY}"},
+                "deepseek": {"api_key": "${MY_TEST_KEY}", "base_url": "http://ds",
+                             "default_model": "ds", "models": {}},
                 "glm": {"api_key": "${MY_TEST_KEY}", "base_url": "http://glm",
                         "models": {"chat": "glm-chat"}},
             },
@@ -69,7 +70,7 @@ class ConfigCenterTest(unittest.TestCase):
 
         ds = cfg["providers"]["deepseek"]
         self.assertEqual(ds["api_key"], "sk-secret")   # ${ENV} 解析成功
-        self.assertTrue(ds["base_url"])                 # 未覆盖的键保留默认
+        self.assertEqual(ds["base_url"], "http://ds")  # 覆盖层提供的键保留
         self.assertIn("glm", cfg["providers"])          # 覆盖层新增的供应商生效
         self.assertEqual(cfg["providers"]["glm"]["api_key"], "sk-secret")
         self.assertEqual(cfg["capability_routing"]["chat"], ["glm", "deepseek"])

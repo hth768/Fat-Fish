@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>肥鱼娘 · App 控制台</title>
+<link rel="icon" href="/static/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/static/icon.png">
+<link rel="apple-touch-icon" href="/static/icon.png">
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
@@ -185,55 +188,68 @@
       </header>
       <div id="configBody">加载中…</div>
 
-      <!-- 模型供应商 -->
+      <!-- AI 供应商 / 模型管理（原「AI 供应商」与「自定义模型供应商」合并） -->
       <div class="panel" id="provPanel" style="margin-top:18px">
-        <div class="panel-title">模型供应商（自定义）</div>
+        <div class="panel-title">AI 供应商（模型管理）</div>
         <div class="hint wrap" style="margin-bottom:12px">
-          选择厂商预设（API 地址自动填充），填入你的 API Key 与模型名即可切换对应模型。
-          支持 OpenAI 兼容 与 Anthropic 兼容；可自定义 Base URL 接入任意兼容端点。保存后自动热重载，无需重启。
+          集中管理你配置的所有模型供应商：可保存多个命名模型，在下方列表里把任意一个设为「对话/推理/视觉/角色」的默认（热重载即时生效），
+          也可在「构建助手」里实时选用。支持 OpenAI 兼容 与 Anthropic 兼容；可自定义 Base URL 接入任意兼容端点。
         </div>
-        <div class="cfg-grid">
-          <label class="cfg-field">
-            <span class="cfg-label">模型槽位</span>
-            <select id="provSlot" class="select">
-              <option value="main">主模型（对话 / 推理）</option>
-              <option value="vision">视觉模型（图片理解）</option>
-              <option value="role">角色模型（摘要 / 判断 / 记忆等）</option>
-            </select>
-          </label>
-          <label class="cfg-field">
-            <span class="cfg-label">厂商预设</span>
-            <select id="provPreset" class="select">
-              <option value="">— 选择厂商 —</option>
-            </select>
-          </label>
-          <label class="cfg-field">
-            <span class="cfg-label">接口类型</span>
-            <select id="provStyle" class="select">
-              <option value="openai">OpenAI 兼容</option>
-              <option value="anthropic">Anthropic 兼容</option>
-            </select>
-          </label>
-          <label class="cfg-field">
-            <span class="cfg-label">Base URL</span>
-            <input id="provBaseUrl" class="input" placeholder="https://…/v1">
-          </label>
-          <label class="cfg-field">
-            <span class="cfg-label">API Key</span>
-            <input id="provKey" class="input" type="password" placeholder="sk-…（留空表示不修改）" autocomplete="off">
-          </label>
-          <label class="cfg-field">
-            <span class="cfg-label">模型</span>
-            <select id="provModel" class="select"></select>
-          </label>
-          <label class="cfg-field">
-            <span class="cfg-label">自定义模型名</span>
-            <input id="provCustomModel" class="input" placeholder="留空则用上方所选模型">
-          </label>
-        </div>
-        <div class="row-actions">
-          <button class="btn primary" id="btnSaveProvider">保存并热重载</button>
-          <span class="hint" id="provMsg"></span>
+
+        <!-- 已保存模型列表 -->
+        <div id="provList" class="prov-list"></div>
+
+        <!-- 新增 / 编辑 -->
+        <div class="prov-form">
+          <div class="panel-subtitle">添加 / 更新模型</div>
+          <div class="cfg-grid">
+            <label class="cfg-field">
+              <span class="cfg-label">模型名称</span>
+              <input id="provName" class="input" placeholder="如：我的GPT4o / 云端DeepSeek">
+            </label>
+            <label class="cfg-field">
+              <span class="cfg-label">厂商预设</span>
+              <select id="provPreset" class="select">
+                <option value="">— 选择厂商 —</option>
+              </select>
+            </label>
+            <label class="cfg-field">
+              <span class="cfg-label">接口类型</span>
+              <select id="provStyle" class="select">
+                <option value="openai">OpenAI 兼容</option>
+                <option value="anthropic">Anthropic 兼容</option>
+              </select>
+            </label>
+            <label class="cfg-field">
+              <span class="cfg-label">Base URL</span>
+              <input id="provBaseUrl" class="input" placeholder="https://…/v1">
+            </label>
+            <label class="cfg-field">
+              <span class="cfg-label">API Key</span>
+              <input id="provKey" class="input" type="password" placeholder="sk-…（留空表示不修改）" autocomplete="off">
+            </label>
+            <label class="cfg-field">
+              <span class="cfg-label">模型</span>
+              <select id="provModel" class="select"></select>
+            </label>
+            <label class="cfg-field">
+              <span class="cfg-label">自定义模型名</span>
+              <input id="provCustomModel" class="input" placeholder="选「自定义」时填写">
+            </label>
+          </div>
+          <div class="cfg-field" style="margin-top:8px">
+            <span class="cfg-label">能力（可多选，决定该模型用于哪些场景）</span>
+            <div class="chip-row">
+              <label class="chip"><input type="checkbox" id="provCapChat" checked> 对话</label>
+              <label class="chip"><input type="checkbox" id="provCapReasoning"> 推理</label>
+              <label class="chip"><input type="checkbox" id="provCapVision"> 视觉</label>
+              <label class="chip"><input type="checkbox" id="provCapRole"> 角色</label>
+            </div>
+          </div>
+          <div class="row-actions" style="margin-top:10px">
+            <button class="btn primary" id="btnSaveProvider">保存并设为默认</button>
+            <span class="hint" id="provMsg"></span>
+          </div>
         </div>
       </div>
     </section>
@@ -276,6 +292,22 @@
         </div>
         <div class="hint" id="bgMsg" style="margin-top:8px"></div>
       </div>
+
+      <div class="panel">
+        <div class="panel-title">应用图标</div>
+        <div class="hint wrap" style="margin-bottom:12px">上传图片作为 APP 图标，支持 PNG/JPG 等（≤8MB）。即时更新标签页与任务栏图标；独立窗口图标需重启后生效。</div>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+          <img id="iconPreview" class="icon-preview" src="/static/icon.png" alt="当前图标">
+          <div class="row-actions">
+            <label class="btn ghost" style="cursor:pointer">
+              选择图片上传
+              <input id="iconFile" type="file" accept="image/*" hidden>
+            </label>
+            <button class="btn danger" id="btnResetIcon">恢复默认图标</button>
+          </div>
+        </div>
+        <div class="hint" id="iconMsg" style="margin-top:8px"></div>
+      </div>
     </section>
 
     <!-- 构建助手 -->
@@ -296,10 +328,19 @@
         <textarea id="bldInput" class="textarea" rows="4" placeholder="描述需求…"></textarea>
         <div class="row-actions" style="margin-top:10px">
           <label class="cfg-field" style="flex:1">
-            <span class="cfg-label">模型 / 思考强度</span>
+            <span class="cfg-label">模型（实时切换）</span>
             <select id="bldModel" class="select">
-              <option value="deepseek-flash">DeepSeek Flash（快速 · 轻思考）</option>
-              <option value="deepseek-v4-pro">DeepSeek V4 Pro（深度 · 强思考）</option>
+              <option value="">系统默认（当前对话模型）</option>
+            </select>
+            <input id="bldCustomModel" class="input" type="text"
+                   placeholder="自定义模型名，如 gpt-4o / claude-3-5-sonnet" style="margin-top:6px; display:none">
+          </label>
+          <label class="cfg-field" style="flex:1">
+            <span class="cfg-label">思考强度</span>
+            <select id="bldThink" class="select">
+              <option value="low">低（快速生成）</option>
+              <option value="medium">中（标准思考）</option>
+              <option value="high">高（深度思考）</option>
             </select>
           </label>
         </div>

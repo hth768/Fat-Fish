@@ -200,6 +200,19 @@ class UnifiedLLM:
         return models.get(capability) or models.get("chat") or prov["default_model"]
 
     @staticmethod
+    def _think_level(think) -> str:
+        """把 think 参数归一化为思考强度档位：low / medium / high。
+        - False / "off" / "low" → "low"（不思考，最快）
+        - True / "medium"       → "medium"（默认开启思考）
+        - "high"                → "high"（深度思考，更大预算）
+        """
+        if think is True or think == "medium":
+            return "medium"
+        if think == "high":
+            return "high"
+        return "low"
+
+    @staticmethod
     def _inject_images(messages: list, images: List[bytes]) -> list:
         """把图片注入到最后一条 user 消息的 content（OpenAI image_url 格式）。"""
         new_messages = [dict(m) for m in messages]
@@ -220,16 +233,21 @@ class UnifiedLLM:
     def _build_payload(self, prov, messages, capability, model, think,
                        tools, role) -> dict:
         # ② 方言 extra_body 配置化（泛化原 think_param）：
-        #   extra_body 始终随请求发送；think_body 仅 think=True 时发送；
+        #   extra_body 始终随请求发送；think_body 仅开启思考时发送；
         #   二者合并进请求体顶层（直接 HTTP POST）。未配 think_body 时退化为旧
         #   think_param 开关，保证 config.py 默认 deepseek 行为零回归。
+        level = self._think_level(think)
         extra = dict(prov.get("extra_body") or {})
-        if think:
+        if level != "low":
             tb = prov.get("think_body")
             if tb is not None:
                 extra.update(tb)
             elif prov.get("think_param"):
                 extra["thinking"] = {"type": "enabled"}
+            # 部分厂商支持 reasoning_effort（OpenAI o-series / Qwen 等）
+            eff = prov.get("reasoning_effort_param")
+            if eff:
+                extra[eff] = "high" if level == "high" else "medium"
         else:
             if prov.get("think_param") and "think_body" not in prov:
                 extra["thinking"] = {"type": "disabled"}
@@ -342,8 +360,11 @@ class UnifiedLLM:
         }
         if sys_parts:
             payload["system"] = "\n".join(sys_parts)
-        if think:
+        level = self._think_level(think)
+        if level != "low":
             budget = int(prov.get("think_budget", 4096))
+            if level == "high":
+                budget = int(prov.get("think_budget_high", budget * 2))
             payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
             payload["max_tokens"] = max(max_tokens, budget + 1024)
         if tools:
@@ -410,7 +431,8 @@ class UnifiedLLM:
     async def chat(self, messages: list, capability: str = "chat",
                    model: Optional[str] = None, think: bool = False,
                    tools: Optional[list] = None, images: Optional[List[bytes]] = None,
-                   timeout: int = 300, role: Optional[str] = None) -> object:
+                   timeout: int = 300, role: Optional[str] = None,
+                   provider: Optional[str] = None) -> object:
         # 角色路由（对齐 N.E.K.O 的模型粒度配置：摘要/情感/记忆/判断各用不同模型）。
         # role 在 capability 之上再细化：可覆盖 capability 与 model，缺省则回退到参数。
         cap, mdl = capability, model
@@ -420,7 +442,18 @@ class UnifiedLLM:
             if rr:
                 cap = rr.get("capability", cap)
                 mdl = rr.get("model") or mdl
-        providers = self.enabled_for(cap)
+        if provider:
+            # 直指定供应商：用于构建助手「实时切换模型」（不影响全局路由/热重载）。
+            prov = self.providers.get(provider)
+            if not prov:
+                raise ProviderError(f"指定的供应商不存在: {provider}")
+            if not prov.get("api_key"):
+                raise ProviderError(f"供应商「{provider}」缺少 API Key（请先在「AI 供应商」中配置）")
+            if cap not in (prov.get("capabilities") or []):
+                raise ProviderError(f"供应商「{provider}」不支持能力「{cap}」")
+            providers = [provider]
+        else:
+            providers = self.enabled_for(cap)
         if not providers:
             raise ProviderError(f"无可用供应商支撑能力「{cap}」(role={role})"
                                 f"（请检查 config.AI_PROVIDERS / AI_CAPABILITY_ROUTING）")

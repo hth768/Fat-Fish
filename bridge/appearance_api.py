@@ -9,12 +9,18 @@ import json
 import os
 import re
 import base64
+import io
+import struct
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(APP_DIR, "data")
 DATA_FILE = os.path.join(DATA_DIR, "appearance.json")
 BG_PATH = os.path.join(DATA_DIR, "appearance_bg")
 BG_MAX = 8 * 1024 * 1024  # 背景图上限 8MB
+ICON_PNG = os.path.join(APP_DIR, "webui", "icon.png")
+ICON_ICO = os.path.join(APP_DIR, "webui", "favicon.ico")
+ICON_DEFAULT_PNG = os.path.join(APP_DIR, "webui", "icon_default.png")
+ICON_MAX = 8 * 1024 * 1024  # 图标上传上限 8MB
 
 DEFAULT_TITLE = "肥鱼娘 · App 控制台"
 DEFAULT_THEME = "midnight"
@@ -181,3 +187,106 @@ def get_appearance(theme: str = None) -> dict:
 
 def get_window_title() -> str:
     return _read()["title"]
+
+
+# ---------------- 应用图标 ----------------
+
+def _to_png(raw: bytes) -> bytes:
+    """把任意图片字节归一为 PNG（RGBA）。优先本地 PIL，否则用独立版 venv 的 PIL 兜底。
+
+    返回 PNG 字节；无法解码时抛 ValueError。
+    """
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return raw  # 已是 PNG
+    # 1) 本地 PIL
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(raw)).convert("RGBA")
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        return buf.getvalue()
+    except Exception:
+        pass
+    # 2) 独立版 venv 兜底（其 Python 自带 Pillow）
+    for cand in (
+        os.path.join(os.environ.get("FEIYU_QQ_BOT", ""), "..", "venv", "Scripts", "python.exe"),
+        r"e:\qq_bot\venv\Scripts\python.exe",
+    ):
+        cand = os.path.abspath(cand)
+        if os.path.isfile(cand):
+            try:
+                import subprocess
+                script = (
+                    "import sys,io,PIL.Image as I;"
+                    "d=sys.stdin.buffer.read();"
+                    'b=io.BytesIO();I.open(io.BytesIO(d)).convert("RGBA").save(b,"PNG");'
+                    "sys.stdout.buffer.write(b.getvalue())"
+                )
+                p = subprocess.run([cand, "-c", script], input=raw,
+                                   capture_output=True, timeout=30)
+                if p.returncode == 0 and p.stdout[:8] == b"\x89PNG\r\n\x1a\n":
+                    return p.stdout
+            except Exception:
+                pass
+    raise ValueError("无法解析该图片，请上传 PNG/JPG 等常见格式")
+
+
+def _png_to_ico(png: bytes) -> bytes:
+    """PNG-in-ICO 包裹（Vista+ 支持），无需外部库。单图，自动按 PNG 实际尺寸。"""
+    # 解析 PNG 宽高（IHDR：偏移 16 起 4+4 字节）
+    w = h = 0
+    try:
+        w = struct.unpack(">I", png[16:20])[0]
+        h = struct.unpack(">I", png[20:24])[0]
+        if w > 255:
+            w = 0  # 0 在 ICO 中表示 256
+        if h > 255:
+            h = 0
+    except Exception:
+        w = h = 0
+    out = struct.pack("<HHH", 0, 1, 1)  # ICONDIR：保留/类型/数量
+    out += struct.pack("<BBBBHHII", w & 0xFF, h & 0xFF, 0, 0, 1, 32,
+                       len(png), 6 + 16)  # ICONDIRENTRY
+    out += png
+    return out
+
+
+def save_icon(icon_data: str) -> dict:
+    """保存应用图标。icon_data 为 data URL（data:image/...;base64,...）。
+
+    解码后归一为 PNG 写入 webui/icon.png，再生成 webui/favicon.ico。
+    返回 {"ok": True, "ts": <秒级时间戳>}；非法输入抛 ValueError。
+    """
+    if not isinstance(icon_data, str) or not icon_data.startswith("data:"):
+        raise ValueError("图标需为图片文件")
+    m = re.match(r"^data:(image/[A-Za-z0-9.+-]+);base64,(.+)$", icon_data, re.S)
+    if not m:
+        raise ValueError("仅支持 PNG/JPEG/GIF/WEBP 等图片")
+    try:
+        raw = base64.b64decode(m.group(2))
+    except Exception:
+        raise ValueError("图片数据无法解析")
+    if len(raw) > ICON_MAX:
+        raise ValueError("图片过大（上限 8MB）")
+    png = _to_png(raw)
+    os.makedirs(os.path.dirname(ICON_PNG), exist_ok=True)
+    with open(ICON_PNG, "wb") as f:
+        f.write(png)
+    with open(ICON_ICO, "wb") as f:
+        f.write(_png_to_ico(png))
+    import time
+    return {"ok": True, "ts": int(time.time())}
+
+
+def reset_icon() -> dict:
+    """恢复默认图标：从 webui/icon_default.png 还原（首装时由当前图标生成）。"""
+    if not os.path.isfile(ICON_DEFAULT_PNG):
+        raise ValueError("未找到默认图标备份")
+    with open(ICON_DEFAULT_PNG, "rb") as f:
+        png = f.read()
+    with open(ICON_PNG, "wb") as f:
+        f.write(png)
+    with open(ICON_ICO, "wb") as f:
+        f.write(_png_to_ico(png))
+    import time
+    return {"ok": True, "ts": int(time.time())}

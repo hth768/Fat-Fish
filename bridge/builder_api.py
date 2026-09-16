@@ -134,13 +134,15 @@ def _available_context() -> dict:
 # ----------------------------------------------------------------------
 # LLM 调用
 # ----------------------------------------------------------------------
-async def _llm_json(system: str, user: str, model: str = None, think: bool = False) -> dict:
+async def _llm_json(system: str, user: str, model: str = None, think: bool = False,
+                  provider: str = None) -> dict:
     from ai_provider import get_llm
     out = await get_llm().chat(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         capability="chat",
         model=model or None,
         think=bool(think),
+        provider=provider or None,
     )
     return _extract_json(str(out or ""))
 
@@ -364,7 +366,8 @@ def _dry_load_plugin(code: str, kind: str, name: str):
 # ----------------------------------------------------------------------
 # 生成（异步）
 # ----------------------------------------------------------------------
-async def generate_agent(requirement: str, max_rounds: int = 2, model: str = None, think: bool = False) -> dict:
+async def generate_agent(requirement: str, max_rounds: int = 2, model: str = None,
+                      think: bool = False, provider: str = None) -> dict:
     ctx = _available_context()
     base_user = (
         "可用大脑: %s\n可用插件: %s\n\n需求: %s"
@@ -378,7 +381,7 @@ async def generate_agent(requirement: str, max_rounds: int = 2, model: str = Non
             % (last_err, requirement)
         )
         try:
-            data = await _llm_json(AGENT_SYSTEM, user, model=model, think=think)
+            data = await _llm_json(AGENT_SYSTEM, user, model=model, think=think, provider=provider)
         except Exception as e:
             return {"ok": False, "error": "生成失败: %r" % e}
         last_raw = data
@@ -390,7 +393,8 @@ async def generate_agent(requirement: str, max_rounds: int = 2, model: str = Non
     return {"ok": False, "error": "多次修正仍未通过校验（最后错误：%s）" % last_err, "raw": last_raw}
 
 
-async def generate_plugin(requirement: str, kind: str = "", max_rounds: int = 3, model: str = None, think: bool = False) -> dict:
+async def generate_plugin(requirement: str, kind: str = "", max_rounds: int = 3,
+                       model: str = None, think: bool = False, provider: str = None) -> dict:
     kind = (kind or "").strip().lower()
     system = PLUGIN_SYSTEM
     if kind:
@@ -407,7 +411,7 @@ async def generate_plugin(requirement: str, kind: str = "", max_rounds: int = 3,
                 "需求不变：%s" % (last_err, requirement)
             )
         try:
-            data = await _llm_json(system, user, model=model, think=think)
+            data = await _llm_json(system, user, model=model, think=think, provider=provider)
         except Exception as e:
             return {"ok": False, "error": "生成失败: %r" % e}
         last_raw = data
@@ -491,12 +495,18 @@ async def save_plugin(bridge, name: str, manifest: dict, code: str) -> dict:
 # ----------------------------------------------------------------------
 # 同步包装（供 server.py 在 BaseHTTPRequestHandler 中调用）
 # ----------------------------------------------------------------------
-def generate_agent_sync(bridge, requirement: str, model: str = None, think: bool = False) -> dict:
-    return bridge.lt.run_coro(generate_agent(requirement, max_rounds=2, model=model, think=think), timeout=120)
+def generate_agent_sync(bridge, requirement: str, model: str = None, think: bool = False,
+                         provider: str = None) -> dict:
+    return bridge.lt.run_coro(
+        generate_agent(requirement, max_rounds=2, model=model, think=think, provider=provider),
+        timeout=120)
 
 
-def generate_plugin_sync(bridge, requirement: str, kind: str = "", model: str = None, think: bool = False) -> dict:
-    return bridge.lt.run_coro(generate_plugin(requirement, kind, max_rounds=3, model=model, think=think), timeout=300)
+def generate_plugin_sync(bridge, requirement: str, kind: str = "", model: str = None,
+                         think: bool = False, provider: str = None) -> dict:
+    return bridge.lt.run_coro(
+        generate_plugin(requirement, kind, max_rounds=3, model=model, think=think, provider=provider),
+        timeout=300)
 
 
 def save_agent_sync(bridge, data: dict) -> dict:

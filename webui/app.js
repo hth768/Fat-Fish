@@ -709,9 +709,8 @@ async function loadConfig() {
   loadProviders().catch(e => console.warn("loadProviders", e));
 }
 
-/* ---------------- 模型供应商（主/视觉/角色） ---------------- */
+/* ---------------- AI 供应商 / 模型管理（注册表） ---------------- */
 let _provPresets = {};
-let currentProvSlot = "main";
 
 function _provFillModels(models, selected) {
   const sel = $("#provModel");
@@ -723,7 +722,7 @@ function _provFillModels(models, selected) {
     sel.appendChild(o);
   });
   const custom = document.createElement("option");
-  custom.value = "__custom__"; custom.textContent = "✎ 自定义（在右侧填写）";
+  custom.value = "__custom__"; custom.textContent = "✎ 自定义（在下方填写）";
   sel.appendChild(custom);
 }
 
@@ -736,10 +735,34 @@ function _provApplyPreset(id) {
   $("#provCustomModel").value = "";
 }
 
-async function loadProviders(slot) {
-  if (slot) currentProvSlot = slot;
-  const d = await GET("/api/providers/" + currentProvSlot);
-  _provPresets = (d.presets || {});
+const CAP_LABELS = { chat: "对话", reasoning: "推理", vision: "视觉", role: "角色" };
+
+function _provCardHTML(m) {
+  const caps = m.capabilities || [];
+  const tags = caps.map(c => {
+    const on = m.active && m.active[c];
+    return `<span class="tag ${on ? "on" : ""}">${CAP_LABELS[c] || c}${on ? "·默认" : ""}</span>`;
+  }).join(" ");
+  const setBtns = caps.map(c =>
+    `<button class="btn ghost" data-act="set" data-name="${esc(m.name)}" data-cap="${c}">设为${CAP_LABELS[c] || c}默认</button>`
+  ).join("");
+  return `<div class="prov-card" data-name="${esc(m.name)}">
+    <div class="prov-card-head">
+      <span class="prov-card-name">${esc(m.name)}</span>
+      <span class="prov-card-meta">${esc((_provPresets[m.preset] || {}).label || m.preset || "自定义")} · ${esc(m.model)}</span>
+    </div>
+    <div class="prov-card-head" style="margin-top:6px">${tags || '<span class="tag">无能力</span>'}</div>
+    <div class="prov-card-actions">
+      ${setBtns}
+      <button class="btn ghost" data-act="edit" data-name="${esc(m.name)}">编辑</button>
+      <button class="btn danger" data-act="del" data-name="${esc(m.name)}">删除</button>
+    </div>
+  </div>`;
+}
+
+async function loadProviders() {
+  const d = await GET("/api/providers");
+  _provPresets = d.presets || {};
   const sel = $("#provPreset");
   sel.innerHTML = '<option value="">— 选择厂商 —</option>';
   Object.keys(_provPresets).forEach(id => {
@@ -747,53 +770,82 @@ async function loadProviders(slot) {
     o.value = id; o.textContent = _provPresets[id].label || id;
     sel.appendChild(o);
   });
-  $("#provSlot").value = d.slot || currentProvSlot;
-  const cur = d.current;
-  const label = ({ main: "主模型", vision: "视觉模型", role: "角色模型" })[d.slot] || "当前模型";
-  if (cur) {
-    if (cur.preset && _provPresets[cur.preset]) sel.value = cur.preset;
-    else sel.value = "";
-    $("#provStyle").value = cur.api_style || "openai";
-    $("#provBaseUrl").value = cur.base_url || "";
-    _provFillModels((_provPresets[cur.preset] || {}).models || [], cur.model);
-    if (cur.model) $("#provCustomModel").value = cur.model;
-    $("#provKey").value = "";  // 不回显密钥
-    $("#provMsg").textContent = "当前" + label + "：" + cur.model + "（改 Key 留空即不修改）";
+  const list = $("#provList");
+  if (!d.models || !d.models.length) {
+    list.innerHTML = '<div class="hint">暂无已保存的模型。在下方填入厂商/Key/模型名并勾选能力，点「保存并设为默认」即可添加。</div>';
   } else {
-    $("#provMsg").textContent = "尚未配置" + label + "供应商，使用系统内建默认值。";
+    list.innerHTML = d.models.map(_provCardHTML).join("");
   }
+  $("#provMsg").textContent = "";
 }
 
-function _provPresetChange() {
-  _provApplyPreset($("#provPreset").value);
-}
-
-async function saveProvider() {
+async function _provSave() {
   const preset = $("#provPreset").value;
   const model = $("#provModel").value === "__custom__" ? "" : $("#provModel").value;
+  const caps = ["chat", "reasoning", "vision", "role"].filter(c => $("#provCap" + c[0].toUpperCase() + c.slice(1)).checked);
   const payload = {
+    name: $("#provName").value.trim(),
     preset,
     api_style: $("#provStyle").value,
     base_url: $("#provBaseUrl").value.trim(),
     api_key: $("#provKey").value,
     model,
     custom_model: $("#provCustomModel").value.trim(),
+    capabilities: caps,
   };
+  if (!payload.name) { toast("请填写「模型名称」", true); return; }
   const btn = $("#btnSaveProvider");
   btn.disabled = true;
   try {
-    const r = await POST("/api/providers/" + currentProvSlot, payload);
+    const r = await POST("/api/providers", payload);
     if (!r.ok) throw new Error(r.error || "保存失败");
-    const label = ({ main: "主模型", vision: "视觉模型", role: "角色模型" })[currentProvSlot] || "模型";
-    $("#provMsg").textContent = "已保存并热重载 ✓ " + label + "：" + r.model +
-      "｜路由：" + (r.routing || []).join(" → ");
-    toast(label + "已切换并热重载");
+    $("#provMsg").textContent = "已保存并热重载 ✓ " + payload.name + "（" + (caps.map(c => CAP_LABELS[c]).join("/") || "无能力") + "）";
+    toast("模型已保存并设为默认");
+    await loadProviders();
   } catch (e) {
     toast(e.message, true);
     $("#provMsg").textContent = e.message;
   } finally {
     btn.disabled = false;
   }
+}
+
+async function _provActivate(name, cap) {
+  try {
+    const r = await POST("/api/providers/activate", { name, capability: cap });
+    if (!r.ok) throw new Error(r.error || "切换失败");
+    toast(name + " 已设为" + (CAP_LABELS[cap] || cap) + "默认");
+    await loadProviders();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function _provDelete(name) {
+  if (!confirm("确定删除模型「" + name + "」？")) return;
+  try {
+    const r = await POST("/api/providers/delete", { name });
+    if (!r.ok) throw new Error(r.error || "删除失败");
+    toast("已删除 " + name);
+    await loadProviders();
+  } catch (e) { toast(e.message, true); }
+}
+
+function _provEdit(name) {
+  GET("/api/providers").then(d => {
+    const m = (d.models || []).find(x => x.name === name);
+    if (!m) return;
+    $("#provName").value = m.name;
+    $("#provPreset").value = _provPresets[m.preset] ? m.preset : "";
+    $("#provStyle").value = m.api_style || "openai";
+    $("#provBaseUrl").value = m.base_url || "";
+    _provFillModels((_provPresets[m.preset] || {}).models || [], m.model);
+    if (m.model) $("#provCustomModel").value = m.model;
+    $("#provKey").value = "";  // 不回显密钥
+    ["chat", "reasoning", "vision", "role"].forEach(c => {
+      $("#provCap" + c[0].toUpperCase() + c.slice(1)).checked = (m.capabilities || []).includes(c);
+    });
+    $("#provMsg").textContent = "正在编辑：" + m.name + "（改 Key 留空即不修改）";
+    $("#provPanel").scrollIntoView({ behavior: "smooth" });
+  }).catch(e => toast(e.message, true));
 }
 
 function cfgItem(it) {
@@ -834,11 +886,17 @@ $("#btnSaveConfig").addEventListener("click", async () => {
   btn.disabled = false;
 });
 
-// ----- 模型供应商 -----
-$("#provSlot").addEventListener("change", e =>
-  loadProviders(e.target.value).catch(err => toast(err.message, true)));
-$("#provPreset").addEventListener("change", _provPresetChange);
-$("#btnSaveProvider").addEventListener("click", saveProvider);
+// ----- AI 供应商 / 模型管理 -----
+$("#provList").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-act]");
+  if (!btn) return;
+  const name = btn.dataset.name, act = btn.dataset.act;
+  if (act === "set") _provActivate(name, btn.dataset.cap);
+  else if (act === "del") _provDelete(name);
+  else if (act === "edit") _provEdit(name);
+});
+$("#provPreset").addEventListener("change", _provApplyPreset);
+$("#btnSaveProvider").addEventListener("click", _provSave);
 
 /* ---------------- 外观设置（主题色 + 窗口标题） ---------------- */
 const appearance = { theme: "midnight", title: "肥鱼娘 · App 控制台", themes: {}, vars: {} };
@@ -941,6 +999,53 @@ $("#btnClearBg").addEventListener("click", async () => {
   } catch (e) { msg.textContent = (e.message || "清除失败"); }
 });
 
+function setFaviconHref(href) {
+  let link = document.querySelector('link[rel="icon"][href^="/static/icon"]');
+  if (!link) {
+    link = document.createElement("link");
+    link.rel = "icon";
+    document.head.appendChild(link);
+  }
+  link.href = href;
+}
+
+async function uploadIcon(file) {
+  const msg = $("#iconMsg");
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) { msg.textContent = "图片过大，上限 8MB"; return; }
+  msg.textContent = "上传中…";
+  const reader = new FileReader();
+  reader.onload = async () => {
+    try {
+      const r = await POST("/api/appearance/icon", { icon_data: reader.result });
+      const ts = r.ts || Date.now();
+      $("#iconPreview").src = "/static/icon.png?t=" + ts;
+      setFaviconHref("/static/icon.png?t=" + ts);
+      msg.textContent = "图标已更新（标签页/任务栏即时生效，独立窗口需重启）";
+    } catch (e) { msg.textContent = (e.message || "上传失败"); }
+  };
+  reader.onerror = () => { msg.textContent = "读取文件失败"; };
+  reader.readAsDataURL(file);
+}
+
+$("#iconFile").addEventListener("change", e => {
+  const f = e.target.files && e.target.files[0];
+  uploadIcon(f);
+  e.target.value = "";
+});
+
+$("#btnResetIcon").addEventListener("click", async () => {
+  const msg = $("#iconMsg");
+  msg.textContent = "恢复中…";
+  try {
+    const r = await POST("/api/appearance/icon/reset", {});
+    const ts = r.ts || Date.now();
+    $("#iconPreview").src = "/static/icon.png?t=" + ts;
+    setFaviconHref("/static/icon.png?t=" + ts);
+    msg.textContent = "已恢复默认图标";
+  } catch (e) { msg.textContent = (e.message || "恢复失败"); }
+});
+
 async function previewTheme(name) {
   try {
     const d = await GET("/api/appearance?theme=" + encodeURIComponent(name));
@@ -997,23 +1102,52 @@ $("#btnResetTitle").addEventListener("click", () => {
 
 /* ---------------- 构建助手（内置 Agent：生成智能体/插件的产物） ---------------- */
 const builder = { mode: "agent", last: null };
-// 模型预设：flash=轻思考；v4-pro=强思考（自动开启 think）
-const BLD_MODELS = {
-  "deepseek-flash": { think: false },
-  "deepseek-v4-pro": { think: true },
-};
 
 function _bldModelSel() {
-  const m = $("#bldModel").value || "deepseek-flash";
-  return { model: m, think: BLD_MODELS[m] ? BLD_MODELS[m].think : false };
+  const val = $("#bldModel").value;
+  let provider = "", model = null;
+  if (val === "__custom__") {
+    model = $("#bldCustomModel").value.trim() || null;
+  } else if (val) {
+    provider = val;            // 已保存模型名，作为 provider 实时指定
+  }
+  const think = $("#bldThink").value || "low";
+  return { provider, model, think };
+}
+
+function _bldToggleCustomModel() {
+  const isCustom = $("#bldModel").value === "__custom__";
+  $("#bldCustomModel").style.display = isCustom ? "block" : "none";
 }
 
 async function loadBuilder() {
-  // 恢复上次选择的模型/思考强度
+  // 用「AI 供应商」里已保存的模型填充下拉，支持实时切换
+  try {
+    const d = await GET("/api/providers");
+    const sel = $("#bldModel");
+    sel.innerHTML = '<option value="">系统默认（当前对话模型）</option>';
+    (d.models || []).forEach(m => {
+      const o = document.createElement("option");
+      o.value = m.name; o.textContent = m.name + " · " + m.model;
+      sel.appendChild(o);
+    });
+    const custom = document.createElement("option");
+    custom.value = "__custom__"; custom.textContent = "✎ 自定义模型…";
+    sel.appendChild(custom);
+  } catch (e) { /* 忽略：网络异常时保留静态选项 */ }
+
+  // 恢复上次选择
   const saved = localStorage.getItem("bld_model");
-  if (saved && $("#bldModel").querySelector('option[value="' + saved + '"]')) {
-    $("#bldModel").value = saved;
+  const sel = $("#bldModel");
+  if (saved && sel.querySelector('option[value="' + (window.CSS && CSS.escape ? CSS.escape(saved) : saved) + '"]')) {
+    sel.value = saved;
+  } else if (saved) {
+    sel.value = "__custom__";
+    $("#bldCustomModel").value = saved;
   }
+  const savedThink = localStorage.getItem("bld_think");
+  if (savedThink) $("#bldThink").value = savedThink;
+  _bldToggleCustomModel();
 }
 
 function _bldModeSwitch(mode) {
@@ -1050,12 +1184,13 @@ async function _bldGenerate() {
   $("#bldStatus").textContent = "";
   try {
     const msel = _bldModelSel();
-    localStorage.setItem("bld_model", msel.model);
+    localStorage.setItem("bld_model", msel.provider || msel.model);
+    localStorage.setItem("bld_think", msel.think);
     let r;
     if (builder.mode === "agent") {
-      r = await POST("/api/builder/agent/generate", { requirement: req, model: msel.model, think: msel.think });
+      r = await POST("/api/builder/agent/generate", { requirement: req, model: msel.model, think: msel.think, provider: msel.provider });
     } else {
-      r = await POST("/api/builder/plugin/generate", { requirement: req, kind: $("#bldKind").value, model: msel.model, think: msel.think });
+      r = await POST("/api/builder/plugin/generate", { requirement: req, kind: $("#bldKind").value, model: msel.model, think: msel.think, provider: msel.provider });
     }
     if (!r.ok) throw new Error(r.error || "生成失败");
     builder.last = r.data;
@@ -1135,6 +1270,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#bgDim").addEventListener("click", closeCfgModal);
   // ----- 构建助手 -----
   $$("#page-builder .seg-btn").forEach(b => b.addEventListener("click", () => _bldModeSwitch(b.dataset.mode)));
+  $("#bldModel").addEventListener("change", _bldToggleCustomModel);
   $("#bldGen").addEventListener("click", _bldGenerate);
   $("#bldSave").addEventListener("click", _bldSave);
   $("#bldCopy").addEventListener("click", _bldCopy);

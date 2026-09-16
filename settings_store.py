@@ -196,20 +196,6 @@ CONFIG_SCHEMA = [
         ],
     },
     {
-        "section": "AI 供应商",
-        "hint": "修改后自动热重载供应商路由（ai_provider），无需重启。密钥只显示掩码，留掩码原样表示不修改。",
-        "items": [
-            {"key": "DEEPSEEK_API_KEY", "type": "secret", "label": "DeepSeek API Key"},
-            {"key": "DEEPSEEK_BASE_URL", "type": "str", "label": "DeepSeek Base URL"},
-            {"key": "DEEPSEEK_MODEL", "type": "str", "label": "日常对话模型"},
-            {"key": "DEEPSEEK_REASONER_MODEL", "type": "str", "label": "推理模型"},
-            {"key": "GLM_API_KEY", "type": "secret", "label": "智谱 GLM API Key"},
-            {"key": "GLM_BASE_URL", "type": "str", "label": "GLM Base URL"},
-            {"key": "VISION_MODEL", "type": "str", "label": "视觉模型"},
-            {"key": "AUTO_REASONING", "type": "bool", "label": "自动切换推理模型"},
-        ],
-    },
-    {
         "section": "记忆系统",
         "hint": "短期记忆 / 摘要记忆 / 话题检测 / 人物档案 / 全文历史。",
         "items": [
@@ -252,9 +238,7 @@ CONFIG_SCHEMA = [
 
 # 供应商相关键：保存后需要热重载 ai_provider
 PROVIDER_KEYS = {
-    "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL",
-    "DEEPSEEK_REASONER_MODEL", "GLM_API_KEY", "GLM_BASE_URL",
-    "VISION_MODEL", "AI_PROVIDERS", "AI_CAPABILITY_ROUTING",
+    "AI_PROVIDERS", "AI_CAPABILITY_ROUTING",
 }
 
 

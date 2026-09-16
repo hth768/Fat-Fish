@@ -179,9 +179,31 @@ def main():
             while True:
                 time.sleep(3600)
         else:
-            # 桌面窗口模式（默认）：阻塞直到窗口关闭
+            # 默认（无 --browser / --no-window）：三级降级
+            #   1) APP 独立窗口（pywebview → Edge App）
+            #   2) webui（系统默认浏览器）
+            #   3) 命令行兜底（仅 HTTP 服务，Ctrl+C 退出）
             from bridge import appearance_api
-            app_window.run_window(url, title=appearance_api.get_window_title())
+            mode = app_window.try_app_window(url, title=appearance_api.get_window_title())
+            if mode is None:
+                # 独立窗口不可用 -> 降级 webui
+                import webbrowser
+                try:
+                    webbrowser.open(url)
+                    mode = "webui"
+                    print(f"[APP] 已降级到 webui 模式: {url}")
+                except Exception as e:
+                    print(f"[APP][WARN] 浏览器打开失败: {e!r}")
+            if mode is None:
+                # webui 也不可用 -> 命令行兜底
+                mode = "cli"
+                print(f"[APP] 已降级到命令行模式: {url}（Ctrl+C 退出）")
+            if mode in ("webui", "cli"):
+                # 窗口/浏览器为独立进程，主进程需常驻保持 HTTP 服务
+                print(f"[APP] {'webui' if mode == 'webui' else '控制台'}地址: {url}（Ctrl+C 退出）")
+                while True:
+                    time.sleep(3600)
+            # mode 为 webview/edge-app 时窗口已在 try_app_window 内阻塞并随关闭退出
     except KeyboardInterrupt:
         print("[APP] 收到退出信号")
     finally:

@@ -37,7 +37,8 @@
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  桌面窗口（pywebview / Edge App / 浏览器三级降级）        │
+│  桌面窗口：APP 独立窗口（pywebview / Edge App）           │
+│     → webui（浏览器）→ 命令行（三级降级）                  │
 │  └── webui/（原生 JS/CSS 控制台，localhost 访问）         │
 └────────────────────────┬─────────────────────────────┘
                          │ HTTP REST + SSE（仅监听 127.0.0.1）
@@ -109,7 +110,7 @@ feiyu_standalone/
 ├── start_app.bat          # 便携启动脚本（自举 venv / 捆绑 Python）
 ├── bridge/                # 后端桥接层
 │   ├── core_bridge.py     # 核心桥：串联 App 与智能体
-│   ├── app_window.py      # 桌面窗口（pywebview / Edge / 浏览器降级）
+│   ├── app_window.py      # 桌面窗口（pywebview / Edge App → webui → 命令行 三级降级）
 │   ├── loop.py            # 事件循环
 │   ├── appearance_api.py  # 外观 API
 │   ├── config_api.py      # 配置 API
@@ -172,7 +173,7 @@ python app.py --with-core
 |---|---|---|
 | 运行时配置覆盖层 | `app_settings.json` | 以 `setattr` 注入 `config` 模块；App 模式默认关闭外部功能 |
 | 运行时位置 | 环境变量 `FEIYU_QQ_BOT` | 指向含 `config.py` 的 qq_bot 运行时目录 |
-| LLM 供应商 | `ai_providers.example.json` → `ai_providers.json` | 多供应商（DeepSeek / Gemini / GLM / 自定义）按 capability 路由 + 故障转移 |
+| LLM 供应商 | 模型注册表（侧栏「AI 供应商（模型管理）」）+ `app_settings.json` | 命名模型按 capability 路由 + 故障转移；不再写死 DeepSeek |
 | B 站账号 | `SESSDATA` 等 | 风控层共享；填入后启用 B 站直播/私信/学习 |
 | 功能开关 | `config.py` 内 `ENABLE_*` | 如 `ENABLE_MEMORY_SERVER`（向量记忆 RPC）、`ENABLE_MONITOR`（监控 sidecar）、`ENABLE_PVZ_BRAIN`（PVZ 大脑） |
 
@@ -222,6 +223,18 @@ python app.py --with-core
 ### 外观
 
 内置 **8 套主题**，配置存于 `data/appearance.json`；背景图原始字节经 `server.py` 的 `_serve_raw` 提供；窗口标题栏可由 `js_api.set_title` 实时修改。
+
+**应用图标**：外观页「应用图标」面板可在 UI 内上传图片作为 APP 图标（PNG/JPG 等 ≤8MB），即时更新标签页与任务栏图标；独立窗口图标需重启生效。上传后写入 `webui/icon.png` 并自动生成 `webui/favicon.ico`（含 16–256 多尺寸），默认图标备份于 `webui/icon_default.png` 可一键恢复。
+
+### 模型注册表（LLM 供应商）
+
+侧栏「**AI 供应商（模型管理）**」是统一的命名模型注册表，取代原先分散在配置页的供应商配置（配置页已不再含「AI 供应商」栏目）：
+
+- **保存命名模型**：名称、厂商、接口类型、Base URL、API Key、模型名、能力（chat / reasoning / vision / role），写入 `app_settings.json` 覆盖层并热重载 `ai_provider`。
+- **设置中切换默认**：每个能力（capability）的路由可置顶某模型作为默认（`/api/providers/activate` → `set_default`）。
+- **构建助手实时切换**：构建助手 / 插件生成时通过 `provider` 参数实时指定供应商（不改全局路由），后端 `ai_provider.chat(provider=...)` 直通。
+- **删除 / 编辑**：`/api/providers/delete`（`delete_model`）、`/api/providers`（`save_model`）。
+- **思考强度**：构建助手内「模型」与「思考强度」为独立控件，思考强度分 **低 / 中 / 高** 三档，经 `_think_level` 归一化后下发 thinking 参数（high 档对 Anthropic 放大 think budget）。
 
 ---
 
@@ -282,6 +295,7 @@ node bridge.js                   # 游戏内「对局域网开放」后填入端
 
 ## 常见问题
 
+- **窗口打不开**：启动窗口为三级降级 —— 优先 APP 独立窗口（pywebview → Edge `--app`），不可用则退回 webui（系统默认浏览器），仍失败则仅起 HTTP 服务 + 命令行（Ctrl+C 退出）。可用 `--browser` 强制 webui、`--no-window` 强制命令行。
 - **窗口打不开 / 端口占用**：HTTP 服务仅本机监听且 `SO_EXCLUSIVEADDRUSE` 保证单实例；确认没有另一份已在运行。
 - **QQ 接入提示缺 NapCat**：装好 QQ NT 客户端，并按 `napcat_pack` 应急包配置 NapCat（OneBot）。
 - **本地语音无声音 / 报错**：`voice` 组需 `voice_pack`（9.7GB）+ N 卡；无 N 卡会自动降级 GLM 云端 TTS。

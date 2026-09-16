@@ -12,6 +12,8 @@
 - role  : 角色模型（role）→ 摘要/判断/记忆等带 role 的调用统一使用的模型
 """
 # 常用模型 API 预设（base_url 为该厂商 OpenAI/Anthropic 兼容根地址）
+from ai_provider import reload_provider_config, load_provider_config
+
 PROVIDER_PRESETS = {
     "openai": {
         "label": "OpenAI",
@@ -100,7 +102,7 @@ def get_provider(slot: str) -> dict:
         slot = "main"
     import ai_provider
     sd = SLOT_DEFS[slot]
-    cfg = ai_provider.load_provider_config()
+    cfg = load_provider_config()
     provs = cfg["providers"]
     prov = provs.get(sd["prov_name"])
     cur = None
@@ -139,7 +141,7 @@ def save_provider(slot: str, payload: dict) -> dict:
     if not base_url:
         base_url = pinfo.get("base_url", "")
 
-    cfg = ai_provider.load_provider_config()
+    cfg = load_provider_config()
     existing = cfg["providers"].get(sd["prov_name"], {})
     # 前端若只回传掩码（未改动），保留原密钥
     if is_masked(api_key) and existing.get("api_key"):
@@ -189,7 +191,7 @@ def save_provider(slot: str, payload: dict) -> dict:
     reload_ok = True
     reload_err = None
     try:
-        ai_provider.reload_provider_config()
+        reload_provider_config()
     except Exception as e:
         reload_ok = False
         reload_err = repr(e)
@@ -205,3 +207,172 @@ def get_main() -> dict:
 
 def save_main(payload: dict) -> dict:
     return save_provider("main", payload)
+
+
+# ============ 命名模型注册表（保存用户配置的多个模型，可随时切换） ============
+# 把「原本的 AI 供应商」与「自定义模型供应商」合并为统一面板：
+# 用户可以保存多个命名模型（各带厂商/Key/BaseURL/模型名/能力），
+# 在设置里把任意一个设为某能力（对话/推理/视觉/角色）的默认，也可在构建助手里实时选用。
+
+_CAPS = ["chat", "reasoning", "vision", "role"]
+
+
+def list_models() -> dict:
+    cfg = load_provider_config()
+    presets = dict(PROVIDER_PRESETS)
+    models = []
+    for name, p in cfg["providers"].items():
+        caps = list(p.get("capabilities") or [])
+        active = {}
+        for c in _CAPS:
+            routing = cfg["capability_routing"].get(c) or []
+            active[c] = bool(routing and routing[0] == name)
+        models.append({
+            "name": name,
+            "preset": p.get("preset") or "",
+            "api_style": p.get("api_style", "openai"),
+            "base_url": p.get("base_url", ""),
+            "model": p.get("default_model") or (p.get("models") or {}).get("chat") or "",
+            "capabilities": caps,
+            "active": active,
+            "has_key": bool(p.get("api_key")),
+        })
+    return {
+        "presets": presets,
+        "models": models,
+        "routing": cfg["capability_routing"],
+        "role_routing": cfg["role_routing"],
+    }
+
+
+def save_model(payload: dict) -> dict:
+    from settings_store import set_values, apply_value, is_masked
+
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "请填写模型名称"}
+    preset = (payload.get("preset") or "").strip()
+    api_key = (payload.get("api_key") or "").strip()
+    base_url = (payload.get("base_url") or "").strip()
+    model = (payload.get("model") or "").strip() or (payload.get("custom_model") or "").strip()
+    api_style = (payload.get("api_style") or "").strip()
+    caps = payload.get("capabilities") or []
+    if isinstance(caps, str):
+        caps = [caps]
+    caps = [c for c in caps if c in _CAPS]
+    if not caps:
+        return {"ok": False, "error": "请至少勾选一种能力（对话/推理/视觉/角色）"}
+
+    pinfo = PROVIDER_PRESETS.get(preset, {})
+    if not api_style:
+        api_style = pinfo.get("api_style", "openai")
+    if not base_url:
+        base_url = pinfo.get("base_url", "")
+    if not api_key:
+        return {"ok": False, "error": "请填写 API Key"}
+    if not base_url:
+        return {"ok": False, "error": "请填写 Base URL"}
+    if not model:
+        return {"ok": False, "error": "请选择或填写模型名"}
+
+    cfg = load_provider_config()
+    existing = cfg["providers"].get(name, {})
+    if is_masked(api_key) and existing.get("api_key"):
+        api_key = existing["api_key"]
+
+    provider = {
+        "api_key": api_key,
+        "base_url": base_url,
+        "default_model": model,
+        "api_style": api_style or "openai",
+        "models": {c: model for c in caps},
+        "capabilities": caps,
+        "preset": preset,
+    }
+    providers = dict(cfg["providers"])
+    providers[name] = provider
+
+    cap = dict(cfg["capability_routing"])
+    role_routing = dict(cfg["role_routing"])
+    for c in caps:
+        lst = [n for n in (cap.get(c) or []) if n != name]
+        lst.insert(0, name)          # 保存即设为该能力默认（最优先），实现「切换」
+        cap[c] = lst
+    if "role" in caps:
+        role_routing["*"] = {"capability": "role", "model": model}
+
+    set_values({
+        "AI_PROVIDERS": providers,
+        "AI_CAPABILITY_ROUTING": cap,
+        "AI_ROLE_ROUTING": role_routing,
+    })
+    apply_value("AI_PROVIDERS", providers)
+    apply_value("AI_CAPABILITY_ROUTING", cap)
+    apply_value("AI_ROLE_ROUTING", role_routing)
+
+    reload_ok = True
+    reload_err = None
+    try:
+        reload_provider_config()
+    except Exception as e:
+        reload_ok = False
+        reload_err = repr(e)
+    return {"ok": True, "name": name, "model": model,
+            "reload": reload_ok, "reload_err": reload_err,
+            "routing": {c: cap.get(c) for c in caps}}
+
+
+def delete_model(name: str) -> dict:
+    from settings_store import set_values, apply_value
+
+    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "error": "缺少模型名称"}
+    cfg = load_provider_config()
+    providers = dict(cfg["providers"])
+    if name not in providers:
+        return {"ok": False, "error": "模型不存在: %s" % name}
+    del providers[name]
+    cap = dict(cfg["capability_routing"])
+    for c in list(cap.keys()):
+        cap[c] = [n for n in (cap[c] or []) if n != name]
+    role_routing = dict(cfg["role_routing"])
+    if "role" not in (providers.get(name, {}).get("capabilities") or []):
+        pass
+    if (role_routing.get("*") or {}).get("capability") == "role" and name in cfg["providers"]:
+        role_routing.pop("*", None)
+    set_values({
+        "AI_PROVIDERS": providers,
+        "AI_CAPABILITY_ROUTING": cap,
+        "AI_ROLE_ROUTING": role_routing,
+    })
+    apply_value("AI_PROVIDERS", providers)
+    apply_value("AI_CAPABILITY_ROUTING", cap)
+    apply_value("AI_ROLE_ROUTING", role_routing)
+    reload_provider_config()
+    return {"ok": True, "name": name}
+
+
+def set_default(capability: str, name: str) -> dict:
+    """将某命名模型设为某能力的默认（置顶路由），用于设置页「切换」。"""
+    if capability not in _CAPS:
+        return {"ok": False, "error": "未知能力: %s" % capability}
+    from settings_store import set_values, apply_value
+
+    name = (name or "").strip()
+    cfg = load_provider_config()
+    if name not in cfg["providers"]:
+        return {"ok": False, "error": "模型不存在: %s" % name}
+    cap = dict(cfg["capability_routing"])
+    lst = [n for n in (cap.get(capability) or []) if n != name]
+    lst.insert(0, name)
+    cap[capability] = lst
+    role_routing = dict(cfg["role_routing"])
+    if capability == "role":
+        role_routing["*"] = {"capability": "role",
+                             "model": cfg["providers"][name].get("default_model")}
+    set_values({"AI_CAPABILITY_ROUTING": cap, "AI_ROLE_ROUTING": role_routing})
+    apply_value("AI_CAPABILITY_ROUTING", cap)
+    apply_value("AI_ROLE_ROUTING", role_routing)
+    reload_provider_config()
+    return {"ok": True, "capability": capability, "name": name}

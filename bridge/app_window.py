@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """桌面窗口壳：让 App 控制台以独立窗口运行，不依赖浏览器。
 
-三级策略（自动降级）：
+本模块只负责「APP 独立窗口」这一级（自动降级）：
 1. pywebview（Edge WebView2 渲染，原生窗口，首选）
 2. Edge --app 模式（无地址栏独立窗口，零依赖）
-3. 系统默认浏览器（最后兜底）
 
+两级都不可用则返回 None，交由 app.py 继续降级到 webui（浏览器）或命令行。
 窗口关闭 = 退出 main 流程（app.py 负责清理核心 / sidecar）。
 """
 import os
@@ -17,6 +17,8 @@ APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINDOW_TITLE = "肥鱼娘 · App 控制台"
 WIDTH, HEIGHT = 1280, 860
 MIN_W, MIN_H = 960, 600
+ICON_PATH = os.path.join(APP_DIR, "webui", "icon.png")
+ICON_ICO = os.path.join(APP_DIR, "webui", "favicon.ico")
 
 
 def _diag(msg: str):
@@ -75,19 +77,13 @@ def _open_edge_app(url: str) -> bool:
     return False
 
 
-def _open_default_browser(url: str):
-    import webbrowser
-    try:
-        webbrowser.open(url)
-        print(f"[WINDOW] 已用系统默认浏览器打开: {url}")
-    except Exception as e:
-        print(f"[WINDOW][WARN] 浏览器打开失败: {e!r}（请手动访问 {url}）")
+def try_app_window(url: str, title: str = WINDOW_TITLE) -> str | None:
+    """以桌面独立窗口方式运行控制台（阻塞主线程直到窗口关闭）。
 
+    优先 pywebview（原生窗口），其次 Edge --app 模式；两者都不可用返回 None，
+    交由 app.py 降级到 webui（浏览器）或命令行。
 
-def run_window(url: str, title: str = WINDOW_TITLE) -> str:
-    """以桌面窗口方式运行控制台（阻塞主线程直到窗口关闭）。
-
-    返回使用的模式: "webview" | "edge-app" | "browser"
+    返回使用的模式: "webview" | "edge-app" | None
     """
     # pythonnet 运行时选择：coreclr（.NET Core）在某些机器初始化失败
     # （Failed to create a .NET runtime (coreclr)），强制走 .NET Framework 更稳。
@@ -110,7 +106,11 @@ def run_window(url: str, title: str = WINDOW_TITLE) -> str:
                 background_color="#0d1220",
                 js_api=_AppearanceApi(),
             )
-            webview.start()
+            # 窗口图标：部分后端支持 start(icon=...)；不支持时静默回退默认启动
+            try:
+                webview.start(icon=ICON_ICO if os.path.isfile(ICON_ICO) else ICON_PATH)
+            except TypeError:
+                webview.start()
             _diag("pywebview 窗口正常退出（用户关闭）")
             return "webview"
         except Exception as e:
@@ -123,11 +123,10 @@ def run_window(url: str, title: str = WINDOW_TITLE) -> str:
         _wait_for_close(url)
         return "edge-app"
 
-    # 3) 默认浏览器兜底
-    _diag("Edge 不可用 -> 系统默认浏览器兜底")
-    _open_default_browser(url)
-    _wait_for_close(url)
-    return "browser"
+    # 独立窗口两级均不可用：返回 None，交由 app.py 降级
+    _diag("pywebview 与 Edge App 均不可用 -> 返回 None，交由上层降级")
+    return None
+
 
 
 def _wait_for_close(url: str):

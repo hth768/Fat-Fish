@@ -214,6 +214,8 @@ def make_handler(bridge):
                 # ----- 主模型供应商预设 / 当前配置 -----
                 if path == "/api/providers/presets":
                     return self._json(provider_api.list_presets())
+                if path == "/api/providers":
+                    return self._json(provider_api.list_models())
                 if path in ("/api/providers/main", "/api/providers/vision", "/api/providers/role"):
                     slot = path.rsplit("/", 1)[-1]
                     return self._json(provider_api.get_provider(slot))
@@ -289,20 +291,39 @@ def make_handler(bridge):
                         theme=body.get("theme"), title=body.get("title"),
                         bg=body.get("bg"), bg_data=body.get("bg_data"),
                         clear_bg=bool(body.get("clear_bg"))))
+                if path == "/api/appearance/icon":
+                    try:
+                        return self._json(appearance_api.save_icon(body.get("icon_data") or ""))
+                    except ValueError as e:
+                        return self._json({"error": str(e)}, 400)
+                if path == "/api/appearance/icon/reset":
+                    try:
+                        return self._json(appearance_api.reset_icon())
+                    except ValueError as e:
+                        return self._json({"error": str(e)}, 400)
                 # ----- 构建助手：智能体 / 插件 生成与落盘 -----
                 if path == "/api/builder/agent/generate":
                     return self._json(builder_api.generate_agent_sync(
                         bridge, body.get("requirement", ""),
-                        body.get("model") or None, bool(body.get("think"))))
+                        body.get("model") or None, body.get("think") or "low",
+                        body.get("provider") or None))
                 if path == "/api/builder/plugin/generate":
                     return self._json(builder_api.generate_plugin_sync(
                         bridge, body.get("requirement", ""), body.get("kind", "") or "",
-                        body.get("model") or None, bool(body.get("think"))))
+                        body.get("model") or None, body.get("think") or "low",
+                        body.get("provider") or None))
                 if path == "/api/builder/agent/save":
                     return self._json(builder_api.save_agent_sync(bridge, body.get("data") or {}))
                 if path == "/api/builder/plugin/save":
                     return self._json(builder_api.save_plugin_sync(bridge, body))
                 # ----- 主模型供应商配置保存 -----
+                if path == "/api/providers":
+                    return self._json(provider_api.save_model(body))
+                if path == "/api/providers/activate":
+                    return self._json(provider_api.set_default(
+                        body.get("capability", ""), body.get("name", "")))
+                if path == "/api/providers/delete":
+                    return self._json(provider_api.delete_model(body.get("name", "")))
                 if path in ("/api/providers/main", "/api/providers/vision", "/api/providers/role"):
                     slot = path.rsplit("/", 1)[-1]
                     return self._json(provider_api.save_provider(slot, body))

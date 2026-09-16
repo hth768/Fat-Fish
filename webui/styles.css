@@ -108,6 +108,27 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 8px; }
 .form-grid label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; }
 
+/* ---------- 模型供应商 / 注册表 ---------- */
+.prov-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.prov-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; background: var(--panel2);
+}
+.prov-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prov-card-name { font-weight: 600; font-size: 14px; }
+.prov-card-meta { color: var(--muted); font-size: 12px; }
+.prov-card .tag {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted); background: var(--panel);
+}
+.prov-card .tag.on { color: var(--accent, #4c9); border-color: var(--accent, #4c9); }
+.prov-card-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.prov-form { border-top: 1px dashed var(--line); padding-top: 14px; margin-top: 4px; }
+.panel-subtitle { font-weight: 600; margin-bottom: 10px; }
+.chip-row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
+.chip-row .chip { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.chip-row .chip input { cursor: pointer; }
+
 /* ---------- 聊天 ---------- */
 .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 150px); }
 .chat-log {
@@ -170,6 +191,7 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 /* ---------- 外观设置 ---------- */
 #bgDim { position: fixed; inset: 0; z-index: -1; background: var(--bg); opacity: .82; display: none; pointer-events: none; }
 .bg-preview { display: none; width: 100%; height: 120px; border-radius: var(--radius); border: 1px solid var(--line); background-size: cover; background-position: center; margin-bottom: 12px; }
+.icon-preview { width: 96px; height: 96px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--panel2); object-fit: contain; padding: 6px; }
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
 .theme-swatch {
   display: flex; align-items: center; gap: 10px; padding: 12px 14px;
