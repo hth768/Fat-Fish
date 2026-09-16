@@ -133,6 +133,7 @@ class PackageManager:
     def __init__(self, bridge):
         self.bridge = bridge
         self._sidecars = {}   # name -> SidecarProcess
+        self._loaded = {}     # name -> 已加载的插件 wrapper 模块（用于配置热生效）
 
     # ---- 依赖 ----
     def missing_deps(self, meta: dict) -> list:
@@ -164,6 +165,7 @@ class PackageManager:
             return {"ok": False, "error": f"依赖未启用: {', '.join(miss)}（请先启用依赖包）"}
         try:
             wrapper = _load_wrapper(meta["dir"], name)
+            self._loaded[name] = wrapper
             if meta["kind"] == "brain":
                 inst = wrapper.create_brain(core)
                 core.brains.register(inst)
@@ -173,6 +175,11 @@ class PackageManager:
                 core.plugins.register(inst)
                 if self.bridge.is_running():
                     self.bridge.lt.schedule(inst.start())
+            # 装载后立即推送已保存的参数（扩展设置）
+            try:
+                wrapper.on_config(settings_store.get_plugin_config(name))
+            except Exception:
+                pass
             _set_enabled(name, True)
             return {"ok": True, "applied": True, "hint": "已装载" }
         except Exception as e:
@@ -226,6 +233,7 @@ class PackageManager:
             _set_enabled(name, False)
             return {"ok": True, "applied": False, "error": f"卸载时异常(已记为停用): {e!r}"}
         _set_enabled(name, False)
+        self._loaded.pop(name, None)
         return {"ok": True, "applied": True}
 
     # ---- 核心构建期：预注册已启用的插件/大脑包（core.start 之前调用）----
@@ -246,6 +254,7 @@ class PackageManager:
                 continue
             try:
                 wrapper = _load_wrapper(meta["dir"], name)
+                self._loaded[name] = wrapper
                 if meta["kind"] == "brain":
                     core.brains.register(wrapper.create_brain(core))
                 else:
@@ -272,6 +281,35 @@ class PackageManager:
             if r.get("ok"):
                 started.append(meta["name"])
         return started
+
+    # ---- 参数配置（扩展设置） ----
+    def get_config(self, name: str) -> dict:
+        """返回某插件生效中的参数：manifest config_schema 默认值 + 已保存覆盖。"""
+        meta = get_package(name)
+        if meta is None:
+            return {}
+        manifest = read_manifest(meta["dir"]) or {}
+        schema = manifest.get("config_schema") or []
+        cfg = {}
+        for f in schema:
+            if isinstance(f, dict) and "key" in f:
+                cfg[f["key"]] = f.get("default")
+        cfg.update(settings_store.get_plugin_config(name))
+        return cfg
+
+    def set_config(self, name: str, cfg: dict) -> bool:
+        """推送参数到插件 wrapper 模块（若其实现了 on_config）。返回是否成功应用。"""
+        mod = self._loaded.get(name)
+        if mod is None:
+            return False
+        fn = getattr(mod, "on_config", None)
+        if callable(fn):
+            try:
+                fn(cfg)
+                return True
+            except Exception:
+                return False
+        return False
 
     # ---- 状态 ----
     def sidecar_status(self, name: str):

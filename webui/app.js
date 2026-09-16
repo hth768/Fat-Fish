@@ -561,6 +561,9 @@ function groupSection(g, meta, members, allOn) {
     } else {
       run = p.running ? "运行中" : (p.enabled ? "已装载" : "未装载");
     }
+    const cfgBtn = p.has_config
+      ? `<button class="btn small act-pkg-cfg" data-name="${esc(p.name)}">设置</button>` : "";
+    ops = (ops ? ops + " " : "") + cfgBtn;
     return `<tr>
       <td><label class="switch"><input type="checkbox" data-pkg="${esc(p.name)}" ${p.enabled ? "checked" : ""}><span class="track"></span></label></td>
       <td><b>${esc(p.title)}</b><div class="hint">${esc(p.name)} v${esc(p.version)}${dep}</div>${miss}</td>
@@ -606,7 +609,81 @@ function bindPluginEvents() {
     } catch (e) { toast(e.message, true); }
     await refreshStatus(); await loadPlugins();
   }));
+  $$("#pkgGroups .act-pkg-cfg").forEach(b => b.addEventListener("click", () => openPluginConfig(b.dataset.name)));
 }
+
+// ---------------- 插件扩展设置（config_schema 动态表单） ----------------
+let _cfgName = null;
+
+async function openPluginConfig(name) {
+  _cfgName = name;
+  $("#cfgBody").innerHTML = "加载中…";
+  $("#cfgModal").classList.remove("hidden");
+  try {
+    const d = await GET(`/api/plugins/${encodeURIComponent(name)}/config`);
+    if (d.error) {
+      $("#cfgBody").innerHTML = `<div class="hint" style="color:var(--warn)">${esc(d.error)}</div>`;
+      return;
+    }
+    $("#cfgTitle").textContent = `${d.display_name || name} · 扩展设置`;
+    $("#cfgBody").innerHTML = d.fields && d.fields.length
+      ? `<div class="form-grid">${d.fields.map(configField).join("")}</div>`
+      : `<div class="hint">该插件暂无可配置项。</div>`;
+  } catch (e) { $("#cfgBody").innerHTML = `<div class="hint" style="color:var(--warn)">${esc(e.message)}</div>`; }
+}
+
+function configField(f) {
+  const id = "cfg_" + f.key;
+  const t = f.type || "str";
+  const v = f.value;
+  let control = "";
+  if (t === "bool") {
+    control = `<label class="switch"><input type="checkbox" id="${id}" ${v ? "checked" : ""}><span class="track"></span></label>`;
+  } else if (t === "choice") {
+    control = `<select id="${id}" class="select">` +
+      (f.options || []).map(o => `<option value="${esc(o.value)}" ${String(o.value) === String(v) ? "selected" : ""}>${esc(o.label != null ? o.label : o.value)}</option>`).join("") +
+      `</select>`;
+  } else if (t === "secret") {
+    control = `<input id="${id}" class="input" type="${f.masked ? "password" : "text"}" placeholder="${f.masked ? "已设置（留空或不改则保持原值）" : "请输入"}" value="${esc(f.masked ? v : (v == null ? "" : v))}">`;
+  } else if (t === "json") {
+    control = `<textarea id="${id}" class="textarea" rows="4">${esc(typeof v === "string" ? v : JSON.stringify(v ?? ""))}</textarea>`;
+  } else if (t === "text") {
+    control = `<textarea id="${id}" class="textarea" rows="3">${esc(v == null ? "" : v)}</textarea>`;
+  } else {
+    const tp = (t === "int" || t === "float") ? "number" : "text";
+    const step = t === "int" ? "step=1" : (t === "float" ? "step=0.01" : "");
+    control = `<input id="${id}" class="input" type="${tp}" ${step} value="${esc(v == null ? "" : v)}">`;
+  }
+  const desc = f.desc ? `<span class="hint">${esc(f.desc)}</span>` : "";
+  return `<label class="cfg-field"><span class="cfg-label">${esc(f.label || f.key)}</span>${desc}<div class="cfg-control">${control}</div></label>`;
+}
+
+async function savePluginConfig() {
+  const name = _cfgName;
+  if (!name) return;
+  let d0;
+  try { d0 = await GET(`/api/plugins/${encodeURIComponent(name)}/config`); }
+  catch (e) { toast(e.message, true); return; }
+  const fields = d0.fields || [];
+  const values = {};
+  for (const f of fields) {
+    const el = document.getElementById("cfg_" + f.key);
+    if (!el) continue;
+    const t = f.type || "str";
+    let val;
+    if (t === "bool") val = el.checked;
+    else if (t === "json") { try { val = JSON.parse(el.value || "{}"); } catch { val = el.value; } }
+    else val = el.value;
+    values[f.key] = val;
+  }
+  try {
+    const r = await POST(`/api/plugins/${encodeURIComponent(name)}/config`, { values });
+    if (r.ok) { toast("已保存" + (r.applied ? "（已热生效）" : "（下次启用/重载生效）")); closeCfgModal(); await loadPlugins(); }
+    else toast(r.error || "保存失败", true);
+  } catch (e) { toast(e.message, true); }
+}
+
+function closeCfgModal() { $("#cfgModal").classList.add("hidden"); _cfgName = null; }
 
 $("#btnRescan").addEventListener("click", async () => {
   try {
@@ -839,4 +916,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     });
   } catch (e) { }
   setInterval(() => refreshStatus().catch(() => { }), 15000);
+  $("#cfgClose").addEventListener("click", closeCfgModal);
+  $("#cfgClose2").addEventListener("click", closeCfgModal);
+  $("#cfgSave").addEventListener("click", savePluginConfig);
+  $("#bgDim").addEventListener("click", closeCfgModal);
 });

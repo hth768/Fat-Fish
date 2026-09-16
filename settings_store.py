@@ -113,6 +113,35 @@ def set_app_settings(patch: dict):
 
 
 # ----------------------------------------------------------------------
+# 插件参数配置（扩展设置）：按插件名存储，落盘到覆盖层的 "plugin_config" 子键
+# ----------------------------------------------------------------------
+def get_plugin_config(name: str) -> dict:
+    """读取某插件已保存的参数（未保存返回空 dict）。"""
+    overlay = load_overlay()
+    pc = overlay.get("plugin_config")
+    if not isinstance(pc, dict):
+        return {}
+    v = pc.get(name)
+    return v if isinstance(v, dict) else {}
+
+
+def set_plugin_config(name: str, values: dict) -> dict:
+    """合并保存某插件的参数；返回该插件最终参数。"""
+    values = values or {}
+    with _lock:
+        overlay = load_overlay()
+        pc = overlay.get("plugin_config")
+        if not isinstance(pc, dict):
+            pc = {}
+        base = pc.get(name) if isinstance(pc.get(name), dict) else {}
+        base.update(values)
+        pc[name] = base
+        overlay["plugin_config"] = pc
+        save_overlay(overlay)
+    return pc[name]
+
+
+# ----------------------------------------------------------------------
 # 覆盖层 -> 运行时 config 模块（立即生效）
 # ----------------------------------------------------------------------
 def apply_overlay() -> int:
@@ -124,7 +153,7 @@ def apply_overlay() -> int:
     overlay = load_overlay()
     n = 0
     for k, v in overlay.items():
-        if k == "app" or k.startswith("_"):
+        if k == "app" or k.startswith("_") or k == "plugin_config":
             continue
         if isinstance(v, (str, int, float, bool, list, dict)) or v is None:
             setattr(qq_config, k, v)

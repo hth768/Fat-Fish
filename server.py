@@ -205,6 +205,10 @@ def make_handler(bridge):
                     return self._json(plugins_api.list_plugins(bridge))
                 if path == "/api/plugins/market":
                     return self._json(plugins_api.market_list(bridge))
+                if path.startswith("/api/plugins/") and path.endswith("/config"):
+                    name = path[len("/api/plugins/"):-len("/config")].strip("/")
+                    if name:
+                        return self._json(plugins_api.plugin_config_view(name))
                 if path == "/api/config":
                     return self._json(config_api.config_view())
                 if path == "/api/appearance":
@@ -257,6 +261,10 @@ def make_handler(bridge):
                                                                  body.get("action", "status")))
                 if path == "/api/plugins/rescan":
                     return self._json(plugins_api.rescan(bridge))
+                if path.startswith("/api/plugins/") and path.endswith("/config"):
+                    name = path[len("/api/plugins/"):-len("/config")].strip("/")
+                    if name:
+                        return self._json(plugins_api.plugin_config_save(name, body.get("values") or {}))
                 if path == "/api/plugins/market":
                     return self._json(plugins_api.market_action(
                         bridge, body.get("action", ""),

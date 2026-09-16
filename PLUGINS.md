@@ -285,3 +285,73 @@ def create_brain(core):
 | 依赖分组批量启停 | `plugins/groups.json` |
 
 插件被装载后，引擎内建插件经 `agent_core.register_builtin_plugins()` 注册，应用层包经 `pkg_manager` 注册到 `core.plugins` / `core.brains`。
+
+---
+
+## 9. 扩展设置（插件参数配置）
+
+用户可在「插件」页点 **设置** 打开弹窗，按 `manifest.json` 里声明的 `config_schema` 动态渲染表单，填写后保存。配置按**插件名**持久化（落盘 `data/app_settings.json` 的 `plugin_config` 子键），并可**热生效**（若插件实现了 `on_config`）。
+
+### 9.1 `manifest.json` 新增字段：`config_schema`
+
+```json
+{
+  "name": "my_feature",
+  "title": "我的功能",
+  "version": "1.0.0",
+  "kind": "feature",
+  "config_schema": [
+    { "key": "api_key",     "label": "API Key",   "type": "secret", "desc": "留空则沿用已保存值", "default": "" },
+    { "key": "max_items",   "label": "最大条目",  "type": "int",    "min": 1, "max": 1000, "default": 50 },
+    { "key": "temperature", "label": "温度",       "type": "float",  "min": 0,  "max": 2,    "default": 0.7 },
+    { "key": "enabled",     "label": "启用推送",  "type": "bool",   "default": false },
+    { "key": "mode",        "label": "模式",       "type": "choice", "options": [ {"value":"fast","label":"快速"}, {"value":"precise","label":"精确"} ], "default": "fast" },
+    { "key": "note",        "label": "备注",       "type": "text",   "default": "" },
+    { "key": "extra",       "label": "扩展JSON",  "type": "json",   "default": {} }
+  ]
+}
+```
+
+### 9.2 字段类型
+
+| `type` | 控件 | 保存值 | 说明 |
+|---|---|---|---|
+| `str` | 单行输入 | 字符串 | 默认类型 |
+| `text` | 多行文本 | 字符串 | 长文本 |
+| `int` | 数字（step=1） | 整数 | 自动 `int()` 转换 |
+| `float` | 数字（step=0.01） | 浮点 | 自动 `float()` 转换 |
+| `bool` | 开关 | 布尔 | 自动转换 |
+| `choice` | 下拉 | 选中的 `value` | 见 `options` |
+| `secret` | 密码框 | 字符串 | **掩码显示**；值未变（仍是 `****`）时保存会保留原值，不覆盖 |
+| `json` | 多行 JSON | 解析后的对象/数组 | 解析失败则原样保存 |
+
+每个字段可用 `label`（展示名）、`desc`（下方灰色说明）、`default`（缺省值）、`min`/`max`（数字范围提示）。
+不写 `config_schema` 或为空数组 → 该插件不显示「设置」按钮。
+
+### 9.3 插件读取配置
+
+装载（或保存配置）时，管理器会回调插件 wrapper 模块的 **`on_config(cfg)`**（可选）：
+
+```python
+# plugins/my_feature/plugin.py
+_STATE = {}
+
+def on_config(cfg: dict):
+    """核心推送当前生效参数（manifest 默认值 + 用户已保存覆盖）。"""
+    _STATE["api_key"] = cfg.get("api_key", "")
+    _STATE["mode"]    = cfg.get("mode", "fast")
+
+def create_plugin(core):
+    return MyFeaturePlugin(core)
+```
+
+- 装载时即推送一次（用默认值 + 已保存值合并后的结果）；
+- 用户在 UI 保存后再次推送，**无需重启**即热生效；
+- 也可按需主动读取：`pkg_manager.get_config(name)` 返回合并后的字典。
+
+### 9.4 后端约定
+
+- 读取：`GET /api/plugins/<name>/config` → `plugin_config_view()`，返回 `fields`（含当前 `value`/`masked`）。
+- 保存：`POST /api/plugins/<name>/config` → `plugin_config_save(name, {"values": {...}})`，仅接受 `config_schema` 声明的键并按类型转换。
+- 存储：`settings_store.get_plugin_config(name)` / `set_plugin_config(name, values)`。
+

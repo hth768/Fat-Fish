@@ -8,6 +8,8 @@ import os
 import re
 import subprocess
 import time
+import json
+import settings_store
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -131,6 +133,96 @@ def get_pkg_meta(name: str):
         if p["name"] == name:
             return p
     return None
+
+
+# ----------------------------------------------------------------------
+# 插件参数配置（扩展设置）：每个插件可在 manifest.json 声明 config_schema，
+# UI 据此动态渲染表单；保存即落到覆盖层 plugin_config 子键，并可热推给插件。
+# ----------------------------------------------------------------------
+def _to_bool(v):
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    return str(v).strip().lower() in ("1", "true", "yes", "on", "y")
+
+
+def plugin_config_view(name: str) -> dict:
+    """返回某插件参数配置视图：元信息 + config_schema + 已保存值。"""
+    meta = get_pkg_meta(name)
+    if meta is None:
+        return {"error": "plugin_not_found", "name": name}
+    manifest = read_manifest(meta["dir"]) or {}
+    schema = manifest.get("config_schema") or []
+    saved = settings_store.get_plugin_config(name)
+    fields = []
+    for f in schema:
+        if not isinstance(f, dict) or "key" not in f:
+            continue
+        key = f["key"]
+        value = saved.get(key, f.get("default"))
+        item = dict(f)
+        item["value"] = value
+        if item.get("type") == "secret" and value not in (None, ""):
+            item["value"] = settings_store.mask_secret(value)  # 展示掩码，留掩码即不修改
+            item["masked"] = True
+        fields.append(item)
+    return {
+        "name": name,
+        "display_name": manifest.get("title") or manifest.get("name") or name,
+        "description": manifest.get("description", ""),
+        "version": manifest.get("version", ""),
+        "kind": meta.get("kind", ""),
+        "has_config": bool(fields),
+        "fields": fields,
+        "enabled": bool(meta.get("enabled")),
+    }
+
+
+def plugin_config_save(name: str, values: dict) -> dict:
+    """保存某插件参数：仅接受 schema 声明键并按类型转换；secret 留掩码则保留原值。"""
+    meta = get_pkg_meta(name)
+    if meta is None:
+        return {"error": "plugin_not_found", "name": name}
+    manifest = read_manifest(meta["dir"]) or {}
+    schema = manifest.get("config_schema") or []
+    saved = settings_store.get_plugin_config(name)
+    cleaned = {}
+    for f in schema:
+        if not isinstance(f, dict) or "key" not in f:
+            continue
+        key = f["key"]
+        if key not in values:
+            continue
+        raw = values[key]
+        ftype = f.get("type", "str")
+        try:
+            if ftype == "bool":
+                cleaned[key] = _to_bool(raw)
+            elif ftype == "int":
+                cleaned[key] = int(raw)
+            elif ftype == "float":
+                cleaned[key] = float(raw)
+            elif ftype == "json":
+                cleaned[key] = raw if isinstance(raw, (dict, list)) else json.loads(raw or "{}")
+            elif ftype == "secret":
+                if raw in (None, "") or settings_store.is_masked(raw):
+                    cleaned[key] = saved.get(key, f.get("default"))  # 保留原值
+                else:
+                    cleaned[key] = str(raw)
+            else:  # str / text / choice
+                cleaned[key] = "" if raw is None else (raw if isinstance(raw, str) else str(raw))
+        except Exception:
+            cleaned[key] = saved.get(key, f.get("default"))
+    final = settings_store.set_plugin_config(name, cleaned)
+    applied = False
+    try:
+        if _pkg is not None:
+            applied = _pkg.set_config(name, final)
+    except Exception:
+        pass
+    return {"ok": True, "name": name, "values": final, "applied": applied}
+
 
 
 # ----------------------------------------------------------------------
