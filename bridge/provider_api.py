@@ -268,7 +268,7 @@ def save_model(payload: dict) -> dict:
         api_style = pinfo.get("api_style", "openai")
     if not base_url:
         base_url = pinfo.get("base_url", "")
-    if not api_key:
+    if not api_key and preset:
         return {"ok": False, "error": "请填写 API Key"}
     if not base_url:
         return {"ok": False, "error": "请填写 Base URL"}

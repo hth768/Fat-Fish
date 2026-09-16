@@ -5,6 +5,7 @@
 """
 import json
 import os
+import re
 import time
 
 _MEMORY_FILE = "memory_data.json"
@@ -261,3 +262,249 @@ def memory_action(kind, body):
             return {"ok": True, "result": r}
 
     return {"ok": False, "error": f"不支持的操作: {kind}/{op}"}
+
+
+# ---------------- 记忆文件导入 / 导出 ----------------
+
+def _norm_fact(f):
+    return re.sub(r"\s+", "", str(f)).lower()
+
+
+def export_memory() -> dict:
+    """导出全部记忆维度，供备份 / 迁移。"""
+    out = {
+        "version": 1,
+        "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "profiles": {}, "notes": {},
+        "persona": {"personas": {}, "global_style": ""},
+        "reflection": {"reflections": [], "interaction_rules": [], "stats": {}},
+        "knowledge": [], "history": {}, "sessions": {},
+    }
+    try:
+        import long_term_memory as ltm
+        out["profiles"] = ltm.load_profiles() or {}
+    except Exception:
+        pass
+    try:
+        import important_notes
+        out["notes"] = important_notes.load_notes() or {}
+    except Exception:
+        pass
+    try:
+        import persona_memory
+        d = persona_memory._load_data() or {}
+        out["persona"] = {
+            "personas": d.get("personas", {}),
+            "global_style": d.get("global_style", ""),
+        }
+    except Exception:
+        pass
+    try:
+        import reflection_memory
+        d = reflection_memory._load_data() or {}
+        out["reflection"] = {
+            "reflections": d.get("reflections", []),
+            "interaction_rules": d.get("interaction_rules", []),
+            "stats": d.get("stats", {}),
+        }
+    except Exception:
+        pass
+    try:
+        import knowledge_store as ks
+        out["knowledge"] = ks._load() or []
+    except Exception:
+        pass
+    try:
+        import long_term_memory as ltm
+        hdir = ltm._history_dir()
+        if os.path.isdir(hdir):
+            for fn in os.listdir(hdir):
+                if fn.endswith(".jsonl"):
+                    uid = os.path.splitext(fn)[0]
+                    try:
+                        with open(os.path.join(hdir, fn), "r", encoding="utf-8") as f:
+                            out["history"][uid] = [json.loads(l) for l in f if l.strip()]
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    try:
+        out["sessions"] = _read_json(os.path.join(os.getcwd(), _MEMORY_FILE), {}) or {}
+    except Exception:
+        pass
+    return out
+
+
+def import_memory(obj, mode="replace") -> dict:
+    """导入记忆导出 JSON。mode: replace 覆盖整维度 / merge 合并去重。"""
+    if not isinstance(obj, dict):
+        return {"ok": False, "error": "导入数据需为 JSON 对象"}
+    result = {"ok": True, "imported": {}}
+    replace = (mode == "replace")
+
+    if "profiles" in obj and isinstance(obj["profiles"], dict):
+        import long_term_memory as ltm
+        profiles = ltm.load_profiles() or {}
+        for uid, entry in (obj["profiles"] or {}).items():
+            uid = str(uid); entry = entry or {}
+            facts = [str(f) for f in (entry.get("facts") or []) if str(f).strip()]
+            if replace or uid not in profiles:
+                profiles[uid] = {"facts": list(facts), "updated": time.time()}
+            else:
+                existing = {_norm_fact(f) for f in profiles[uid].get("facts", [])}
+                merged = list(profiles[uid].get("facts", []))
+                for f in facts:
+                    if _norm_fact(f) not in existing:
+                        merged.append(f); existing.add(_norm_fact(f))
+                profiles[uid] = {"facts": merged, "updated": time.time()}
+        ltm.save_profiles(profiles)
+        result["imported"]["profiles"] = len(profiles)
+
+    if "notes" in obj and isinstance(obj["notes"], dict):
+        import important_notes as notes_mod
+        notes = notes_mod.load_notes() or {}
+        for uid, lst in (obj["notes"] or {}).items():
+            uid = str(uid)
+            if not isinstance(lst, list):
+                continue
+            if replace or uid not in notes:
+                notes[uid] = []
+            for n in lst:
+                text = (n.get("text") if isinstance(n, dict) else str(n)).strip()
+                if text:
+                    notes_mod.add_note(uid, text, (n.get("category", "") if isinstance(n, dict) else ""))
+        result["imported"]["notes"] = sum(len(v) for v in notes_mod.load_notes().values())
+
+    if "persona" in obj and isinstance(obj["persona"], dict):
+        import persona_memory
+        data = persona_memory._load_data()
+        src = obj["persona"] or {}
+        personas = src.get("personas", {}) if isinstance(src, dict) else {}
+        if replace:
+            data["personas"] = dict(personas)
+        else:
+            data.setdefault("personas", {})
+            for uid, p in personas.items():
+                data["personas"][str(uid)] = p
+        if "global_style" in src:
+            data["global_style"] = src["global_style"]
+        persona_memory._save_data()
+        result["imported"]["persona"] = len(data["personas"])
+
+    if "reflection" in obj and isinstance(obj["reflection"], dict):
+        import reflection_memory
+        data = reflection_memory._load_data()
+        src = obj["reflection"] or {}
+        if replace:
+            data["reflections"] = list(src.get("reflections", []))
+            data["interaction_rules"] = list(src.get("interaction_rules", []))
+            data["stats"] = src.get("stats", {})
+        else:
+            existing_ids = {r.get("id") for r in data.get("reflections", [])}
+            for r in src.get("reflections", []):
+                if r.get("id") not in existing_ids:
+                    data.setdefault("reflections", []).append(r)
+            for rule in src.get("interaction_rules", []):
+                if rule not in data.get("interaction_rules", []):
+                    data.setdefault("interaction_rules", []).append(rule)
+        reflection_memory._save_data()
+        result["imported"]["reflection"] = len(data["reflections"])
+
+    if "knowledge" in obj and isinstance(obj["knowledge"], list):
+        import knowledge_store as ks
+        if replace:
+            ks._save(list(obj["knowledge"]))
+        else:
+            for e in obj["knowledge"]:
+                topic = (e.get("topic") or "").strip()
+                facts = [str(f).strip() for f in (e.get("facts") or []) if str(f).strip()]
+                if topic and facts:
+                    ks.add_entry(topic, facts, e.get("keywords"), e.get("sources"))
+        result["imported"]["knowledge"] = ks.count()
+
+    if "history" in obj and isinstance(obj["history"], dict):
+        import long_term_memory as ltm
+        hdir = ltm._history_dir()
+        os.makedirs(hdir, exist_ok=True)
+        for uid, lines in obj["history"].items():
+            if not isinstance(lines, list):
+                continue
+            fp = os.path.join(hdir, str(uid) + ".jsonl")
+            existing = set()
+            if os.path.isfile(fp):
+                with open(fp, "r", encoding="utf-8") as f:
+                    for l in f:
+                        l = l.strip()
+                        if l:
+                            existing.add(l)
+            with open(fp, "a", encoding="utf-8") as f:
+                for item in lines:
+                    line = json.dumps(item, ensure_ascii=False)
+                    if line not in existing:
+                        f.write(line + "\n"); existing.add(line)
+        result["imported"]["history"] = len(obj["history"])
+
+    if "sessions" in obj and isinstance(obj["sessions"], dict):
+        path = os.path.join(os.getcwd(), _MEMORY_FILE)
+        cur = _read_json(path, {}) or {}
+        if replace:
+            cur = dict(obj["sessions"])
+        else:
+            for k, v in obj["sessions"].items():
+                cur[k] = v
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(cur, f, ensure_ascii=False, indent=2)
+            result["imported"]["sessions"] = 1
+        except Exception as e:
+            result.setdefault("warnings", []).append("sessions: " + repr(e))
+
+    return result
+
+
+def import_chatlog(text, uid="app_owner", target="knowledge", mode="auto") -> dict:
+    """解析聊天记录文本（txt/csv/md）写入记忆。
+
+    target: knowledge（默认）/ profile（人物档案）/ notes（重要事项）。
+    启发式：按句切分，去重后写入目标记忆维度。
+    """
+    if not text or not text.strip():
+        return {"ok": False, "error": "聊天记录为空"}
+    uid = str(uid or "app_owner")
+    seen = set(); clean = []
+    for raw in text.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        for p in re.split(r"[。！？!?；;\n]", raw):
+            p = p.strip()
+            if len(p) >= 4 and _norm_fact(p) not in seen:
+                seen.add(_norm_fact(p)); clean.append(p)
+    if not clean:
+        return {"ok": False, "error": "未解析到可记忆的内容"}
+
+    if target == "notes":
+        import important_notes as notes_mod
+        added = 0
+        for f in clean:
+            if notes_mod.add_note(uid, f, "聊天记录导入"):
+                added += 1
+    elif target == "profile":
+        import long_term_memory as ltm
+        profiles = ltm.load_profiles() or {}
+        entry = profiles.get(uid) or {"facts": [], "updated": 0}
+        existing = {_norm_fact(x) for x in entry.get("facts", [])}
+        for f in clean:
+            if _norm_fact(f) not in existing:
+                entry.setdefault("facts", []).append(f); existing.add(_norm_fact(f))
+        entry["updated"] = time.time()
+        profiles[uid] = entry
+        ltm.save_profiles(profiles)
+        added = len(entry["facts"])
+    else:  # knowledge
+        import knowledge_store as ks
+        topic = clean[0][:30]
+        r = ks.add_entry(topic, clean, ["聊天记录导入"], [])
+        added = r.get("new_facts", 0)
+
+    return {"ok": True, "target": target, "parsed": len(clean), "added": added}

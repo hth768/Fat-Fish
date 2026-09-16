@@ -1275,4 +1275,89 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#bldSave").addEventListener("click", _bldSave);
   $("#bldCopy").addEventListener("click", _bldCopy);
   _bldModeSwitch("agent");
+
+  // ===== 记忆：导入 / 导出 =====
+  $("#btnExportMem").addEventListener("click", async () => {
+    try {
+      const data = await GET("/api/memory/export");
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "feiyu_memory_" + new Date().toISOString().slice(0, 10) + ".json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("已开始下载记忆备份");
+    } catch (e) { toast(e.message || "导出失败", true); }
+  });
+
+  async function _memImportFile(file, mode) {
+    const msg = $("#memImportMsg");
+    try {
+      const data = JSON.parse(await file.text());
+      msg.textContent = "导入中…";
+      const r = await POST("/api/memory/import", { data, mode: mode || "replace" });
+      if (!r.ok) throw new Error(r.error || "导入失败");
+      const parts = Object.entries(r.imported || {}).map(([k, v]) => `${k}=${v}`).join("，");
+      msg.textContent = "导入完成：" + parts;
+      if (typeof renderMemory === "function") renderMemory();
+    } catch (e) { msg.textContent = e.message; }
+  }
+  $("#memImportFile").addEventListener("change", e => {
+    if (e.target.files[0]) _memImportFile(e.target.files[0], $("#memImportMode").value);
+    e.target.value = "";
+  });
+
+  async function _memImportChatlog(file) {
+    const msg = $("#memImportMsg");
+    try {
+      const text = await file.text();
+      msg.textContent = "解析中…";
+      const r = await POST("/api/memory/import_chatlog", {
+        text, uid: ($("#memChatlogUid").value || "app_owner").trim(),
+        target: $("#memChatlogTarget").value });
+      if (!r.ok) throw new Error(r.error || "失败");
+      msg.textContent = `聊天记录已解析 ${r.parsed} 条，写入 ${r.added} 条（目标：${r.target}）`;
+      if (typeof renderMemory === "function") renderMemory();
+    } catch (e) { msg.textContent = e.message; }
+  }
+  $("#memChatlogFile").addEventListener("change", e => {
+    if (e.target.files[0]) _memImportChatlog(e.target.files[0]);
+    e.target.value = "";
+  });
+
+  // ===== 构建助手：导入智能体 + 接入外部 API =====
+  $("#bldImportAgent").addEventListener("change", async e => {
+    const f = e.target.files[0]; if (!f) return;
+    const msg = $("#bldImportMsg");
+    try {
+      const data = JSON.parse(await f.text());
+      msg.textContent = "导入中…";
+      const r = await POST("/api/builder/agent/import", { agent: data });
+      if (!r.ok) throw new Error(r.error || "导入失败");
+      msg.textContent = "已导入智能体：" + (r.name || r.id);
+      toast("智能体已导入");
+    } catch (err) { msg.textContent = err.message; }
+    e.target.value = "";
+  });
+
+  $("#btnConnectExt").addEventListener("click", async () => {
+    const msg = $("#extMsg");
+    const caps = Array.from($("#extCaps").selectedOptions).map(o => o.value);
+    const payload = {
+      name: $("#extName").value.trim(),
+      base_url: $("#extBase").value.trim(),
+      api_key: $("#extKey").value,
+      model: $("#extModel").value.trim(),
+      system_prompt: $("#extSys").value,
+      capabilities: caps,
+    };
+    if (!payload.name || !payload.base_url || !payload.model) return toast("名称 / BaseURL / 模型 均为必填", true);
+    try {
+      msg.textContent = "接入中…";
+      const r = await POST("/api/builder/agent/connect_external", payload);
+      if (!r.ok) throw new Error(r.error || "接入失败");
+      msg.textContent = "已接入外部智能体：" + r.name + "（供应商：" + r.provider + "）";
+      toast("外部智能体已接入");
+    } catch (err) { msg.textContent = err.message; }
+  });
 });

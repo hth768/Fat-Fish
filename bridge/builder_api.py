@@ -450,6 +450,70 @@ async def save_agent(bridge, data: dict) -> dict:
     return {"ok": True, "id": aid, "agent": r.get("agent")}
 
 
+def import_agent_sync(bridge, agent_def: dict) -> dict:
+    """导入本地智能体配置（agent.json）并注册。"""
+    from agent_manager import save_agent as am_save
+    if not isinstance(agent_def, dict):
+        return {"ok": False, "error": "agent 需为 JSON 对象"}
+    if not str(agent_def.get("id", "")).strip():
+        agent_def["id"] = "agent_" + time.strftime("%Y%m%d%H%M%S")
+    if not str(agent_def.get("name", "")).strip():
+        agent_def["name"] = agent_def["id"]
+    try:
+        ar = am_save(agent_def)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    if "error" in ar:
+        return {"ok": False, "error": ar["error"]}
+    return {"ok": True, "id": ar.get("id") or agent_def["id"], "name": agent_def.get("name")}
+
+
+def connect_external_agent_sync(bridge, payload: dict) -> dict:
+    """接入外部 API 智能体（OpenAI 兼容端点）：注册为模型供应商 + 智能体。"""
+    from bridge import provider_api
+    from agent_manager import save_agent as am_save
+
+    name = str(payload.get("name") or "").strip()
+    base_url = str(payload.get("base_url") or "").strip()
+    api_key = payload.get("api_key") or ""
+    model = str(payload.get("model") or "").strip()
+    if not name or not base_url or not model:
+        return {"ok": False, "error": "名称 / BaseURL / 模型 均为必填"}
+
+    caps = payload.get("capabilities") or ["chat"]
+    if isinstance(caps, str):
+        caps = [caps]
+    caps = [c for c in caps if c in ("chat", "reasoning", "vision", "role")]
+    if not caps:
+        caps = ["chat"]
+
+    provider_name = "ext_" + (re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "agent")
+    r = provider_api.save_model({
+        "name": provider_name, "preset": "", "api_key": api_key,
+        "base_url": base_url, "model": model, "api_style": "openai",
+        "capabilities": caps,
+    })
+    if not r.get("ok"):
+        return {"ok": False, "error": r.get("error", "注册供应商失败")}
+
+    agent_def = {
+        "id": provider_name,
+        "name": name,
+        "emoji": payload.get("emoji") or "🔌",
+        "system_prompt": payload.get("system_prompt") or "",
+        "profile": payload.get("profile") or {},
+        "model": {"provider": provider_name, "model": model},
+        "enabled_brains": [], "enabled_plugins": [], "bindings": [], "auto_start": False,
+    }
+    try:
+        ar = am_save(agent_def)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    if "error" in ar:
+        return {"ok": False, "error": ar["error"]}
+    return {"ok": True, "id": ar.get("id") or provider_name, "name": name, "provider": provider_name}
+
+
 async def save_plugin(bridge, name: str, manifest: dict, code: str) -> dict:
     payload = {"manifest": manifest, "code": code}
     norm, err = _normalize_plugin(payload)

@@ -93,6 +93,24 @@
           <input id="memSearch" class="input" placeholder="搜索…">
         </div>
       </header>
+      <div class="panel" style="margin-bottom:14px">
+        <div class="panel-title">记忆导入 / 导出</div>
+        <div class="row-actions">
+          <button class="btn ghost" id="btnExportMem">导出全部记忆（JSON）</button>
+          <label class="btn ghost" style="cursor:pointer">导入记忆（JSON）<input id="memImportFile" type="file" accept="application/json,.json" hidden></label>
+          <label class="cfg-field" style="flex:0 0 auto"><span class="cfg-label">模式</span>
+            <select id="memImportMode" class="select"><option value="replace">覆盖</option><option value="merge">合并</option></select>
+          </label>
+        </div>
+        <div class="row-actions" style="margin-top:10px">
+          <label class="btn ghost" style="cursor:pointer">导入聊天记录（txt/csv/md）<input id="memChatlogFile" type="file" accept=".txt,.csv,.md" hidden></label>
+          <label class="cfg-field" style="flex:0 0 auto"><span class="cfg-label">目标</span>
+            <select id="memChatlogTarget" class="select"><option value="knowledge">知识库</option><option value="profile">人物档案</option><option value="notes">重要事项</option></select>
+          </label>
+          <label class="cfg-field" style="flex:1"><span class="cfg-label">用户ID</span><input id="memChatlogUid" class="input" value="app_owner"></label>
+        </div>
+        <div class="hint" id="memImportMsg" style="margin-top:8px"></div>
+      </div>
       <div class="tabs">
         <a class="tab active" data-tab="profiles">人物档案</a>
         <a class="tab" data-tab="notes">重要事项</a>
@@ -361,6 +379,37 @@
           <button class="btn primary" id="bldGen">生成</button>
           <span class="hint" id="bldStatus"></span>
         </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">智能体接入</div>
+        <div class="hint wrap" style="margin-bottom:10px">除一句话生成外，也可导入本地智能体配置（agent.json），或接入外部 API 智能体（OpenAI 兼容端点）。</div>
+        <div class="row-actions">
+          <label class="btn ghost" style="cursor:pointer">导入智能体（agent.json）<input id="bldImportAgent" type="file" accept="application/json,.json" hidden></label>
+          <span class="hint" id="bldImportMsg"></span>
+        </div>
+        <details style="margin-top:10px">
+          <summary style="cursor:pointer">接入外部智能体（API）</summary>
+          <div class="form-grid" style="margin-top:10px">
+            <label class="cfg-field"><span class="cfg-label">名称</span><input id="extName" class="input" placeholder="如：我的云端助手"></label>
+            <label class="cfg-field"><span class="cfg-label">Base URL</span><input id="extBase" class="input" placeholder="https://api.xxx/v1"></label>
+            <label class="cfg-field"><span class="cfg-label">API Key</span><input id="extKey" class="input" type="password" placeholder="留空可接入免密端点"></label>
+            <label class="cfg-field"><span class="cfg-label">模型名</span><input id="extModel" class="input" placeholder="gpt-4o / claude-3-5-sonnet"></label>
+            <label class="cfg-field"><span class="cfg-label">能力（多选）</span>
+              <select id="extCaps" class="select" multiple size="4">
+                <option value="chat" selected>chat 对话</option>
+                <option value="reasoning">reasoning 推理</option>
+                <option value="vision">vision 视觉</option>
+                <option value="role">role 角色</option>
+              </select>
+            </label>
+            <label class="cfg-field" style="flex:1 1 100%"><span class="cfg-label">系统提示词（可选）</span><textarea id="extSys" class="textarea" rows="3"></textarea></label>
+          </div>
+          <div class="row-actions" style="margin-top:8px">
+            <button class="btn primary" id="btnConnectExt">接入</button>
+            <span class="hint" id="extMsg"></span>
+          </div>
+        </details>
       </div>
 
       <div class="panel hidden" id="bldResult">

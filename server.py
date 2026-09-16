@@ -180,6 +180,8 @@ def make_handler(bridge):
                     return self._json(memory_api.get_sessions())
                 if path == "/api/memory/stats":
                     return self._json(memory_api.memory_stats())
+                if path == "/api/memory/export":
+                    return self._json(memory_api.export_memory())
                 if path == "/api/memory/users":
                     return self._json({"items": memory_api.list_users()})
                 if path == "/api/memory/profiles":
@@ -251,6 +253,12 @@ def make_handler(bridge):
                 if path == "/api/memory/action":
                     return self._json(memory_api.memory_action(body.get("kind", ""),
                                                                body.get("payload") or body))
+                if path == "/api/memory/import":
+                    return self._json(memory_api.import_memory(body.get("data"), body.get("mode", "replace")))
+                if path == "/api/memory/import_chatlog":
+                    return self._json(memory_api.import_chatlog(
+                        body.get("text", ""), body.get("uid") or "app_owner",
+                        body.get("target", "knowledge"), body.get("mode", "auto")))
                 if path == "/api/summary/session":
                     return self._json(summary_api.set_session_summary(bridge, body.get("text", "")))
                 if path == "/api/summary/run":
@@ -314,6 +322,10 @@ def make_handler(bridge):
                         body.get("provider") or None))
                 if path == "/api/builder/agent/save":
                     return self._json(builder_api.save_agent_sync(bridge, body.get("data") or {}))
+                if path == "/api/builder/agent/import":
+                    return self._json(builder_api.import_agent_sync(bridge, body.get("agent") or {}))
+                if path == "/api/builder/agent/connect_external":
+                    return self._json(builder_api.connect_external_agent_sync(bridge, body))
                 if path == "/api/builder/plugin/save":
                     return self._json(builder_api.save_plugin_sync(bridge, body))
                 # ----- 主模型供应商配置保存 -----
