@@ -21,18 +21,25 @@ from contextlib import contextmanager
 from typing import Dict, List, Optional, Tuple
 
 import config
+import agent_ctx
 
 
 def _base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _ns_base():
+    d = agent_ctx.ns_dir() or _base_dir()
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def _facts_db_file():
-    return os.path.join(_base_dir(), "facts.db")
+    return os.path.join(_ns_base(), "facts.db")
 
 
 def _facts_archive_db_file():
-    return os.path.join(_base_dir(), "facts_archive.db")
+    return os.path.join(_ns_base(), "facts_archive.db")
 
 
 class FactStore:
@@ -315,16 +322,16 @@ class FactStore:
             self._cache.clear()
 
 
-# 全局单例
-_fact_store: Optional[FactStore] = None
+# 按 agent 分桶的单例：{ agent_id: FactStore }
+_fact_store: dict = {}
 
 
-def get_fact_store() -> FactStore:
-    """获取全局 FactStore 实例。"""
-    global _fact_store
-    if _fact_store is None:
-        _fact_store = FactStore()
-    return _fact_store
+def get_fact_store(agent_id: "str | None" = None) -> FactStore:
+    """获取（按智能体隔离的）FactStore 实例。agent_id 为空时取当前 agent 上下文。"""
+    aid = agent_id or agent_ctx.current_agent() or "__default__"
+    if aid not in _fact_store:
+        _fact_store[aid] = FactStore()
+    return _fact_store[aid]
 
 
 # ==================================================================

@@ -26,6 +26,7 @@ import time
 from typing import Dict, List, Optional
 
 import config
+import agent_ctx
 
 from brain_base import AgentBrain, BrainManager, brain_event
 from message_bus import AgentEventBus, get_event_bus
@@ -121,9 +122,10 @@ class ChatBrain(AgentBrain):
 
 
 class AgentCore:
-    """智能体核心控制器。"""
+    """智能体核心控制器。每个智能体对应一个独立 AgentCore 实例。"""
 
-    def __init__(self):
+    def __init__(self, agent_id: str = "feiyu"):
+        self.agent_id = agent_id
         self.running = False
         self.bus = get_event_bus()
         self.plugins = PluginManager(self)
@@ -139,7 +141,7 @@ class AgentCore:
     def chat(self):
         if self._chat is None:
             from chat_service import get_chat_service
-            self._chat = get_chat_service()
+            self._chat = get_chat_service(agent_id=self.agent_id)
         return self._chat
 
     @property
@@ -380,12 +382,12 @@ class AgentCore:
         return st
 
 
-# 全局单例
-_core_instance: Optional[AgentCore] = None
+# 按智能体分桶的单例：{ agent_id: AgentCore }
+_core_instances: dict = {}
 
 
-def get_core() -> AgentCore:
-    global _core_instance
-    if _core_instance is None:
-        _core_instance = AgentCore()
-    return _core_instance
+def get_core(agent_id: str = None) -> AgentCore:
+    aid = agent_id or agent_ctx.current_agent() or "feiyu"
+    if aid not in _core_instances:
+        _core_instances[aid] = AgentCore(agent_id=aid)
+    return _core_instances[aid]

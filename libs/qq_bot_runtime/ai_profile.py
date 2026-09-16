@@ -12,6 +12,7 @@ import os
 import time
 
 import config
+import agent_ctx
 
 # 默认档案（基于现有 SYSTEM_PROMPT 的人设，可被用户修改）
 DEFAULT_PROFILE = {
@@ -32,7 +33,23 @@ def _profile_file():
 
 
 def load_profile() -> dict:
-    """加载 AI 档案。文件不存在时返回默认档案。"""
+    """加载 AI 档案。
+
+    若处于某智能体上下文，返回该智能体自身的 profile（缺失字段回退到默认档案）；
+    否则读取全局 ai_profile.json（向后兼容单智能体）。
+    """
+    aid = agent_ctx.current_agent()
+    if aid:
+        try:
+            import agent_manager
+            a = agent_manager.load_agent(aid)
+            if a:
+                prof = dict(DEFAULT_PROFILE)
+                prof.update(a.get("profile", {}) or {})
+                return prof
+        except Exception:
+            pass
+        return dict(DEFAULT_PROFILE)
     path = _profile_file()
     if os.path.exists(path):
         try:
@@ -46,6 +63,15 @@ def load_profile() -> dict:
 
 
 def save_profile(profile: dict):
+    aid = agent_ctx.current_agent()
+    if aid:
+        try:
+            import agent_manager
+            agent_manager.update_agent(aid, profile=profile)
+            return
+        except Exception as e:
+            print(f"[WARN] 智能体档案保存失败: {e}")
+            return
     try:
         with open(_profile_file(), "w", encoding="utf-8") as f:
             json.dump(profile, f, ensure_ascii=False, indent=2)

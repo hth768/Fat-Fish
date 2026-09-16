@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from typing import Dict, List, Optional, Tuple
 
 import config
+import agent_ctx
 
 
 def _base_dir():
@@ -25,9 +26,13 @@ def _base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _ns_base():
+    return agent_ctx.ns_dir() or _base_dir()
+
+
 def _memory_dir():
-    """获取记忆存储目录"""
-    d = os.path.join(_base_dir(), "memory", "time_indexed")
+    """获取记忆存储目录（按智能体隔离）"""
+    d = os.path.join(_ns_base(), "memory", "time_indexed")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -269,13 +274,13 @@ class TimeIndexedMemory:
             self._cache.clear()
 
 
-# 全局单例
-_time_indexed_memory: Optional[TimeIndexedMemory] = None
+# 按 agent 分桶的单例：{ agent_id: TimeIndexedMemory }
+_time_indexed_memory: dict = {}
 
 
-def get_time_indexed_memory() -> TimeIndexedMemory:
-    """获取全局 TimeIndexedMemory 实例"""
-    global _time_indexed_memory
-    if _time_indexed_memory is None:
-        _time_indexed_memory = TimeIndexedMemory()
-    return _time_indexed_memory
+def get_time_indexed_memory(agent_id: "str | None" = None) -> TimeIndexedMemory:
+    """获取（按智能体隔离的）TimeIndexedMemory 实例。agent_id 为空时取当前 agent 上下文。"""
+    aid = agent_id or agent_ctx.current_agent() or "__default__"
+    if aid not in _time_indexed_memory:
+        _time_indexed_memory[aid] = TimeIndexedMemory()
+    return _time_indexed_memory[aid]

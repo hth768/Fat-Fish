@@ -13,14 +13,21 @@ import time
 
 import config
 import file_lock
+import agent_ctx
 
 
 def _base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _ns_base():
+    d = agent_ctx.ns_dir() or _base_dir()
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def _notes_file():
-    return os.path.join(_base_dir(), "important_notes.json")
+    return os.path.join(_ns_base(), "important_notes.json")
 
 
 def load_notes() -> dict:

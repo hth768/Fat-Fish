@@ -23,9 +23,10 @@ from typing import Dict, List, Optional
 
 import config
 import file_lock
+import agent_ctx
 
-# 全局单例
-_persona_cache: Optional[dict] = None
+# 按 agent 分桶的缓存：{ agent_id: data }
+_persona_cache: dict = {}
 
 # 人格记忆最大条数（每个用户）
 MAX_PERSONA_PER_USER = getattr(config, "MAX_PERSONA_PER_USER", 20)
@@ -35,10 +36,17 @@ def _base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _ns_base():
+    # 当前智能体上下文存在时，记忆落到 agents/<id>/memory/
+    d = agent_ctx.ns_dir() or _base_dir()
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def _persona_file():
     path = getattr(config, "PERSONA_FILE", "") or "persona_data.json"
     if not os.path.isabs(path):
-        path = os.path.join(_base_dir(), path)
+        path = os.path.join(_ns_base(), path)
     return path
 
 
@@ -50,30 +58,34 @@ def _default_data() -> dict:
 
 
 def _load_data() -> dict:
-    global _persona_cache
-    if _persona_cache is not None:
-        return _persona_cache
+    aid = agent_ctx.current_agent() or "__default__"
+    if aid in _persona_cache:
+        return _persona_cache[aid]
     path = _persona_file()
+    data = None
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict):
-                _persona_cache = data
-                _persona_cache.setdefault("personas", {})
-                _persona_cache.setdefault("global_style", "")
-                return _persona_cache
         except (json.JSONDecodeError, OSError) as e:
             print(f"[PERSONA] 人格档案加载失败: {e}")
-    _persona_cache = _default_data()
-    return _persona_cache
+    if not isinstance(data, dict):
+        data = _default_data()
+    data.setdefault("personas", {})
+    data.setdefault("global_style", "")
+    _persona_cache[aid] = data
+    return data
 
 
 def _save_data():
+    aid = agent_ctx.current_agent() or "__default__"
+    data = _persona_cache.get(aid)
+    if data is None:
+        return
     path = _persona_file()
     try:
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(_load_data(), f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError as e:
         print(f"[PERSONA] 人格档案保存失败: {e}")
 

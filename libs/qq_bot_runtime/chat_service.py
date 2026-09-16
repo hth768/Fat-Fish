@@ -16,6 +16,7 @@ import time
 
 import config
 import emotion
+import agent_ctx
 import emoji_store
 import identity
 import long_term_memory
@@ -95,7 +96,8 @@ def _brain_detail_line(brain, st) -> str:
 class ChatService:
     """聊天大脑。通过 handle_message() 接收任何平台的消息。"""
 
-    def __init__(self):
+    def __init__(self, agent_id: str = "feiyu"):
+        self.agent_id = agent_id
         self.llm = get_llm()  # 统一多供应商入口（chat/reasoning/tools/vision）
         self.vision = get_vision()  # 统一视觉层（GLM/Gemini 驱动，按任务路由 + 故障转移）
         # 使用 SessionManagerAdapter 替代 Memory，支持会话热切换
@@ -105,7 +107,15 @@ class ChatService:
     # 主入口
     # ==================================================================
     async def handle_message(self, msg: InboundMessage, reply: ReplyTarget):
-        """处理一条平台无关的消息。"""
+        """处理一条平台无关的消息。按所属智能体设置隔离上下文，保证记忆命名空间正确。"""
+        # 多智能体隔离：本次处理全程处于该智能体的记忆命名空间
+        token = agent_ctx.set_agent(self.agent_id)
+        try:
+            return await self._handle_message(msg, reply)
+        finally:
+            agent_ctx.reset_agent(token)
+
+    async def _handle_message(self, msg: InboundMessage, reply: ReplyTarget):
         user_id = msg.user_id
         text = msg.text or ""
 
@@ -2264,12 +2274,12 @@ async def is_same_topic(old_topic: str, new_text: str) -> bool:
         return True
 
 
-# 模块级单例：核心与平台插件共用一个 ChatService
-_chat_service: ChatService = None
+# 按智能体分桶的单例：{ agent_id: ChatService }
+_chat_services: dict = {}
 
 
-def get_chat_service() -> ChatService:
-    global _chat_service
-    if _chat_service is None:
-        _chat_service = ChatService()
-    return _chat_service
+def get_chat_service(agent_id: str = None) -> ChatService:
+    aid = agent_id or agent_ctx.current_agent() or "feiyu"
+    if aid not in _chat_services:
+        _chat_services[aid] = ChatService(agent_id=aid)
+    return _chat_services[aid]

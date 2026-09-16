@@ -14,23 +14,30 @@ import config
 import fact_store
 import file_lock
 import time_indexed_memory
+import agent_ctx
 
 
 def _base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _ns_base():
+    d = agent_ctx.ns_dir() or _base_dir()
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def _profile_file():
-    return os.path.join(_base_dir(), "user_profiles.json")
+    return os.path.join(_ns_base(), "user_profiles.json")
 
 
 def _history_file():
-    return os.path.join(_base_dir(), "chat_history.json")
+    return os.path.join(_ns_base(), "chat_history.json")
 
 
 def _history_dir():
     """历史记录分文件存储目录（每个用户一个 jsonl 文件，追加写）。"""
-    d = os.path.join(_base_dir(), "chat_history")
+    d = os.path.join(_ns_base(), "chat_history")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -70,7 +77,7 @@ def save_profiles(profiles: dict):
 # facts 本身会被 merge_profile_facts 整体重排，顺序不代表新旧。为了「按时间就近取称呼」，
 # 单独用一份 {uid: {fact_text: 首次出现时间戳}} 记录，供情绪等模块判断哪条事实最新。
 def _profile_times_file():
-    return os.path.join(_base_dir(), "user_profile_times.json")
+    return os.path.join(_ns_base(), "user_profile_times.json")
 
 
 def _load_times() -> dict:

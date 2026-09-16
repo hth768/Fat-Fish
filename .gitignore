@@ -19,6 +19,8 @@ pvz_games/
 # ===== 运行数据（用户隐私，不入库）=====
 data/
 *.log
+# 智能体记忆命名空间（运行期生成，含用户隐私）
+libs/qq_bot_runtime/agents/*/memory/
 
 # ===== 构建产物 =====
 _build/

@@ -23,9 +23,10 @@ from typing import Dict, List, Optional
 
 import config
 import file_lock
+import agent_ctx
 
-# 全局单例
-_reflection_cache: Optional[dict] = None
+# 按 agent 分桶的缓存：{ agent_id: data }
+_reflection_cache: dict = {}
 
 # 反思触发间隔（每 N 次对话触发一次深度反思）
 REFLECTION_INTERVAL = getattr(config, "REFLECTION_INTERVAL", 10)
@@ -45,10 +46,16 @@ def _base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def _ns_base():
+    d = agent_ctx.ns_dir() or _base_dir()
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def _reflection_file():
     path = getattr(config, "REFLECTION_FILE", "") or "reflection_data.json"
     if not os.path.isabs(path):
-        path = os.path.join(_base_dir(), path)
+        path = os.path.join(_ns_base(), path)
     return path
 
 
@@ -66,31 +73,35 @@ def _default_data() -> dict:
 
 
 def _load_data() -> dict:
-    global _reflection_cache
-    if _reflection_cache is not None:
-        return _reflection_cache
+    aid = agent_ctx.current_agent() or "__default__"
+    if aid in _reflection_cache:
+        return _reflection_cache[aid]
     path = _reflection_file()
+    data = None
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if isinstance(data, dict):
-                _reflection_cache = data
-                _reflection_cache.setdefault("reflections", [])
-                _reflection_cache.setdefault("interaction_rules", [])
-                _reflection_cache.setdefault("stats", _default_data()["stats"])
-                return _reflection_cache
         except (json.JSONDecodeError, OSError) as e:
             print(f"[REFLECT] 反思档案加载失败: {e}")
-    _reflection_cache = _default_data()
-    return _reflection_cache
+    if not isinstance(data, dict):
+        data = _default_data()
+    data.setdefault("reflections", [])
+    data.setdefault("interaction_rules", [])
+    data.setdefault("stats", _default_data()["stats"])
+    _reflection_cache[aid] = data
+    return data
 
 
 def _save_data():
+    aid = agent_ctx.current_agent() or "__default__"
+    data = _reflection_cache.get(aid)
+    if data is None:
+        return
     path = _reflection_file()
     try:
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(_load_data(), f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError as e:
         print(f"[REFLECT] 反思档案保存失败: {e}")
 
