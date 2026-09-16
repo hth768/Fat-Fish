@@ -25,6 +25,7 @@
       <a class="nav-item" data-page="summary"><span class="nav-ico">≡</span>总结</a>
       <a class="nav-item" data-page="plugins"><span class="nav-ico">⚙</span>插件</a>
       <a class="nav-item" data-page="config"><span class="nav-ico">✎</span>配置</a>
+      <a class="nav-item" data-page="builder"><span class="nav-ico">⚒</span>构建助手</a>
       <a class="nav-item" data-page="appearance"><span class="nav-ico">❖</span>外观</a>
     </nav>
     <div class="sidebar-foot">
@@ -183,6 +184,58 @@
         </div>
       </header>
       <div id="configBody">加载中…</div>
+
+      <!-- 模型供应商 -->
+      <div class="panel" id="provPanel" style="margin-top:18px">
+        <div class="panel-title">模型供应商（自定义）</div>
+        <div class="hint wrap" style="margin-bottom:12px">
+          选择厂商预设（API 地址自动填充），填入你的 API Key 与模型名即可切换对应模型。
+          支持 OpenAI 兼容 与 Anthropic 兼容；可自定义 Base URL 接入任意兼容端点。保存后自动热重载，无需重启。
+        </div>
+        <div class="cfg-grid">
+          <label class="cfg-field">
+            <span class="cfg-label">模型槽位</span>
+            <select id="provSlot" class="select">
+              <option value="main">主模型（对话 / 推理）</option>
+              <option value="vision">视觉模型（图片理解）</option>
+              <option value="role">角色模型（摘要 / 判断 / 记忆等）</option>
+            </select>
+          </label>
+          <label class="cfg-field">
+            <span class="cfg-label">厂商预设</span>
+            <select id="provPreset" class="select">
+              <option value="">— 选择厂商 —</option>
+            </select>
+          </label>
+          <label class="cfg-field">
+            <span class="cfg-label">接口类型</span>
+            <select id="provStyle" class="select">
+              <option value="openai">OpenAI 兼容</option>
+              <option value="anthropic">Anthropic 兼容</option>
+            </select>
+          </label>
+          <label class="cfg-field">
+            <span class="cfg-label">Base URL</span>
+            <input id="provBaseUrl" class="input" placeholder="https://…/v1">
+          </label>
+          <label class="cfg-field">
+            <span class="cfg-label">API Key</span>
+            <input id="provKey" class="input" type="password" placeholder="sk-…（留空表示不修改）" autocomplete="off">
+          </label>
+          <label class="cfg-field">
+            <span class="cfg-label">模型</span>
+            <select id="provModel" class="select"></select>
+          </label>
+          <label class="cfg-field">
+            <span class="cfg-label">自定义模型名</span>
+            <input id="provCustomModel" class="input" placeholder="留空则用上方所选模型">
+          </label>
+        </div>
+        <div class="row-actions">
+          <button class="btn primary" id="btnSaveProvider">保存并热重载</button>
+          <span class="hint" id="provMsg"></span>
+        </div>
+      </div>
     </section>
 
     <!-- 外观 -->
@@ -222,6 +275,72 @@
           <button class="btn danger" id="btnClearBg">清除背景</button>
         </div>
         <div class="hint" id="bgMsg" style="margin-top:8px"></div>
+      </div>
+    </section>
+
+    <!-- 构建助手 -->
+    <section class="page hidden" id="page-builder">
+      <header class="page-head">
+        <h1>构建助手</h1>
+        <div class="head-actions">
+          <div class="seg">
+            <button class="seg-btn active" data-mode="agent">智能体</button>
+            <button class="seg-btn" data-mode="plugin">插件</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="panel">
+        <div class="panel-title" id="bldTitle">用一句话描述你要的智能体</div>
+        <div class="hint wrap" id="bldHint"></div>
+        <textarea id="bldInput" class="textarea" rows="4" placeholder="描述需求…"></textarea>
+        <div class="row-actions" style="margin-top:10px">
+          <label class="cfg-field" style="flex:1">
+            <span class="cfg-label">模型 / 思考强度</span>
+            <select id="bldModel" class="select">
+              <option value="deepseek-flash">DeepSeek Flash（快速 · 轻思考）</option>
+              <option value="deepseek-v4-pro">DeepSeek V4 Pro（深度 · 强思考）</option>
+            </select>
+          </label>
+        </div>
+        <div class="row-actions" id="bldPluginOpts" style="display:none">
+          <label class="cfg-field">
+            <span class="cfg-label">插件类型（留空=自动判断）</span>
+            <select id="bldKind" class="select">
+              <option value="">自动判断</option>
+              <option value="feature">feature（功能）</option>
+              <option value="local">local（本地）</option>
+              <option value="brain">brain（大脑）</option>
+              <option value="sidecar">sidecar</option>
+              <option value="platform">platform（平台）</option>
+            </select>
+          </label>
+        </div>
+        <div class="row-actions">
+          <button class="btn primary" id="bldGen">生成</button>
+          <span class="hint" id="bldStatus"></span>
+        </div>
+      </div>
+
+      <div class="panel hidden" id="bldResult">
+        <div class="panel-title">生成结果（可直接编辑，确认后落盘）</div>
+        <textarea id="bldAgentJson" class="textarea code hidden" rows="22" spellcheck="false"></textarea>
+        <div id="bldPluginBox" class="hidden">
+          <label class="cfg-field">
+            <span class="cfg-label">manifest.json</span>
+            <textarea id="bldManifest" class="textarea code" rows="12" spellcheck="false"></textarea>
+          </label>
+          <label class="cfg-field">
+            <span class="cfg-label">plugin.py</span>
+            <textarea id="bldCode" class="textarea code" rows="18" spellcheck="false"></textarea>
+          </label>
+        </div>
+        <div class="hint" id="bldValidate" style="margin:8px 0"></div>
+        <div class="row-actions">
+          <button class="btn primary" id="bldSave">保存到系统</button>
+          <button class="btn ghost" id="bldCopy">复制</button>
+          <span class="hint" id="bldSaveMsg"></span>
+        </div>
       </div>
     </section>
   </main>

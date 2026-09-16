@@ -13,7 +13,7 @@ WEBUI_DIR = os.path.join(APP_DIR, "webui")
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
-from bridge import appearance_api, config_api, memory_api, plugins_api, summary_api  # noqa: E402
+from bridge import appearance_api, builder_api, config_api, memory_api, plugins_api, provider_api, summary_api  # noqa: E402
 
 
 class QuietServer(ThreadingHTTPServer):
@@ -211,6 +211,12 @@ def make_handler(bridge):
                         return self._json(plugins_api.plugin_config_view(name))
                 if path == "/api/config":
                     return self._json(config_api.config_view())
+                # ----- 主模型供应商预设 / 当前配置 -----
+                if path == "/api/providers/presets":
+                    return self._json(provider_api.list_presets())
+                if path in ("/api/providers/main", "/api/providers/vision", "/api/providers/role"):
+                    slot = path.rsplit("/", 1)[-1]
+                    return self._json(provider_api.get_provider(slot))
                 if path == "/api/appearance":
                     return self._json(appearance_api.get_appearance(
                         (q.get("theme") or [""])[0] or None))
@@ -283,6 +289,23 @@ def make_handler(bridge):
                         theme=body.get("theme"), title=body.get("title"),
                         bg=body.get("bg"), bg_data=body.get("bg_data"),
                         clear_bg=bool(body.get("clear_bg"))))
+                # ----- 构建助手：智能体 / 插件 生成与落盘 -----
+                if path == "/api/builder/agent/generate":
+                    return self._json(builder_api.generate_agent_sync(
+                        bridge, body.get("requirement", ""),
+                        body.get("model") or None, bool(body.get("think"))))
+                if path == "/api/builder/plugin/generate":
+                    return self._json(builder_api.generate_plugin_sync(
+                        bridge, body.get("requirement", ""), body.get("kind", "") or "",
+                        body.get("model") or None, bool(body.get("think"))))
+                if path == "/api/builder/agent/save":
+                    return self._json(builder_api.save_agent_sync(bridge, body.get("data") or {}))
+                if path == "/api/builder/plugin/save":
+                    return self._json(builder_api.save_plugin_sync(bridge, body))
+                # ----- 主模型供应商配置保存 -----
+                if path in ("/api/providers/main", "/api/providers/vision", "/api/providers/role"):
+                    slot = path.rsplit("/", 1)[-1]
+                    return self._json(provider_api.save_provider(slot, body))
                 return self._json({"error": "not found"}, 404)
             except Exception as e:
                 return self._json({"error": repr(e)}, 500)

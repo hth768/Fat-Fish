@@ -42,7 +42,7 @@ $$(".nav-item").forEach(el => el.addEventListener("click", () => {
   $$(".nav-item").forEach(x => x.classList.toggle("active", x === el));
   $$(".page").forEach(p => p.classList.add("hidden"));
   $("#page-" + el.dataset.page).classList.remove("hidden");
-  const loaders = { dashboard: loadDashboard, chat: null, memory: loadMemory, summary: loadSummary, plugins: loadPlugins, config: loadConfig, appearance: loadAppearance };
+  const loaders = { dashboard: loadDashboard, chat: null, memory: loadMemory, summary: loadSummary, plugins: loadPlugins, config: loadConfig, appearance: loadAppearance, builder: loadBuilder };
   const fn = loaders[el.dataset.page];
   if (fn) fn().catch(e => toast(e.message, true));
 }));
@@ -706,6 +706,94 @@ async function loadConfig() {
     inp.dataset.dirty = "";
     inp.addEventListener("input", () => { inp.dataset.dirty = "1"; });
   });
+  loadProviders().catch(e => console.warn("loadProviders", e));
+}
+
+/* ---------------- 模型供应商（主/视觉/角色） ---------------- */
+let _provPresets = {};
+let currentProvSlot = "main";
+
+function _provFillModels(models, selected) {
+  const sel = $("#provModel");
+  sel.innerHTML = '<option value="">— 选择模型 —</option>';
+  (models || []).forEach(m => {
+    const o = document.createElement("option");
+    o.value = m; o.textContent = m;
+    if (m === selected) o.selected = true;
+    sel.appendChild(o);
+  });
+  const custom = document.createElement("option");
+  custom.value = "__custom__"; custom.textContent = "✎ 自定义（在右侧填写）";
+  sel.appendChild(custom);
+}
+
+function _provApplyPreset(id) {
+  const p = _provPresets[id];
+  if (!p) return;
+  $("#provStyle").value = p.api_style || "openai";
+  $("#provBaseUrl").value = p.base_url || "";
+  _provFillModels(p.models, "");
+  $("#provCustomModel").value = "";
+}
+
+async function loadProviders(slot) {
+  if (slot) currentProvSlot = slot;
+  const d = await GET("/api/providers/" + currentProvSlot);
+  _provPresets = (d.presets || {});
+  const sel = $("#provPreset");
+  sel.innerHTML = '<option value="">— 选择厂商 —</option>';
+  Object.keys(_provPresets).forEach(id => {
+    const o = document.createElement("option");
+    o.value = id; o.textContent = _provPresets[id].label || id;
+    sel.appendChild(o);
+  });
+  $("#provSlot").value = d.slot || currentProvSlot;
+  const cur = d.current;
+  const label = ({ main: "主模型", vision: "视觉模型", role: "角色模型" })[d.slot] || "当前模型";
+  if (cur) {
+    if (cur.preset && _provPresets[cur.preset]) sel.value = cur.preset;
+    else sel.value = "";
+    $("#provStyle").value = cur.api_style || "openai";
+    $("#provBaseUrl").value = cur.base_url || "";
+    _provFillModels((_provPresets[cur.preset] || {}).models || [], cur.model);
+    if (cur.model) $("#provCustomModel").value = cur.model;
+    $("#provKey").value = "";  // 不回显密钥
+    $("#provMsg").textContent = "当前" + label + "：" + cur.model + "（改 Key 留空即不修改）";
+  } else {
+    $("#provMsg").textContent = "尚未配置" + label + "供应商，使用系统内建默认值。";
+  }
+}
+
+function _provPresetChange() {
+  _provApplyPreset($("#provPreset").value);
+}
+
+async function saveProvider() {
+  const preset = $("#provPreset").value;
+  const model = $("#provModel").value === "__custom__" ? "" : $("#provModel").value;
+  const payload = {
+    preset,
+    api_style: $("#provStyle").value,
+    base_url: $("#provBaseUrl").value.trim(),
+    api_key: $("#provKey").value,
+    model,
+    custom_model: $("#provCustomModel").value.trim(),
+  };
+  const btn = $("#btnSaveProvider");
+  btn.disabled = true;
+  try {
+    const r = await POST("/api/providers/" + currentProvSlot, payload);
+    if (!r.ok) throw new Error(r.error || "保存失败");
+    const label = ({ main: "主模型", vision: "视觉模型", role: "角色模型" })[currentProvSlot] || "模型";
+    $("#provMsg").textContent = "已保存并热重载 ✓ " + label + "：" + r.model +
+      "｜路由：" + (r.routing || []).join(" → ");
+    toast(label + "已切换并热重载");
+  } catch (e) {
+    toast(e.message, true);
+    $("#provMsg").textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function cfgItem(it) {
@@ -745,6 +833,12 @@ $("#btnSaveConfig").addEventListener("click", async () => {
   } catch (e) { toast(e.message, true); }
   btn.disabled = false;
 });
+
+// ----- 模型供应商 -----
+$("#provSlot").addEventListener("change", e =>
+  loadProviders(e.target.value).catch(err => toast(err.message, true)));
+$("#provPreset").addEventListener("change", _provPresetChange);
+$("#btnSaveProvider").addEventListener("click", saveProvider);
 
 /* ---------------- 外观设置（主题色 + 窗口标题） ---------------- */
 const appearance = { theme: "midnight", title: "肥鱼娘 · App 控制台", themes: {}, vars: {} };
@@ -901,6 +995,125 @@ $("#btnResetTitle").addEventListener("click", () => {
   $("#titlePreview").textContent = "肥鱼娘 · App 控制台";
 });
 
+/* ---------------- 构建助手（内置 Agent：生成智能体/插件的产物） ---------------- */
+const builder = { mode: "agent", last: null };
+// 模型预设：flash=轻思考；v4-pro=强思考（自动开启 think）
+const BLD_MODELS = {
+  "deepseek-flash": { think: false },
+  "deepseek-v4-pro": { think: true },
+};
+
+function _bldModelSel() {
+  const m = $("#bldModel").value || "deepseek-flash";
+  return { model: m, think: BLD_MODELS[m] ? BLD_MODELS[m].think : false };
+}
+
+async function loadBuilder() {
+  // 恢复上次选择的模型/思考强度
+  const saved = localStorage.getItem("bld_model");
+  if (saved && $("#bldModel").querySelector('option[value="' + saved + '"]')) {
+    $("#bldModel").value = saved;
+  }
+}
+
+function _bldModeSwitch(mode) {
+  builder.mode = mode;
+  $$("#page-builder .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
+  const isP = mode === "plugin";
+  $("#bldPluginOpts").style.display = isP ? "flex" : "none";
+  $("#bldTitle").textContent = isP ? "用一句话描述你要的插件" : "用一句话描述你要的智能体";
+  $("#bldHint").textContent = isP
+    ? "例如：「一个定时提醒插件，按 config_schema 让用户填提醒间隔（分钟）和提醒语」"
+    : "例如：「一个毒舌但心软的猫娘客服，负责回答产品问题，绑定我的 QQ 私聊」";
+  $("#bldInput").placeholder = isP ? "描述你要的插件功能…" : "描述你要的智能体…";
+}
+
+function _bldShowResult(data) {
+  const isP = builder.mode === "plugin";
+  $("#bldResult").classList.remove("hidden");
+  $("#bldAgentJson").classList.toggle("hidden", isP);
+  $("#bldPluginBox").classList.toggle("hidden", !isP);
+  $("#bldValidate").textContent = "";
+  if (isP) {
+    $("#bldManifest").value = JSON.stringify(data, null, 2);
+    $("#bldCode").value = data.code || "";
+  } else {
+    $("#bldAgentJson").value = JSON.stringify(data, null, 2);
+  }
+}
+
+async function _bldGenerate() {
+  const req = $("#bldInput").value.trim();
+  if (!req) return toast("先描述一下需求", true);
+  const btn = $("#bldGen");
+  btn.disabled = true; btn.textContent = "生成中…（LLM 约 10-30s）";
+  $("#bldStatus").textContent = "";
+  try {
+    const msel = _bldModelSel();
+    localStorage.setItem("bld_model", msel.model);
+    let r;
+    if (builder.mode === "agent") {
+      r = await POST("/api/builder/agent/generate", { requirement: req, model: msel.model, think: msel.think });
+    } else {
+      r = await POST("/api/builder/plugin/generate", { requirement: req, kind: $("#bldKind").value, model: msel.model, think: msel.think });
+    }
+    if (!r.ok) throw new Error(r.error || "生成失败");
+    builder.last = r.data;
+    _bldShowResult(r.data);
+    const rounds = r.rounds || 1;
+    $("#bldValidate").textContent = rounds > 1
+      ? "✓ 已通过系统干加载校验（" + rounds + " 轮自校正后通过）"
+      : "✓ 已通过系统干加载校验（编译→导入→实例化→契约检查）";
+    toast("已生成，可编辑后保存");
+  } catch (e) {
+    toast(e.message, true);
+    $("#bldStatus").textContent = e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = "生成";
+  }
+}
+
+async function _bldSave() {
+  const btn = $("#bldSave");
+  btn.disabled = true; btn.textContent = "保存中…";
+  $("#bldSaveMsg").textContent = "";
+  try {
+    let r;
+    if (builder.mode === "agent") {
+      let data;
+      try { data = JSON.parse($("#bldAgentJson").value); }
+      catch (e) { throw new Error("agent.json 编辑后不是合法 JSON"); }
+      r = await POST("/api/builder/agent/save", { data });
+    } else {
+      let manifest;
+      try { manifest = JSON.parse($("#bldManifest").value); }
+      catch (e) { throw new Error("manifest.json 编辑后不是合法 JSON"); }
+      r = await POST("/api/builder/plugin/save", { name: manifest.name, manifest, code: $("#bldCode").value });
+    }
+    if (!r.ok) throw new Error(r.error || "保存失败");
+    if (builder.mode === "agent") {
+      $("#bldSaveMsg").textContent = "已保存智能体：" + r.id;
+      toast("智能体已保存");
+    } else {
+      $("#bldSaveMsg").textContent = "已写入插件包：" + r.name + "（可在「插件」页重新扫描后启用）";
+      toast("插件已写入插件库");
+    }
+  } catch (e) {
+    toast(e.message, true);
+    $("#bldSaveMsg").textContent = e.message;
+  } finally {
+    btn.disabled = false; btn.textContent = "保存到系统";
+  }
+}
+
+async function _bldCopy() {
+  let txt = builder.mode === "plugin"
+    ? "manifest.json:\n" + $("#bldManifest").value + "\n\nplugin.py:\n" + $("#bldCode").value
+    : $("#bldAgentJson").value;
+  try { await navigator.clipboard.writeText(txt); toast("已复制"); }
+  catch { toast("复制失败，请手动选择", true); }
+}
+
 /* ---------------- 启动 ---------------- */
 window.addEventListener("DOMContentLoaded", async () => {
   connectSSE();
@@ -920,4 +1133,10 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#cfgClose2").addEventListener("click", closeCfgModal);
   $("#cfgSave").addEventListener("click", savePluginConfig);
   $("#bgDim").addEventListener("click", closeCfgModal);
+  // ----- 构建助手 -----
+  $$("#page-builder .seg-btn").forEach(b => b.addEventListener("click", () => _bldModeSwitch(b.dataset.mode)));
+  $("#bldGen").addEventListener("click", _bldGenerate);
+  $("#bldSave").addEventListener("click", _bldSave);
+  $("#bldCopy").addEventListener("click", _bldCopy);
+  _bldModeSwitch("agent");
 });

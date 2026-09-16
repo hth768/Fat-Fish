@@ -228,3 +228,9 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .cfg-label .hint { font-weight: 400; display: block; margin-top: 2px; }
 .cfg-control { margin-top: 6px; }
 .cfg-control .input, .cfg-control .select, .cfg-control .textarea { width: 100%; }
+
+/* ===== 构建助手 ===== */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg-btn { background: transparent; border: none; color: var(--muted); padding: 7px 16px; cursor: pointer; font-size: 13px; }
+.seg-btn.active { background: var(--accent); color: #fff; }
+.code { font-family: "Cascadia Code", "Consolas", "SFMono-Regular", "Menlo", "monospace"; font-size: 12.5px; line-height: 1.5; white-space: pre; tab-size: 4; }

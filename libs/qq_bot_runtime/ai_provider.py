@@ -248,8 +248,16 @@ class UnifiedLLM:
     async def _call_once(self, name, prov, messages, capability, model,
                          think, tools, images, timeout,
                          role: Optional[str] = None) -> object:
+        # api_style: "openai"（默认，/chat/completions）或 "anthropic"（/v1/messages）
+        api_style = (prov.get("api_style") or "openai").lower()
         if images:
-            messages = self._inject_images(messages, images)
+            if api_style == "anthropic":
+                messages = self._inject_images_anthropic(messages, images)
+            else:
+                messages = self._inject_images(messages, images)
+        if api_style == "anthropic":
+            return await self._call_anthropic(name, prov, messages, capability,
+                                              model, think, tools, timeout, role)
 
         payload = self._build_payload(prov, messages, capability, model,
                                       think, tools, role)
@@ -293,6 +301,111 @@ class UnifiedLLM:
             return msg
         return msg["content"]
 
+    # ---- Anthropic 兼容路径（Messages API）----
+    @staticmethod
+    def _inject_images_anthropic(messages, images) -> list:
+        """把图片注入到最后一条 user 消息（Anthropic image 块格式）。"""
+        new = [dict(m) for m in messages]
+        last = new[-1]
+        blocks = []
+        if isinstance(last.get("content"), str):
+            blocks.append({"type": "text", "text": last["content"]})
+        for img in images:
+            b64 = base64.b64encode(img).decode("utf-8")
+            blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+            })
+        new[-1] = {"role": last["role"], "content": blocks}
+        return new
+
+    def _build_anthropic_payload(self, prov, messages, capability, model,
+                                 think, tools, role) -> dict:
+        sys_parts = []
+        convo = []
+        for m in messages:
+            r = m.get("role")
+            c = m.get("content")
+            if r == "system":
+                sys_parts.append(c if isinstance(c, str) else str(c))
+                continue
+            if isinstance(c, list):  # 已含 image 块的 content
+                convo.append({"role": r, "content": c})
+            else:
+                convo.append({"role": r, "content": str(c) if c is not None else ""})
+        max_tokens = int(prov.get("max_tokens", 4096))
+        payload = {
+            "model": self._model_for(prov, capability, model, role),
+            "max_tokens": max_tokens,
+            "messages": convo,
+            "stream": False,
+        }
+        if sys_parts:
+            payload["system"] = "\n".join(sys_parts)
+        if think:
+            budget = int(prov.get("think_budget", 4096))
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            payload["max_tokens"] = max(max_tokens, budget + 1024)
+        if tools:
+            payload["tools"] = [
+                {
+                    "name": t["function"]["name"],
+                    "description": t["function"].get("description", ""),
+                    "input_schema": t["function"].get("parameters", {}),
+                }
+                for t in (tools or []) if t.get("type") == "function"
+            ]
+        extra = prov.get("extra_body")
+        if extra:
+            payload.update(extra)
+        return payload
+
+    async def _call_anthropic(self, name, prov, messages, capability, model,
+                              think, tools, timeout, role=None) -> object:
+        payload = self._build_anthropic_payload(prov, messages, capability,
+                                                model, think, tools, role)
+        headers = {
+            "x-api-key": prov["api_key"],
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+        t0 = time.perf_counter()
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            resp = await client.post(
+                prov["base_url"].rstrip("/") + "/v1/messages",
+                json=payload, headers=headers,
+            )
+            if resp.status_code != 200:
+                raise ProviderError(f"{name} {resp.status_code}: {resp.text[:400]}")
+            data = resp.json()
+        dt_ms = (time.perf_counter() - t0) * 1000
+        st = self.stats.get(name)
+        usage = data.get("usage") or {}
+        tp = int(usage.get("input_tokens") or 0)
+        tc = int(usage.get("output_tokens") or 0)
+        if st is not None:
+            st["ok"] += 1
+            st["latency_ms"] += dt_ms
+            st["tokens_prompt"] += tp
+            st["tokens_completion"] += tc
+        telemetry.record_ok("providers", name, dt_ms, tp, tc)
+        blocks = data.get("content", [])
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        if tools:
+            tool_calls = []
+            for b in blocks:
+                if b.get("type") == "tool_use":
+                    tool_calls.append({
+                        "id": b.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": b.get("name"),
+                            "arguments": json.dumps(b.get("input", {}), ensure_ascii=False),
+                        },
+                    })
+            return {"role": "assistant", "content": text or "", "tool_calls": tool_calls}
+        return text
+
     # ---- 对外主入口（含故障转移）----
     async def chat(self, messages: list, capability: str = "chat",
                    model: Optional[str] = None, think: bool = False,
@@ -302,7 +415,8 @@ class UnifiedLLM:
         # role 在 capability 之上再细化：可覆盖 capability 与 model，缺省则回退到参数。
         cap, mdl = capability, model
         if role:
-            rr = load_provider_config().get("role_routing", {}).get(role)
+            role_routing = load_provider_config().get("role_routing", {}) or {}
+            rr = role_routing.get(role) or (role_routing.get("*") if role else None)
             if rr:
                 cap = rr.get("capability", cap)
                 mdl = rr.get("model") or mdl
@@ -391,6 +505,7 @@ class UnifiedVision:
         cfg = load_provider_config()
         self.routing = cfg["vision_routing"]
         self.role_routing = cfg["role_routing"]
+        self._use_llm_vision = self._vision_slot_enabled(cfg)
         self.stats = {
             a: {"calls": 0, "ok": 0, "fail": 0, "latency_ms": 0, "last_error": None}
             for a in self.drivers
@@ -401,6 +516,7 @@ class UnifiedVision:
         cfg = load_provider_config(reset_cache=True)
         self.routing = cfg["vision_routing"]
         self.role_routing = cfg["role_routing"]
+        self._use_llm_vision = self._vision_slot_enabled(cfg)
         for a in self.drivers:
             self.stats.setdefault(a, {"calls": 0, "ok": 0, "fail": 0,
                                       "latency_ms": 0, "last_error": None})
@@ -436,7 +552,21 @@ class UnifiedVision:
                 print(f"[VISION] 驱动 {alias} 任务={task} 失败: {e}，尝试下一个")
         raise ProviderError(f"所有视觉驱动均失败(任务={task}): {last}")
 
+    @staticmethod
+    def _vision_slot_enabled(cfg):
+        # 仅当用户通过「视觉模型」槽位配置了自定义供应商（名为 vision 且含 Key）时，
+        # 才把单图描述路由到 ai_provider 的 vision 能力；否则继续用 GLM/Gemini 专用驱动。
+        vr = (cfg.get("capability_routing") or {}).get("vision") or []
+        if "vision" not in vr:
+            return False
+        return bool((cfg.get("providers") or {}).get("vision", {}).get("api_key"))
+
     async def describe_image(self, image_bytes: bytes, prompt: str = "") -> str:
+        if self._use_llm_vision:
+            try:
+                return await get_llm().describe_image(image_bytes, prompt, capability="vision")
+            except Exception as e:
+                print(f"[VISION] LLM 视觉供应商失败，回退专用驱动: {e}")
         return await self._dispatch("image", "describe_image", image_bytes, prompt)
 
     async def describe_gif_animation(self, image_bytes: bytes) -> str:
