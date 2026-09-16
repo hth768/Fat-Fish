@@ -48,8 +48,6 @@ feiyu_standalone/
 └── data/                  # 运行数据（用户隐私，git 忽略）
 ```
 
-> **两份 bot 引擎**：捆绑版 `libs/qq_bot_runtime`（随仓库）与独立版 `e:\qq_bot`（仓库外）是同一套代码的两份副本。改 bot 逻辑须两份同步，否则运行版与独立版行为会不一致。
-
 ## 快速开始
 
 ### 便携版（推荐，Windows）
@@ -60,11 +58,10 @@ feiyu_standalone/
 
 ### 从源码运行（开发者）
 ```powershell
-# 让 App 复用某个 qq_bot 运行时（不指定则用默认优先级探测）
-$env:FEIYU_QQ_BOT = "e:\qq_bot"      # 或任意含 config.py 的 qq_bot 目录
+# 让 App 复用本仓库捆绑的 qq_bot 运行时（默认即指向 libs/qq_bot_runtime）
+$env:FEIYU_QQ_BOT = "libs/qq_bot_runtime"
 python app.py --with-core
 ```
-运行时位置解析优先级：`$env:FEIYU_QQ_BOT` → `f:/feiyu_app/runtime/qq_bot` → `f:/qq_bot`。
 
 窗口关闭即退出。HTTP 服务仅本机可访问（`SO_EXCLUSIVEADDRUSE` 保证单实例）。
 
