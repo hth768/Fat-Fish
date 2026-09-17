@@ -39,6 +39,22 @@ _LIGHT = {
     "--muted": "#6b7589", "--ok": "#1fae6f", "--warn": "#d9942b",
     "--err": "#e05454",
 }
+# 各暗色主题专属暗色调色板（在 _DARK 基础上按色相偏移，使切换后整体观感明显区分，
+# 而非仅换强调色）。midnight 用基准 _DARK，不在本表内。
+_DARK_VARIANTS = {
+    "aurora":  {"--bg": "#100e1c", "--bg2": "#15132a", "--panel": "#1b1832",
+                "--panel2": "#211d3a", "--line": "#2e2a48", "--text": "#e0ddf2", "--muted": "#968fad"},
+    "forest":  {"--bg": "#0c1611", "--bg2": "#101d16", "--panel": "#142219",
+                "--panel2": "#18271d", "--line": "#243a2c", "--text": "#d6e6df", "--muted": "#87a395"},
+    "rose":    {"--bg": "#160e14", "--bg2": "#1d131a", "--panel": "#211821",
+                "--panel2": "#281d27", "--line": "#3a2836", "--text": "#f1dde6", "--muted": "#ad8fa2"},
+    "sunset":  {"--bg": "#160f0a", "--bg2": "#1d150f", "--panel": "#211a14",
+                "--panel2": "#281e16", "--line": "#3a2c20", "--text": "#f0e2d6", "--muted": "#ad9787"},
+    "ocean":   {"--bg": "#0a1416", "--bg2": "#0f1d20", "--panel": "#122225",
+                "--panel2": "#162a2e", "--line": "#203a3f", "--text": "#d6e6e8", "--muted": "#87a3a8"},
+    "crimson": {"--bg": "#160c0e", "--bg2": "#1d1215", "--panel": "#211519",
+                "--panel2": "#281c20", "--line": "#3a2429", "--text": "#f1dde0", "--muted": "#ad8f95"},
+}
 # 强调色（主 / 次）
 _ACCENTS = {
     "midnight": ("#4f8cff", "#6ea8ff"),
@@ -67,7 +83,7 @@ def _build_vars(theme: str) -> dict:
     if theme == "light":
         base = dict(_LIGHT)
     else:
-        base = dict(_DARK)
+        base = dict(_DARK_VARIANTS.get(theme, _DARK))
     ac = _ACCENTS.get(theme, _ACCENTS["midnight"])
     base["--accent"] = ac[0]
     base["--accent2"] = ac[1]
