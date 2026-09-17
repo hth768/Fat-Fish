@@ -37,7 +37,7 @@ body.sidebar-collapsed .page-head { padding-left: 44px; }
 /* 侧边栏 拉出/收回 切换按钮 */
 .sidebar-toggle {
   position: fixed; top: 14px; left: 132px; z-index: 130;
-  height: 34px; min-width: 56px; padding: 0 14px; border-radius: 9px;
+  height: 34px; min-width: 64px; padding: 0 14px; border-radius: 9px;
   border: 1px solid var(--line); background: var(--panel); color: var(--text);
   cursor: pointer; font-size: 13px; font-weight: 600; line-height: 32px;
   white-space: nowrap; text-align: center;

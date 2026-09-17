@@ -1371,7 +1371,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (!btn) return;
     function apply(collapsed) {
       document.body.classList.toggle("sidebar-collapsed", collapsed);
-      btn.textContent = collapsed ? "拉出" : "收回"; // 拉出 / 收回
+      btn.textContent = collapsed ? "☰ 拉出" : "« 收回"; // 符号 + 文字
       btn.title = collapsed ? "展开侧边栏" : "收起侧边栏";
     }
     let collapsed = false;
