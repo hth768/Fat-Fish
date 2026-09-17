@@ -31,6 +31,33 @@ def build_memory_messages(user_id: str = "", include: dict = None) -> list:
     """
     include = include or {}
     msgs = []
+    speaker_label = include.get("speaker_label") or ""
+
+    # 0. 身份锚点（防串台降级）
+    # user_id 非空时，下面的档案/笔记等会按 uid 注入具体身份；
+    # 但当 user_id 为空（如匿名/缺失身份）时，原四个守卫会整段跳过，
+    # 导致 AI 完全失去“当前是谁在说话”的锚点，从而把其它会话/来源记忆串进来。
+    # 降级：用 channel/session 级兜底称呼 speaker_label 给一条显式身份说明，
+    # 即使查不到档案，也明确“这是谁、且不要串台”。
+    if not user_id:
+        if speaker_label:
+            msgs.append({
+                "role": "system",
+                "content": (
+                    f"【当前对话对象】本次对话的说话人标识为「{speaker_label}」。"
+                    f"请仅依据本次对话与下方记忆上下文回应，"
+                    f"不要把其它会话或来源的记忆/身份混入到这里。"
+                ),
+            })
+        else:
+            msgs.append({
+                "role": "system",
+                "content": (
+                    "【当前对话对象】本次对话说话人身份未知（未提供 user_id 与说话人标识）。"
+                    "请仅依据本次对话内容回应，不要臆测对方身份，"
+                    "也不要把其它会话的记忆/身份混入到这里。"
+                ),
+            })
 
     # 1. 人物档案（该用户的长期记忆）
     if include.get("profile", config.ENABLE_PROFILE) and user_id:

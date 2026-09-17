@@ -1299,10 +1299,21 @@ class ChatService:
             quote_hint = "用户引用了上一条消息，请针对这条被引用的消息回应：\n" + "\n".join(quote_parts)
             messages.append({"role": "system", "content": quote_hint})
 
+        # 说话人标识（防串台降级）：优先真实称呼，其次 user_name，再次 channel 兜底，最后 "用户"
+        # 既用于下方记忆注入的身份锚点，也用于待会儿给每条 user 消息打标签。
+        try:
+            from emotion import resolve_display_name
+            speaker_label = (resolve_display_name(user_id) or user_name or user_id
+                             or (f"{channel_type}对话对象" if channel_type else "对话对象")
+                             or "用户")
+        except Exception:
+            speaker_label = user_name or user_id or "用户"
+
         # 注入完整记忆库
         try:
             from memory_context import build_memory_messages
-            memory_msgs = build_memory_messages(user_id, include={"history": False})
+            memory_msgs = build_memory_messages(
+                user_id, include={"history": False, "speaker_label": speaker_label})
             messages.extend(memory_msgs)
         except Exception as e:
             print(f"[WARN] 记忆注入失败: {e}")
@@ -1572,6 +1583,26 @@ class ChatService:
                     messages.append({"role": "system", "content": mood_hint})
             except Exception as e:
                 print(f"[EMOTION] 心情提示注入失败: {e}")
+
+        # 防串台：给每条 user 消息打上「说话人」标签。
+        # 上下文虽按 (channel, channel_id, user_id) 隔离，但当 user_id 为空/被多会话共用、
+        # 或旧会话残留混入时，模型无法从单条 role:user 消息判断是谁在说话，从而串台。
+        # 每次请求都把当前说话人标识注入到每条 user 消息，确保身份始终明确。
+        # 注意：这里构建新的列表，不改动 self.memory 中已持久化的历史 dict。
+        try:
+            _spk = speaker_label  # 复用上方构造的说话人标识（已含降级兜底）
+            _labeled = []
+            for _m in messages:
+                if _m.get("role") == "user":
+                    _c = _m.get("content", "")
+                    if not isinstance(_c, str):
+                        _c = str(_c)
+                    _labeled.append({"role": "user", "content": f"[{_spk}] {_c}"})
+                else:
+                    _labeled.append(_m)
+            messages = _labeled
+        except Exception as e:
+            print(f"[WARN] 说话人标签注入失败（不影响主流程）: {e}")
 
         # 调用模型（统一供应商：推理走 reasoning，否则 chat）
         reply_text = await self.llm.chat(
