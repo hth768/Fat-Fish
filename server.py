@@ -83,6 +83,7 @@ def make_handler(bridge):
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             try:
                 self.wfile.write(data)

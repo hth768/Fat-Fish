@@ -36,6 +36,8 @@
 ## 外观自定义（已合入仓库 7c68046，origin/main 同步）
 - `bridge/appearance_api.py`（原名 appearance.py，因 import 名不符已 git mv 改名）：THEMES 8 套、JSON 存 `data/appearance.json`、背景图原始字节经 `server.py._serve_raw`。
 - WebUI：`webui/index.html|app.js|styles.css`，侧栏"外观"，pywebview `js_api.set_title` 实时改标题栏。
+- **静态资源缓存坑（重要）**：`server.py._serve_static` 服务 `index.html/app.js/styles.css` 时**必须带 `Cache-Control: no-store`**。WebView2 会缓存旧的 CSS/JS，导致「代码已上线但用户看不到改动」（曾发生：加了侧边栏切换按钮，用户反馈看不到——根因就是缺 no-store，WebView2 用了旧缓存）。每次改 `webui/` 后，除同步 `E:/feiyu_app`，务必**重启实例让窗口重开**以重新加载最新资源。
+- 侧边栏折叠：`index.html` 有常驻浮动按钮 `#sidebarToggle`；`app.js` 切换 `body.sidebar-collapsed`，CSS 用 `.sidebar{margin-left:-216px}` 平滑移出、状态存 `localStorage`。
 
 ## git 提交规范（PowerShell 中文坑）
 - 环境：Windows + PowerShell 5.1，git 默认 `i18n.commitEncoding=utf-8`。PowerShell 以 **GBK** 代码页传中文参数给 git → 中文 commit message 会**乱码存储**（chcp 65001 后仍乱码即说明已存乱码）。
