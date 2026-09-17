@@ -1363,4 +1363,24 @@ window.addEventListener("DOMContentLoaded", async () => {
       toast("外部智能体已接入");
     } catch (err) { msg.textContent = err.message; }
   });
+
+  // ===== 侧边栏 拉出 / 收回 =====
+  (function () {
+    const KEY = "sidebar-collapsed";
+    const btn = $("#sidebarToggle");
+    if (!btn) return;
+    function apply(collapsed) {
+      document.body.classList.toggle("sidebar-collapsed", collapsed);
+      btn.textContent = collapsed ? "☰" : "«"; // ☰ 拉出 / « 收回
+      btn.title = collapsed ? "展开侧边栏" : "收起侧边栏";
+    }
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(KEY) === "1"; } catch (e) { }
+    apply(collapsed);
+    btn.addEventListener("click", () => {
+      collapsed = !collapsed;
+      apply(collapsed);
+      try { localStorage.setItem(KEY, collapsed ? "1" : "0"); } catch (e) { }
+    });
+  })();
 });

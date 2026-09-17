@@ -20,14 +20,31 @@ body {
   background: var(--bg); color: var(--text); font-size: 14px;
 }
 .hidden { display: none !important; }
-.layout { display: flex; height: 100vh; }
+.layout { display: flex; height: 100vh; overflow: hidden; }
 
 /* ---------- 侧栏 ---------- */
 .sidebar {
   width: 216px; flex-shrink: 0; background: var(--bg2);
   border-right: 1px solid var(--line);
   display: flex; flex-direction: column; padding: 18px 12px;
+  transition: margin-left .25s ease;
 }
+/* 侧边栏收回：整体左移出视口，主区自动占满，不遮挡内容 */
+body.sidebar-collapsed .sidebar { margin-left: -216px; }
+/* 收回时给页面头部让出按钮空间，避免标题被浮动按钮遮挡 */
+body.sidebar-collapsed .page-head { padding-left: 44px; }
+
+/* 侧边栏 拉出/收回 切换按钮 */
+.sidebar-toggle {
+  position: fixed; top: 14px; left: 174px; z-index: 60;
+  width: 34px; height: 34px; border-radius: 9px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  cursor: pointer; font-size: 16px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: left .25s ease, background .15s ease;
+}
+.sidebar-toggle:hover { background: var(--panel2); }
+body.sidebar-collapsed .sidebar-toggle { left: 12px; }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; }
 .brand-icon {
   width: 42px; height: 42px; border-radius: 12px; font-size: 22px;
