@@ -17,7 +17,8 @@ libs/offline_deps_vox.zip
 pvz_games/
 
 # ===== 运行数据（用户隐私，不入库）=====
-data/
+# 注意：只忽略根目录的运行时数据，不要误伤源码里的 data/ 包
+/data/
 *.log
 # 智能体记忆命名空间（运行期生成，含用户隐私）
 libs/qq_bot_runtime/agents/*/memory/
@@ -44,7 +45,19 @@ libs/qq_bot_runtime/runtime/python/Lib/site-packages/
 libs/qq_bot_runtime/runtime/python/Scripts/
 
 # ===== 安卓构建产物（编译输出，非源码，不入库）=====
-feiyu-android/
+# 注意：只忽略产物，源码要入库
+feiyu-android/build/
+feiyu-android/app/build/
+feiyu-android/.gradle/
+feiyu-android/.idea/
+feiyu-android/local.properties
+feiyu-android/gradlew
+feiyu-android/gradlew.bat
+feiyu-android/gradle/wrapper/gradle-wrapper.jar
+feiyu-android/captures/
+feiyu-android/*.iml
+feiyu-android/*.hprof
+feiyu-android/hs_err_pid*.log
 
 # ===== 根目录临时调试/测试脚本（本地用，不入库）=====
 _deps.py

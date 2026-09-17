@@ -1,0 +1,4 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- 启动主题，进入后由 Compose 接管 -->
+    <style name="Theme.Feiyu" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
