@@ -36,11 +36,11 @@ body.sidebar-collapsed .page-head { padding-left: 44px; }
 
 /* 侧边栏 拉出/收回 切换按钮 */
 .sidebar-toggle {
-  position: fixed; top: 14px; left: 138px; z-index: 130;
-  height: 34px; padding: 0 12px; border-radius: 9px;
+  position: fixed; top: 14px; left: 132px; z-index: 130;
+  height: 34px; min-width: 56px; padding: 0 14px; border-radius: 9px;
   border: 1px solid var(--line); background: var(--panel); color: var(--text);
-  cursor: pointer; font-size: 13px; font-weight: 600; line-height: 1;
-  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 13px; font-weight: 600; line-height: 32px;
+  white-space: nowrap; text-align: center;
   transition: left .25s ease, background .15s ease;
 }
 .sidebar-toggle:hover { background: var(--panel2); }
