@@ -224,7 +224,7 @@ def make_handler(bridge):
                 if path == "/api/appearance":
                     return self._json(appearance_api.get_appearance(
                         (q.get("theme") or [""])[0] or None))
-                if path == "/api/appearance/bg":
+                if path.startswith("/api/appearance/bg"):
                     raw = appearance_api.read_bg()
                     if not raw:
                         return self._serve_raw(b"", "image/png", 404)

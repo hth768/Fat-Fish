@@ -178,7 +178,23 @@ def save(theme: str = None, title: str = None,
             _rm_bg()
         cur["bg"] = u
     _write(cur)
-    return cur
+    bg_url = _bg_url() if cur["bg"] == "local" else cur["bg"]
+    return {**cur, "bg_url": bg_url}
+
+
+def _bg_url() -> str:
+    """本地背景图的带版本 URL（基于文件修改时间）。
+
+    用于强制前端/WebView2 在重新上传后刷新缓存：每次上传都会更新文件
+    mtime，URL 随之变化，浏览器不会命中旧图缓存。无本地背景图时返回空串。
+    """
+    if not os.path.exists(BG_PATH):
+        return ""
+    try:
+        ts = int(os.path.getmtime(BG_PATH))
+    except OSError:
+        ts = 0
+    return "/api/appearance/bg?v=%d" % ts
 
 
 def read_bg() -> bytes:
@@ -196,6 +212,7 @@ def get_appearance(theme: str = None) -> dict:
         "theme": cur["theme"],
         "title": cur["title"],
         "bg": cur["bg"],
+        "bg_url": _bg_url() if cur["bg"] == "local" else cur["bg"],
         "themes": THEMES,
         "vars": _build_vars(name),
     }

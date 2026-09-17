@@ -919,25 +919,25 @@ async function loadAppearance() {
   try {
     const d = await GET("/api/appearance");
     appearance.theme = d.theme; appearance.title = d.title; appearance.bg = d.bg || "";
+    appearance.bg_url = d.bg_url || "";
     appearance.themes = d.themes || {}; appearance.vars = d.vars || {};
     applyVars(appearance.vars);
     applyTitle(d.title);
-    applyBg(appearance.bg);
-    setBgPreview(appearance.bg);
+    applyBg(appearance.bg_url);
+    setBgPreview(appearance.bg_url);
     renderThemeGrid();
     $("#titleInput").value = d.title;
     $("#titlePreview").textContent = d.title;
   } catch (e) { /* 兜底用 CSS 默认主题 */ }
 }
 
-function applyBg(bg) {
+function applyBg(url) {
   const body = document.body, dim = $("#bgDim");
-  if (!bg) {
+  if (!url) {
     body.style.backgroundImage = "";
     if (dim) dim.style.display = "none";
     return;
   }
-  const url = bg === "local" ? "/api/appearance/bg" : bg;
   body.style.backgroundImage = `url("${url}")`;
   body.style.backgroundSize = "cover";
   body.style.backgroundPosition = "center";
@@ -945,12 +945,12 @@ function applyBg(bg) {
   if (dim) dim.style.display = "block";
 }
 
-function setBgPreview(bg) {
+function setBgPreview(url) {
   const el = $("#bgPreview");
   if (!el) return;
-  if (!bg) { el.style.display = "none"; el.style.backgroundImage = ""; return; }
+  if (!url) { el.style.display = "none"; el.style.backgroundImage = ""; return; }
   el.style.display = "block";
-  el.style.backgroundImage = `url("${bg === "local" ? "/api/appearance/bg" : bg}")`;
+  el.style.backgroundImage = `url("${url}")`;
 }
 
 async function uploadBg(file) {
@@ -962,7 +962,8 @@ async function uploadBg(file) {
   reader.onload = async () => {
     try {
       const r = await POST("/api/appearance", { bg_data: reader.result });
-      appearance.bg = r.bg; applyBg(r.bg); setBgPreview(r.bg);
+      appearance.bg = r.bg; appearance.bg_url = r.bg_url || "";
+      applyBg(appearance.bg_url); setBgPreview(appearance.bg_url);
       msg.textContent = "背景已应用";
     } catch (e) { msg.textContent = (e.message || "上传失败"); }
   };
@@ -983,7 +984,8 @@ $("#btnApplyBgUrl").addEventListener("click", async () => {
   msg.textContent = "应用中…";
   try {
     const r = await POST("/api/appearance", { bg: url });
-    appearance.bg = r.bg; applyBg(r.bg); setBgPreview(r.bg);
+    appearance.bg = r.bg; appearance.bg_url = r.bg_url || "";
+    applyBg(appearance.bg_url); setBgPreview(appearance.bg_url);
     msg.textContent = "背景已应用";
   } catch (e) { msg.textContent = (e.message || "应用失败"); }
 });
@@ -993,7 +995,8 @@ $("#btnClearBg").addEventListener("click", async () => {
   msg.textContent = "清除中…";
   try {
     const r = await POST("/api/appearance", { clear_bg: true });
-    appearance.bg = r.bg; applyBg(r.bg); setBgPreview(r.bg);
+    appearance.bg = r.bg; appearance.bg_url = r.bg_url || "";
+    applyBg(appearance.bg_url); setBgPreview(appearance.bg_url);
     $("#bgUrl").value = "";
     msg.textContent = "已清除背景";
   } catch (e) { msg.textContent = (e.message || "清除失败"); }
