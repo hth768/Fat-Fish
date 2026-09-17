@@ -28,6 +28,10 @@
   - 已实现：在 `_chat_pipeline` 最终 `self.llm.chat` 之前，把每条 `user` 消息的 content 前缀加上 `[当前用户称呼]`（来自 `emotion.resolve_display_name(user_id)`，空则回退 user_id/"用户"）。构建新列表、不改动持久化历史 dict。
   - 用户原话给的两条路："每条消息注入用户信息 **或** 及时清空上下文"。选了前者（注入身份），因为清空上下文会丢连续性，且无法解决多用户共用 key 的问题。
   - 注：`build_memory_messages` 的 profile/notes/persona 注入有 `if user_id` 守卫——user_id 为空时整段跳过，这是串台的另一个隐患点（已靠 user 消息打标签兜底）。
+  - **同步 bot 引擎到独立版 e:\qq_bot 的硬规则**：复制某个模块过去时，必须连带复制它的**全部依赖模块**，否则独立版 `import` 会在首次用到该模块时（常是第一条消息动态导入）才报 `No module named 'xxx'`，而 App 启动（sidecar/NapCat 连接）不触发 → 表现成"能启动但来消息就崩"。
+    - 教训实例：把主仓库新版 `chat_service.py`（顶部 `import agent_ctx`）覆盖进 `e:\qq_bot`，但未同步 `agent_ctx.py` → `E:/feiyu_app` 启动正常、第一条 QQ 消息报 `No module named 'agent_ctx'`。修复=复制 `agent_ctx.py` 到 `e:\qq_bot`。已核对 chat_service 的其它顶层依赖(emotion/emoji_store/identity/long_term_memory/ai_profile/important_notes/knowledge_service/deepseek_client/glm_client/session_manager)在 e:\qq_bot 均存在，仅 agent_ctx 缺失。
+    - 实操：复制前先找出目标模块的所有顶层 `import`/`from`，逐个 `Test-Path e:\qq_bot\<mod>.py` 核对，缺哪个补哪个。
+  - **本地工具路径漂移（WinError 2）**：`e:\qq_bot\config.py` 的 `FFMPEG_PATH` 指向 `F:\ffmpeg-...`，但用户电脑**F: 盘不存在**，ffmpeg 实际在 `E:\ffmpeg-...`（同目录、仅盘符不同）。`bili_learn` 的音频 ASR 经 `subprocess.run([ffmpeg,...])` 调 ffmpeg，路径失效即 `[WinError 2] 系统找不到指定的文件`，降级为"仅用元信息"。修复=把 `FFMPEG_PATH` 的 `F:` 改成 `E:`（仅改这一行，不动真实 Key/QQ 号）。同类：`SILK_V3_DECODER_PATH` 等绝对路径也可能因盘符漂移失效，排错先 `Test-Path` 路径再 `where` 实际程序。
 
 ## 外观自定义（已合入仓库 7c68046，origin/main 同步）
 - `bridge/appearance_api.py`（原名 appearance.py，因 import 名不符已 git mv 改名）：THEMES 8 套、JSON 存 `data/appearance.json`、背景图原始字节经 `server.py._serve_raw`。

@@ -85,7 +85,8 @@ qq_bot 运行时在 2026-09 重构为「**智能体核心 + 插件系统**」：
 | `memory_server.py` / `memory_client.py` | **sidecar（RPC）**：向量记忆等重负载独立进程，掉线自动降级进程内调用 |
 | `service_host.py` | **sidecar 基础设施**：通用本地 RPC 骨架（HTTP + asyncio），不 import 业务模块 |
 | `monitor_server.py` / `monitor_client.py` | **监控 sidecar**：可观测性进程，聚合各 sidecar 健康度 |
-| `ai_provider.py` | **多供应商抽象**：`capability` → 有序供应商列表，调用时故障转移（chat/reasoning/vision/tools） |
+| `ai_provider.py` | **多供应商抽象**：`capability` → 有序供应商列表，调用时故障转移（chat/reasoning/vision/tools）；支持思考强度档位、Anthropic 兼容、配置覆盖层热重载 |
+| `agent_ctx.py` | **多智能体隔离**：基于 `contextvars` 维护「当前智能体」上下文，隔离各 agent 的记忆/身份，避免串台 |
 | `plugin_base.py` | 插件系统：`Plugin` / `PlatformPlugin` / `FeaturePlugin` / `PluginManager` |
 | `message_bus.py` | 消息契约：`InboundMessage` / `ReplyTarget` / `MessageSender` / 事件总线 |
 | `qq_plugin.py` | QQ 平台插件：NapCat WebSocket、OneBot 协议、SILK 语音解码、私聊聚合 |
@@ -194,6 +195,8 @@ python app.py --with-core
 - **对话反思** `reflection_memory.py`：按 `user_id` 键入（空 `user_id` 为全局共享），提炼交互规则。
 - **重要备忘** `important_notes.py`：一次性重要信息。
 
+> **运行期防串台**：记忆主体区分（用户 vs 肥鱼娘）之外，`chat_service` 在**每次模型调用前**给每条 `user` 消息加 `[说话人]` 前缀（`emotion.resolve_display_name`，空则回退 user_id / 频道标识 / "用户"），并在 `user_id` 缺失时于记忆注入处显式标注「当前对话对象」身份锚点——即使身份缺失，也不会把其它会话/来源的记忆混入。配合 `agent_ctx.py` 的多智能体隔离，杜绝跨会话串台。
+
 向量记忆 `vector_memory.py` 经 `memory_server` sidecar 加速（embedding 模型加载、向量检索），开启 `ENABLE_MEMORY_SERVER` 走 RPC，掉线自动降级进程内调用。
 
 ### 总结
@@ -272,6 +275,19 @@ node bridge.js                   # 游戏内「对局域网开放」后填入端
 ## 安卓版
 
 `feiyu-android/`（Kotlin + Jetpack Compose 原生 App）把主包 + 最基础聊天核心移植到手机：聊天核心在端侧直连 DeepSeek / Gemini / GLM / OpenAI 兼容接口，附带本地 TF-IDF 向量记忆（RAG）。构建见该目录 `feiyu-android/README.md`（Android Studio 打开 → `./gradlew assembleDebug` 生成 `app-debug.apk`，minSdk 26 / Android 8.0+）。本机无需 Python 运行时。
+
+---
+
+## 测试 / 回归
+
+仓库自带回归测试套件 `libs/qq_bot_runtime/tests/`（标准库 `unittest`，`run.py` 一键发现并运行），覆盖配置中心（覆盖层合并 / `${ENV}` 解析 / 零回归回落 / 热重载）、启动器 sidecar 管理、记忆浏览、插件注册表、遥测服务、Web 插件 API 等。
+
+```powershell
+# 用装有完整依赖的 Python（cv2 / torch / transformers / Pillow 等）运行；当前 90 项全过
+python libs/qq_bot_runtime/tests/run.py
+```
+
+> 视觉/向量等重依赖模块需在完整依赖环境下测试；若仅用捆绑精简 Python，相关用例可能无法完整加载。CI / 本机验证均建议使用带重依赖的 venv。
 
 ---
 
