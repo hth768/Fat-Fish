@@ -352,6 +352,7 @@
           <div class="bc-tabs">
             <button class="bc-tab active" data-tab="files">工作区</button>
             <button class="bc-tab" data-tab="history">历史</button>
+            <button class="bc-tab" data-tab="settings">设置</button>
           </div>
           <div id="bcPaneFiles" class="bc-pane">
             <div class="bc-bar">
@@ -368,11 +369,42 @@
             </div>
             <div id="bcHistory" class="history-list"></div>
           </div>
+
+          <div id="bcPaneSettings" class="bc-pane hidden">
+            <div class="bc-settings">
+              <div class="cfg-label">工作区位置</div>
+              <input id="bcWs" class="input" placeholder="留空 = 应用目录，例如 E:\\my_project">
+              <div class="row-actions" style="margin-top:6px">
+                <button class="btn ghost sm" id="bcWsApply">应用此目录</button>
+                <button class="btn ghost sm" id="bcWsReset">恢复应用目录</button>
+              </div>
+              <div class="hint wrap" id="bcWsHint"></div>
+
+              <div class="cfg-label" style="margin-top:12px">访问与操作权限</div>
+              <select id="bcPerm" class="select"></select>
+              <div class="hint wrap" id="bcPermHint"></div>
+
+              <div class="cfg-label" style="margin-top:12px">高危操作确认</div>
+              <label class="bc-check"><input type="checkbox" id="bcConfirmOverwrite"><span>覆盖已有文件需确认</span></label>
+              <label class="bc-check"><input type="checkbox" id="bcConfirmSensitive"><span>修改核心代码需确认（bridge/ libs/ webui/ 顶层脚本）</span></label>
+              <label class="bc-check"><input type="checkbox" id="bcConfirmInstall"><span>智能体 / 插件落盘需确认</span></label>
+              <label class="bc-check"><input type="checkbox" id="bcAutoBackup"><span>写入前自动备份到 data/builder_bak/</span></label>
+
+              <div class="cfg-label" style="margin-top:12px">单轮最多工具步数</div>
+              <input id="bcMaxSteps" class="input" type="number" min="1" max="40">
+
+              <div class="row-actions" style="margin-top:12px">
+                <button class="btn primary sm" id="bcSettingsSave">保存设置</button>
+                <span class="hint" id="bcSettingsMsg"></span>
+              </div>
+            </div>
+          </div>
         </aside>
 
         <div class="bc-main">
           <div id="bcChat" class="bc-chat"></div>
           <div class="bc-composer">
+            <div id="bcApprovals" class="bc-approvals hidden"></div>
             <div id="bcCtxBar" class="bc-ctx-bar"></div>
             <textarea id="bcInput" class="textarea" rows="3"
                       placeholder="描述你要做的事，例如：给 bilibili_learn 插件加一个「只学前 5 分钟」的开关（Enter 发送 / Shift+Enter 换行）"></textarea>

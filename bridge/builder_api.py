@@ -145,23 +145,30 @@ MAX_CONTEXT_FILES = 150
 
 def _is_allowed_context_path(abspath: str) -> bool:
     ap = os.path.normcase(os.path.abspath(abspath))
-    root = os.path.normcase(os.path.abspath(APP_DIR))
+    root = os.path.normcase(workspace_root())
     if ap != root and not ap.startswith(root + os.sep):
         return False
     rel = os.path.relpath(ap, root).replace(os.sep, "/")
+    if any(p in _WORKSPACE_DENY for p in rel.split("/")):
+        return False
+    if is_custom_workspace():
+        return True
     return any(rel == d or rel.startswith(d + "/") for d in CONTEXT_ALLOW_DIRS)
 
 
 def list_context_files() -> dict:
-    """列出可作为上下文读取的项目源码文件（安全白名单 + 大小限制）。"""
+    """列出可作为上下文读取的源码文件（随工作区根变化 + 白名单/大小限制）。"""
     out = []
+    root = workspace_root()
+    custom = is_custom_workspace()
+    bases = [root] if custom else [os.path.join(root, d) for d in CONTEXT_ALLOW_DIRS]
     try:
-        for d in CONTEXT_ALLOW_DIRS:
-            base = os.path.join(APP_DIR, d)
+        for base in bases:
             if not os.path.isdir(base):
                 continue
             for dirpath, dirnames, filenames in os.walk(base):
-                dirnames[:] = [n for n in dirnames if n not in CONTEXT_SKIP_DIRS]
+                dirnames[:] = [n for n in dirnames if n not in CONTEXT_SKIP_DIRS
+                               and n not in _WORKSPACE_DENY and not n.startswith(".")]
                 for fn in filenames:
                     if fn.endswith((".py", ".json")) and not fn.endswith(".tmp"):
                         fp = os.path.join(dirpath, fn)
@@ -171,19 +178,21 @@ def list_context_files() -> dict:
                             continue
                         if sz > MAX_CONTEXT_FILE_BYTES:
                             continue
-                        rel = os.path.relpath(fp, APP_DIR).replace(os.sep, "/")
+                        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+                        if any(p in _WORKSPACE_DENY for p in rel.split("/")):
+                            continue
                         out.append({"path": rel, "size": sz})
     except Exception:
         pass
     out.sort(key=lambda x: x["path"])
-    return {"ok": True, "files": out[:MAX_CONTEXT_FILES]}
+    return {"ok": True, "files": out[:MAX_CONTEXT_FILES], "root": root, "is_custom": custom}
 
 
 def read_context_file(rel: str) -> dict:
     """读取单个上下文文件内容（带越权 / 大小保护）。"""
     if not rel or not isinstance(rel, str):
         return {"ok": False, "error": "路径为空"}
-    fp = os.path.normpath(os.path.join(APP_DIR, rel))
+    fp = os.path.normpath(os.path.join(workspace_root(), rel))
     if not _is_allowed_context_path(fp):
         return {"ok": False, "error": "路径不在允许范围内: %s" % rel}
     if not os.path.isfile(fp):
@@ -954,23 +963,29 @@ _MAX_FILE_BYTES = 512 * 1024
 
 
 def _resolve_rooted(rel: str) -> str:
-    """解析相对工作区路径到绝对路径；越界 / 黑名单一律拒绝。"""
+    """解析相对工作区路径到绝对路径；越界 / 黑名单一律拒绝。
+
+    工作区根 = 设置里的 workspace（存在时），否则应用目录。应用目录模式下还要求
+    相对路径落在白名单根内（plugins/ bridge/ webui/ …）；自定义工作区则整棵树放行，
+    仅保留黑名单（.git / data / ai_providers.json 等）与越界校验。
+    """
     rel = (rel or "").replace("\\", "/").lstrip("/")
     if not rel:
         raise ValueError("路径为空")
-    # 路径中任一段不允许落在黑名单内
-    parts = rel.split("/")
-    if any(p in _WORKSPACE_DENY for p in parts):
+    rel = os.path.normpath(rel).replace("\\", "/")
+    if rel.startswith(".."):
+        raise ValueError(f"路径越界: {rel}")
+    deny = set(_WORKSPACE_DENY) | set((load_settings().get("deny_extra") or []))
+    if any(p in deny for p in rel.split("/")):
         raise ValueError(f"禁止访问: {rel}")
-    # 必须落在某个允许的根之内
-    if not any(rel == root or rel.startswith(root + "/") for root in _WORKSPACE_ROOTS):
-        raise ValueError(f"路径必须在允许的根内 ({'/'.join(_WORKSPACE_ROOTS)}): {rel}")
-    abs_path = os.path.join(APP_DIR, rel)
-    abs_path = os.path.abspath(abs_path)
-    # 二次校验：解析后仍必须在 APP_DIR 之下
-    app_abs = os.path.realpath(APP_DIR)
+    if not is_custom_workspace():
+        if not any(rel == root or rel.startswith(root + "/") for root in _WORKSPACE_ROOTS):
+            raise ValueError(f"路径必须在允许的根内 ({'/'.join(_WORKSPACE_ROOTS)}): {rel}")
+    root = workspace_root()
+    abs_path = os.path.abspath(os.path.join(root, rel))
+    real_root = os.path.realpath(root)
     real = os.path.realpath(abs_path)
-    if not (real == app_abs or real.startswith(app_abs + os.sep)):
+    if not (real == real_root or real.startswith(real_root + os.sep)):
         raise ValueError(f"路径越界: {rel}")
     return abs_path
 
@@ -991,27 +1006,40 @@ def _is_text_file(abs_path: str) -> bool:
 
 
 def list_workspace_sync(rel_dir: str = "") -> dict:
-    """列出工作区子目录。rel_dir 必须在白名单根之下；空字符串=根视图（直接列根目录下的允许项）。"""
+    """列出工作区子目录（相对工作区根）。
+
+    应用目录模式下 rel_dir 必须落在白名单根内，根视图只展示白名单根 + 顶层关键文件；
+    自定义工作区模式下整棵树可浏览，仅跳过黑名单。
+    """
+    root = workspace_root()
+    custom = is_custom_workspace()
+    deny = set(_WORKSPACE_DENY) | set((load_settings().get("deny_extra") or []))
     rel_dir = (rel_dir or "").replace("\\", "/").strip("/")
-    if rel_dir and not any(rel_dir == r or rel_dir.startswith(r + "/") for r in _WORKSPACE_ROOTS):
-        return {"ok": False, "error": f"路径必须在白名单根内: {rel_dir}"}
-    base = os.path.join(APP_DIR, rel_dir) if rel_dir else APP_DIR
-    base = os.path.abspath(base)
+    if rel_dir:
+        rel_dir = os.path.normpath(rel_dir).replace("\\", "/")
+        if rel_dir.startswith("..") or any(p in deny for p in rel_dir.split("/")):
+            return {"ok": False, "error": f"禁止访问: {rel_dir}"}
+        if not custom and not any(rel_dir == r or rel_dir.startswith(r + "/") for r in _WORKSPACE_ROOTS):
+            return {"ok": False, "error": f"路径必须在白名单根内: {rel_dir}"}
+    base = os.path.abspath(os.path.join(root, rel_dir)) if rel_dir else root
+    real_root = os.path.realpath(root)
+    real = os.path.realpath(base)
+    if not (real == real_root or real.startswith(real_root + os.sep)):
+        return {"ok": False, "error": f"路径越界: {rel_dir}"}
     if not os.path.isdir(base):
         return {"ok": False, "error": f"目录不存在: {rel_dir or '根'}"}
     out = []
     try:
         for fn in sorted(os.listdir(base)):
             full = os.path.join(base, fn)
-            rel = (os.path.relpath(full, APP_DIR)).replace("\\", "/")
-            if any(part in _WORKSPACE_DENY for part in rel.split("/")):
+            rel = (os.path.relpath(full, root)).replace("\\", "/")
+            if any(part in deny for part in rel.split("/")):
                 continue
-            # 仅展示白名单根下的项
-            if rel_dir == "":
-                if fn not in _WORKSPACE_ROOTS and not fn.endswith((".md", ".txt", ".py", ".json", ".html", ".js", ".css")):
-                    # 根视图只展示白名单根 + 顶层关键文件
-                    if fn not in _WORKSPACE_ROOTS:
-                        continue
+            if rel_dir == "" and not custom:
+                # 应用目录根视图：只展示白名单根 + 顶层关键文件
+                if fn not in _WORKSPACE_ROOTS and not fn.endswith(
+                        (".md", ".txt", ".py", ".json", ".html", ".js", ".css")):
+                    continue
             try:
                 stat = os.stat(full)
                 entry = {
@@ -1026,7 +1054,7 @@ def list_workspace_sync(rel_dir: str = "") -> dict:
                 continue
     except Exception as e:
         return {"ok": False, "error": f"读取失败: {e!r}"}
-    return {"ok": True, "dir": rel_dir, "items": out}
+    return {"ok": True, "dir": rel_dir, "items": out, "root": root, "is_custom": custom}
 
 
 def read_workspace_sync(rel_path: str) -> dict:
@@ -1158,6 +1186,317 @@ CHAT_MAX_STEPS = 14                 # 单轮最多工具步数（防死循环）
 CHAT_TOOL_RESULT_MAX = 6000          # 单条工具结果回喂模型的最大字符数
 CHAT_SEARCH_MAX = 40                 # search_code 最多返回条数
 
+
+# ============================================================================
+# 权限 / 工作区设置 / 高危确认（WorkBuddy 式运作模型）
+# ============================================================================
+# 三层护栏：
+#   1) 工作区位置：读写都被限制在「工作区根」之内（默认=应用目录，可改到任意目录）
+#   2) 访问与操作权限：plan(只读) / default(改动逐条确认) / acceptEdits(普通改动自动)
+#                      / bypassPermissions(完全放行)
+#   3) 高危操作确认：覆盖已有文件、改核心代码、智能体与插件落盘 → 一律进「待确认队列」，
+#      由用户在界面上点「批准」后才执行（批准结果会写回会话，模型下一轮可见）
+SETTINGS_PATH = os.path.join(DATA_DIR, "builder_settings.json")
+APPROVALS_PATH = os.path.join(DATA_DIR, "builder_approvals.json")
+
+PERM_MODES = ("plan", "default", "acceptEdits", "bypassPermissions")
+
+_MODE_DESC = {
+    "plan": "只读规划：可读文件与检索，任何写入都被拒绝（只给方案，不动代码）",
+    "default": "默认：所有写入 / 落盘都进「待确认」，你批准后才执行",
+    "acceptEdits": "自动应用：新建 / 改普通文件自动写入（自动备份）；覆盖已有文件、改核心代码仍需确认",
+    "bypassPermissions": "完全放行：全部自动执行（建议只在临时工作区使用）",
+}
+
+DEFAULT_SETTINGS = {
+    "workspace": "",                    # 空 = 应用目录（APP_DIR）；可指向任意目录
+    "permission_mode": "default",       # 见 PERM_MODES
+    "confirm_overwrite": True,          # 覆盖已有文件需确认
+    "confirm_sensitive": True,          # 修改核心代码（bridge/ libs/ webui/ 顶层脚本）需确认
+    "confirm_install": True,            # 智能体 / 插件落盘需确认
+    "auto_backup": True,                # 写入前自动备份
+    "max_steps": CHAT_MAX_STEPS,        # 单轮最多工具步数
+    "deny_extra": [],                   # 额外禁写路径片段（黑名单追加）
+}
+
+# 核心代码（改动风险高）：顶层脚本 + 这些目录
+_SENSITIVE_PREFIXES = ("bridge/", "libs/", "webui/", "runtime/", "server/")
+
+# 需要走「高危确认」的工具
+WRITE_TOOLS = ("write_file", "save_agent", "save_plugin")
+
+
+def load_settings() -> dict:
+    s = dict(DEFAULT_SETTINGS)
+    try:
+        if os.path.isfile(SETTINGS_PATH):
+            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                s.update({k: v for k, v in d.items() if k in DEFAULT_SETTINGS})
+    except Exception:
+        pass
+    if s.get("permission_mode") not in PERM_MODES:
+        s["permission_mode"] = "default"
+    try:
+        s["max_steps"] = max(1, min(int(s.get("max_steps") or CHAT_MAX_STEPS), 40))
+    except Exception:
+        s["max_steps"] = CHAT_MAX_STEPS
+    if not isinstance(s.get("deny_extra"), list):
+        s["deny_extra"] = []
+    s["deny_extra"] = [str(x).strip() for x in s["deny_extra"] if str(x).strip()][:50]
+    return s
+
+
+def _write_settings(s: dict) -> None:
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = SETTINGS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(s, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, SETTINGS_PATH)
+    except Exception:
+        pass
+
+
+def workspace_root() -> str:
+    """生效的工作区根目录：设置里配的目录存在则用之，否则回退应用目录。"""
+    ws = (load_settings().get("workspace") or "").strip()
+    if ws:
+        try:
+            ap = os.path.abspath(os.path.expanduser(ws))
+            if os.path.isdir(ap):
+                return ap
+        except Exception:
+            pass
+    return os.path.abspath(APP_DIR)
+
+
+def is_custom_workspace() -> bool:
+    return os.path.normcase(workspace_root()) != os.path.normcase(os.path.abspath(APP_DIR))
+
+
+def _sensitive_path(rel: str) -> bool:
+    r = (rel or "").replace("\\", "/").lstrip("/")
+    if "/" not in r:
+        return True                      # 顶层脚本（server.py / app.py / …）
+    return r.startswith(_SENSITIVE_PREFIXES)
+
+
+def get_settings() -> dict:
+    s = load_settings()
+    root = workspace_root()
+    return {"ok": True, "settings": s, "workspace": root,
+            "app_dir": os.path.abspath(APP_DIR), "is_custom": is_custom_workspace(),
+            "modes": [{"id": k, "desc": _MODE_DESC[k]} for k in PERM_MODES],
+            "deny": list(_WORKSPACE_DENY),
+            "pending": len(_load_approvals())}
+
+
+def set_settings(patch: dict) -> dict:
+    """更新设置（白名单字段 + 校验工作区目录）。"""
+    patch = patch or {}
+    s = load_settings()
+    changed = []
+    if "workspace" in patch:
+        ws = str(patch.get("workspace") or "").strip()
+        if ws:
+            ap = os.path.abspath(os.path.expanduser(ws))
+            if not os.path.isdir(ap):
+                return {"ok": False, "error": "工作区目录不存在: %s" % ap}
+            s["workspace"] = ap
+        else:
+            s["workspace"] = ""
+        changed.append("workspace")
+    if "permission_mode" in patch:
+        pm = str(patch.get("permission_mode") or "").strip()
+        if pm not in PERM_MODES:
+            return {"ok": False, "error": "未知权限模式: %s" % pm}
+        s["permission_mode"] = pm
+        changed.append("permission_mode")
+    for k in ("confirm_overwrite", "confirm_sensitive", "confirm_install", "auto_backup"):
+        if k in patch:
+            s[k] = bool(patch[k])
+            changed.append(k)
+    if "max_steps" in patch:
+        try:
+            s["max_steps"] = max(1, min(int(patch["max_steps"]), 40))
+            changed.append("max_steps")
+        except Exception:
+            pass
+    if "deny_extra" in patch:
+        v = patch["deny_extra"]
+        if isinstance(v, str):
+            v = [x.strip() for x in v.split(",")]
+        s["deny_extra"] = [str(x).strip() for x in (v or []) if str(x).strip()][:50]
+        changed.append("deny_extra")
+    _write_settings(s)
+    out = get_settings()
+    out["changed"] = changed
+    return out
+
+
+# ---------------- 高危操作确认队列 ----------------
+def _load_approvals() -> list:
+    try:
+        if os.path.isfile(APPROVALS_PATH):
+            with open(APPROVALS_PATH, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, list):
+                return [x for x in d if isinstance(x, dict)]
+    except Exception:
+        pass
+    return []
+
+
+def _save_approvals(items: list) -> None:
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = APPROVALS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(items[-50:], f, ensure_ascii=False, indent=2)
+        os.replace(tmp, APPROVALS_PATH)
+    except Exception:
+        pass
+
+
+def classify_operation(tool: str, args: dict, settings: dict = None) -> dict:
+    """给一次写操作定风险级别：low（普通改动）/ high（覆盖、核心代码、落盘）。"""
+    s = settings or load_settings()
+    a = args if isinstance(args, dict) else {}
+    rel = (a.get("path") or "").replace("\\", "/").lstrip("/")
+    if tool == "write_file":
+        try:
+            exists = os.path.isfile(_resolve_rooted(rel))
+        except Exception:
+            exists = False
+        if exists and s.get("confirm_overwrite", True):
+            return {"level": "high", "reason": "覆盖已有文件 %s" % rel}
+        if _sensitive_path(rel) and s.get("confirm_sensitive", True):
+            return {"level": "high", "reason": "修改核心代码 %s" % rel}
+        return {"level": "low", "reason": ("新建文件 %s" % rel) if not exists else ("改写 %s" % rel)}
+    if tool == "save_agent":
+        return {"level": "high" if s.get("confirm_install", True) else "low",
+                "reason": "把智能体落盘注册到 agents/"}
+    if tool == "save_plugin":
+        return {"level": "high" if s.get("confirm_install", True) else "low",
+                "reason": "把插件包落盘到 plugins/"}
+    return {"level": "low", "reason": tool}
+
+
+def _gate_operation(tool: str, args: dict, state: dict) -> dict | None:
+    """权限闸门：返回 None 表示放行；否则返回给模型的「被拦下 / 待确认」结果。"""
+    if tool not in WRITE_TOOLS:
+        return None
+    s = load_settings()
+    mode = s["permission_mode"]
+    if mode == "bypassPermissions":
+        return None
+    if mode == "plan":
+        return {"ok": False, "blocked": True, "error":
+                "当前是「只读规划」权限模式，禁止任何写入。请只输出方案与改动建议，"
+                "并提示用户到左栏「设置」里切换权限模式后再让我动手。"}
+    risk = classify_operation(tool, args, s)
+    need = (mode == "default") or (risk["level"] == "high")
+    if not need:
+        return None
+    return _queue_approval(tool, args, risk, state)
+
+
+def _queue_approval(tool: str, args: dict, risk: dict, state: dict) -> dict:
+    items = _load_approvals()
+    aid = "ap_" + time.strftime("%Y%m%d_%H%M%S") + "_" + str(len(items) + 1)
+    item = {"id": aid, "tool": tool, "args": args, "level": risk.get("level", "high"),
+            "reason": risk.get("reason", tool), "session": state.get("id") or "",
+            "created": time.time(), "status": "pending"}
+    items.append(item)
+    _save_approvals(items)
+    return {"ok": False, "pending": True, "approval_id": aid, "risk": item["level"],
+            "reason": item["reason"],
+            "message": ("已提交待确认：%s（%s）。请提示用户到「构建助手 → 待确认操作」点「批准」，"
+                        "执行结果我会拿到；在此之前不要重复提交同一操作。" % (tool, item["reason"]))}
+
+
+def list_approvals() -> dict:
+    items = [x for x in _load_approvals() if x.get("status") == "pending"]
+    items.sort(key=lambda x: x.get("created", 0))
+    out = []
+    for x in items:
+        d = dict(x)
+        if d.get("tool") == "write_file":
+            d["preview"] = (d.get("args") or {}).get("path", "")
+        out.append(d)
+    return {"ok": True, "pending": out, "count": len(out)}
+
+
+def _apply_approved(bridge, item: dict) -> dict:
+    tool = item.get("tool")
+    a = item.get("args") or {}
+    s = load_settings()
+    if tool == "write_file":
+        content = a.get("content", "") or ""
+        d = workspace_diff_sync(a.get("path", ""), content)
+        r = write_workspace_sync(a.get("path", ""), content, backup=bool(s.get("auto_backup", True)))
+        if r.get("ok"):
+            r["diff"] = (d.get("diff") or [])[:120]
+        return r
+    if tool == "save_agent":
+        data = a.get("data") or {}
+        return bridge.lt.run_coro(save_agent(bridge, data), timeout=60)
+    if tool == "save_plugin":
+        return bridge.lt.run_coro(
+            save_plugin(bridge, a.get("name", ""), a.get("manifest") or {}, a.get("code") or ""),
+            timeout=60)
+    return {"ok": False, "error": "未知待确认操作: %s" % tool}
+
+
+def _note_session(session: str, text: str) -> None:
+    """把审批结果写回会话，模型下一轮可见。"""
+    if not session:
+        return
+    st = load_chat_session(session)
+    if not st:
+        return
+    st.setdefault("messages", []).append({"role": "user", "content": "[系统通知] " + text})
+    save_chat_session(st)
+
+
+def approve_approval_sync(bridge, aid: str) -> dict:
+    items = _load_approvals()
+    item = next((x for x in items if x.get("id") == aid and x.get("status") == "pending"), None)
+    if not item:
+        return {"ok": False, "error": "待确认操作不存在或已处理"}
+    r = _apply_approved(bridge, item)
+    item["status"] = "approved" if r.get("ok") else "failed"
+    item["result"] = str(r.get("error") or "")[:300] if not r.get("ok") else ""
+    _save_approvals(items)
+    note = ("你申请的操作已获用户批准并执行：%s → %s"
+            % (item.get("reason") or item.get("tool"),
+               ("成功" + ("（已保存 %s）" % r.get("path") if r.get("path") else "")) if r.get("ok")
+               else ("失败：" + str(r.get("error")))))
+    _note_session(item.get("session") or "", note)
+    _record_history("approve", "chat", item.get("reason") or item.get("tool"),
+                    bool(r.get("ok")), None, rounds=1, key=item.get("session"))
+    return {"ok": bool(r.get("ok")), "result": r, "item": item, "note": note}
+
+
+def reject_approval(aid: str) -> dict:
+    items = _load_approvals()
+    item = next((x for x in items if x.get("id") == aid and x.get("status") == "pending"), None)
+    if not item:
+        return {"ok": False, "error": "待确认操作不存在或已处理"}
+    item["status"] = "rejected"
+    _save_approvals(items)
+    _note_session(item.get("session") or "",
+                  "你申请的操作被用户拒绝：%s。请勿再执行该操作。" % (item.get("reason") or item.get("tool")))
+    return {"ok": True}
+
+
+def clear_approvals() -> dict:
+    _save_approvals([])
+    return {"ok": True}
+
+
 CHAT_SYSTEM = """你是「构建助手」——肥鱼娘桌面 App 内置的代码 / 构建 Agent（类似 Codex、WorkBuddy）。
 你可以通过工具读写用户工作区源码、生成或改进智能体与插件。
 
@@ -1175,7 +1514,19 @@ CHAT_SYSTEM = """你是「构建助手」——肥鱼娘桌面 App 内置的代�
 5. 改已有的插件/智能体优先用 improve_plugin / improve_agent，不要从零重写。
 6. 一次只做用户要求的事，不要顺手改无关文件。
 7. 回复用中文、简短：先说做了什么（含改动的文件路径），再说下一步建议。
-8. 无法完成时直说原因，不要假装成功。"""
+8. 无法完成时直说原因，不要假装成功。
+
+权限与工作区（务必遵守）：
+- 所有读写都限制在当前**工作区根目录**内，路径一律用相对路径；越界会直接失败。
+- 当前权限模式下，写操作可能被拦下：
+  · `plan`（只读规划）→ 任何写入都会被拒绝，你只能给方案，并提示用户去左栏「设置」改权限；
+  · `default`（默认）→ 所有写入进「待确认」，等用户在界面点「批准」后才真正执行；
+  · `acceptEdits`（自动应用）→ 普通文件改动自动生效，覆盖已有文件与核心代码仍要确认；
+  · `bypassPermissions` → 全部直接执行。
+- 被拦下时工具会返回 `pending: true` + `approval_id`：**不要重复提交同一操作**，
+  用一句话告诉用户「已提交待确认，请在「待确认操作」里批准」，然后结束本轮。
+- 覆盖已有文件、修改核心代码（bridge/ libs/ webui/ 顶层脚本）、智能体与插件落盘属于高危操作，
+  说明理由后再提交，不要为了绕过确认而改写成别的方式（例如换个路径重写同一个文件）。"""
 
 
 def _tool(name: str, desc: str, props: dict, required: list) -> dict:
@@ -1204,6 +1555,8 @@ def builder_tools() -> list:
         _tool("list_plugins", "列出当前已存在的插件包（名称 / 类型 / 说明）。", {}, []),
         _tool("list_history", "查看最近的构建历史（生成/改进/保存记录）。",
               {"limit": {"type": "integer"}}, []),
+        _tool("get_builder_settings",
+              "查看当前工作区根目录、权限模式与高危确认开关（写入前先了解约束）。", {}, []),
         _tool("generate_agent", "根据需求生成一个智能体定义草稿（不落盘）。",
               {"requirement": S}, ["requirement"]),
         _tool("generate_plugin", "根据需求生成一个插件包草稿（manifest + plugin.py，不落盘）。",
@@ -1244,19 +1597,26 @@ def _check_syntax(path: str = "", content: str = None) -> dict:
 
 
 def _search_workspace(query: str, limit: int = CHAT_SEARCH_MAX) -> dict:
-    """在工作区白名单根下做全文搜索（跳过黑名单/二进制/超大文件）。"""
+    """在工作区内做全文搜索（跳过黑名单/二进制/超大文件）。
+
+    应用目录模式只搜白名单根；自定义工作区搜整棵树。
+    """
     q = (query or "").strip()
     if not q:
         return {"ok": False, "error": "关键字为空"}
     limit = max(1, min(int(limit or CHAT_SEARCH_MAX), 200))
+    root = workspace_root()
+    custom = is_custom_workspace()
+    deny = set(_WORKSPACE_DENY) | set((load_settings().get("deny_extra") or []))
+    roots = [root] if custom else [os.path.join(root, r) for r in
+                                  ("plugins", "bridge", "webui", "agents", "config")]
     hits = []
     scanned = 0
-    for root in ("plugins", "bridge", "webui", "agents", "config"):
-        base = os.path.join(APP_DIR, root)
+    for base in roots:
         if not os.path.isdir(base):
             continue
         for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = [d for d in dirnames if d not in _WORKSPACE_DENY
+            dirnames[:] = [d for d in dirnames if d not in deny
                            and not d.startswith(".") and d != "__pycache__"]
             for fn in filenames:
                 if fn.startswith(".") or not fn.endswith(
@@ -1273,7 +1633,7 @@ def _search_workspace(query: str, limit: int = CHAT_SEARCH_MAX) -> dict:
                     with open(fp, "r", encoding="utf-8", errors="replace") as f:
                         for i, line in enumerate(f, 1):
                             if q in line:
-                                rel = os.path.relpath(fp, APP_DIR).replace("\\", "/")
+                                rel = os.path.relpath(fp, root).replace("\\", "/")
                                 hits.append({"path": rel, "line": i, "text": line.strip()[:200]})
                                 if len(hits) >= limit:
                                     return {"ok": True, "query": q, "scanned": scanned,
@@ -1304,12 +1664,20 @@ def _list_plugins_brief() -> dict:
 
 
 async def _exec_tool(bridge, name: str, args: dict, state: dict) -> dict:
-    """执行一个构建工具调用，返回 JSON 结果（同时供 UI 展示）。"""
+    """执行一个构建工具调用，返回 JSON 结果（同时供 UI 展示）。
+
+    写操作先过权限闸门：只读模式直接拒绝；需确认的进入「待确认队列」，
+    由用户在界面批准后由 approve_approval_sync 真正执行。
+    """
     a = args if isinstance(args, dict) else {}
     llm = state.get("_llm", {})
     m, th, pv = llm.get("model"), llm.get("think"), llm.get("provider")
     ctx = state.get("ctx") or None
     use_hist = bool(state.get("use_history"))
+
+    gate = _gate_operation(name, a, state)
+    if gate is not None:
+        return gate
 
     if name == "list_dir":
         return list_workspace_sync(a.get("dir", "") or "")
@@ -1332,10 +1700,21 @@ async def _exec_tool(bridge, name: str, args: dict, state: dict) -> dict:
         return _list_plugins_brief()
     if name == "list_history":
         return get_history(limit=int(a.get("limit", 20) or 20))
+    if name == "get_builder_settings":
+        g = get_settings()
+        return {"ok": True, "workspace": g["workspace"], "app_dir": g["app_dir"],
+                "is_custom": g["is_custom"], "permission_mode": g["settings"]["permission_mode"],
+                "mode_desc": _MODE_DESC.get(g["settings"]["permission_mode"], ""),
+                "confirm_overwrite": g["settings"]["confirm_overwrite"],
+                "confirm_sensitive": g["settings"]["confirm_sensitive"],
+                "confirm_install": g["settings"]["confirm_install"],
+                "auto_backup": g["settings"]["auto_backup"],
+                "pending": g["pending"]}
     if name == "write_file":
         path, content = a.get("path", ""), a.get("content", "") or ""
         d = workspace_diff_sync(path, content)
-        r = write_workspace_sync(path, content, backup=True)
+        r = write_workspace_sync(path, content,
+                                 backup=bool(load_settings().get("auto_backup", True)))
         if r.get("ok"):
             r["diff"] = (d.get("diff") or [])[:120]
             r["old_size"], r["new_size"] = d.get("old_size"), d.get("new_size")
@@ -1478,7 +1857,7 @@ async def _chat_with_tools(llm, convo: list, model=None, think=False, provider=N
 
 async def run_chat(bridge, session_id: str = "", message: str = "", model: str = None,
                    think: bool = False, provider: str = None, context_paths: list = None,
-                   use_history: bool = False, max_steps: int = CHAT_MAX_STEPS) -> dict:
+                   use_history: bool = False, max_steps: int = None) -> dict:
     """跑一轮对话：模型自己决定调用哪些构建工具，最多 max_steps 步。"""
     message = (message or "").strip()
     if not message:
@@ -1494,7 +1873,26 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
     state["ctx"] = [p for p in (context_paths or []) if isinstance(p, str) and p.strip()][:20]
     state["use_history"] = use_history
 
-    sys_parts = [CHAT_SYSTEM]
+    s = load_settings()
+    mode = s["permission_mode"]
+    pending = list_approvals()
+    root = workspace_root()
+    env_block = ("\n#### 当前运行环境（务必遵守）\n"
+                 "- 工作区根目录：%s%s\n"
+                 "- 权限模式：%s —— %s\n"
+                 "- 高危确认：覆盖已有文件=%s、核心代码=%s、智能体/插件落盘=%s\n"
+                 "- 写入前自动备份：%s\n"
+                 % (root, "（自定义工作区）" if is_custom_workspace() else "（应用目录）",
+                    mode, _MODE_DESC.get(mode, ""),
+                    "开" if s.get("confirm_overwrite") else "关",
+                    "开" if s.get("confirm_sensitive") else "关",
+                    "开" if s.get("confirm_install") else "关",
+                    "开" if s.get("auto_backup") else "关"))
+    if pending.get("count"):
+        env_block += ("- 当前有 %d 个待用户确认的操作（等用户点批准，不要重复提交）\n"
+                      % pending["count"])
+
+    sys_parts = [CHAT_SYSTEM, env_block]
     if state["ctx"]:
         sys_parts.append(_context_block(state["ctx"]))
     if use_history:
@@ -1507,14 +1905,14 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
     system_msg = {"role": "system", "content": "\n".join(p for p in sys_parts if p)}
 
     convo = [system_msg] + list(history)
-    convo.append({"role": "user", "content": message + ("\n\n（当前工作区根目录：%s）"
-                                                       % APP_DIR)})
+    convo.append({"role": "user", "content": message})
     steps = []
     reply = ""
     try:
         from ai_provider import get_llm
         llm = get_llm()
-        for i in range(max(1, int(max_steps))):
+        steps_limit = int(max_steps or s.get("max_steps") or CHAT_MAX_STEPS)
+        for i in range(max(1, steps_limit)):
             assistant = await _chat_with_tools(llm, convo, model=model, think=think, provider=provider)
             if isinstance(assistant, str):
                 assistant = {"role": "assistant", "content": assistant}
@@ -1579,12 +1977,38 @@ def _trim_tool_result(res: dict) -> dict:
 
 def run_chat_sync(bridge, body: dict) -> dict:
     body = body or {}
+    ms = body.get("max_steps")
     return bridge.lt.run_coro(
         run_chat(bridge, body.get("session", "") or "", body.get("message", "") or "",
                  model=body.get("model") or None, think=body.get("think") or "low",
                  provider=body.get("provider") or None,
                  context_paths=body.get("context_paths") or None,
                  use_history=bool(body.get("use_history", True)),
-                 max_steps=int(body.get("max_steps", CHAT_MAX_STEPS) or CHAT_MAX_STEPS)),
+                 max_steps=int(ms) if ms else None),
         timeout=900,
     )
+
+
+# ---------------- 设置 / 审批的同步包装（供 server.py 调用） ----------------
+def get_settings_sync() -> dict:
+    return get_settings()
+
+
+def set_settings_sync(patch: dict) -> dict:
+    return set_settings(patch)
+
+
+def list_approvals_sync() -> dict:
+    return list_approvals()
+
+
+def approve_approval_http_sync(bridge, aid: str) -> dict:
+    return approve_approval_sync(bridge, aid)
+
+
+def reject_approval_sync(aid: str) -> dict:
+    return reject_approval(aid)
+
+
+def clear_approvals_sync() -> dict:
+    return clear_approvals()

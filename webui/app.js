@@ -1136,9 +1136,140 @@ function _bcToggleCustomModel() {
 async function loadBuilder() {
   await _bcFillModels();
   await _bcLoadSessions();
-  _bcLoadDir(bchat.dir || "bridge");
+  await _bcLoadSettings();
+  _bcLoadDir();
   _bcRefreshHistory();
   _bcRenderCtx();
+}
+
+// ---- 设置：工作区位置 / 权限 / 高危确认 ----
+async function _bcLoadSettings() {
+  try {
+    const d = await GET("/api/builder/settings");
+    if (!d.ok) throw new Error(d.error || "读取失败");
+    const s = d.settings || {};
+    bchat.settings = s;
+    $("#bcWs").value = s.workspace || "";
+    $("#bcWsHint").textContent = "当前生效工作区：" + d.workspace
+      + (d.is_custom ? "（自定义）" : "（应用目录）");
+    const sel = $("#bcPerm");
+    sel.innerHTML = "";
+    (d.modes || []).forEach(m => {
+      const o = document.createElement("option");
+      o.value = m.id;
+      o.textContent = m.id;
+      o.dataset.desc = m.desc || "";
+      sel.appendChild(o);
+    });
+    sel.value = s.permission_mode || "default";
+    _bcPermHint();
+    $("#bcConfirmOverwrite").checked = s.confirm_overwrite !== false;
+    $("#bcConfirmSensitive").checked = s.confirm_sensitive !== false;
+    $("#bcConfirmInstall").checked = s.confirm_install !== false;
+    $("#bcAutoBackup").checked = s.auto_backup !== false;
+    $("#bcMaxSteps").value = s.max_steps || 14;
+    $("#bcSettingsMsg").textContent = "";
+  } catch (e) { $("#bcWsHint").textContent = "读取设置失败: " + e.message; }
+  _bcRefreshApprovals();
+}
+
+function _bcPermHint() {
+  const sel = $("#bcPerm");
+  const opt = sel.options[sel.selectedIndex];
+  $("#bcPermHint").textContent = opt && opt.dataset.desc ? opt.dataset.desc : "";
+}
+
+async function _bcSaveSettings(patch, msgEl) {
+  const el = msgEl || $("#bcSettingsMsg");
+  el.textContent = "保存中…";
+  try {
+    const r = await POST("/api/builder/settings/save", patch);
+    if (!r.ok) throw new Error(r.error || "保存失败");
+    el.textContent = "已保存（" + (r.changed || []).join("、") + "）";
+    await _bcLoadSettings();
+    _bcLoadDir(bchat.dir);
+  } catch (e) { el.textContent = e.message; toast(e.message, true); }
+}
+
+// ---- 待确认操作（高危） ----
+async function _bcRefreshApprovals() {
+  try {
+    const d = await GET("/api/builder/approvals");
+    _bcRenderApprovals(d.pending || []);
+  } catch (e) { /* 静默 */ }
+}
+
+function _bcRenderApprovals(list) {
+  const box = $("#bcApprovals");
+  box.innerHTML = "";
+  if (!list.length) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const head = document.createElement("div");
+  head.className = "bc-ap-head";
+  head.textContent = "待确认操作 " + list.length + " 项 —— 批准后才会执行";
+  box.appendChild(head);
+  list.forEach(it => {
+    const card = document.createElement("div");
+    card.className = "bc-ap";
+    const info = document.createElement("div");
+    info.className = "bc-ap-info";
+    const risk = document.createElement("span");
+    risk.className = "bc-ap-risk " + (it.level === "high" ? "high" : "low");
+    risk.textContent = it.level === "high" ? "高危" : "普通";
+    info.appendChild(risk);
+    const reason = document.createElement("span");
+    reason.className = "bc-ap-reason";
+    reason.textContent = (it.tool || "") + " · " + (it.reason || "");
+    info.appendChild(reason);
+    card.appendChild(info);
+    if (it.tool === "write_file" && it.args && it.args.content) {
+      const c = String(it.args.content);
+      const pre = document.createElement("pre");
+      pre.className = "bc-json";
+      pre.textContent = "内容预览（" + c.length + " 字符）：\n" + c.slice(0, 700) + (c.length > 700 ? "\n…（已截断）" : "");
+      card.appendChild(pre);
+    }
+    if (it.tool === "save_plugin" && it.args && it.args.name) {
+      const pre = document.createElement("pre");
+      pre.className = "bc-json";
+      pre.textContent = "插件包：" + it.args.name;
+      card.appendChild(pre);
+    }
+    const acts = document.createElement("div");
+    acts.className = "row-actions";
+    const ok = document.createElement("button");
+    ok.className = "btn primary sm"; ok.textContent = "批准执行";
+    const no = document.createElement("button");
+    no.className = "btn ghost sm"; no.textContent = "拒绝";
+    const st = document.createElement("span");
+    st.className = "hint";
+    ok.addEventListener("click", () => _bcDecide(it.id, true, st, ok, no));
+    no.addEventListener("click", () => _bcDecide(it.id, false, st, ok, no));
+    acts.append(ok, no, st);
+    card.appendChild(acts);
+    box.appendChild(card);
+  });
+}
+
+async function _bcDecide(id, approve, st, btnA, btnB) {
+  btnA.disabled = true; btnB.disabled = true;
+  st.textContent = approve ? "执行中…" : "处理中…";
+  try {
+    const r = await POST(approve ? "/api/builder/approval/approve" : "/api/builder/approval/reject", { id });
+    if (!r.ok) throw new Error(r.error || "处理失败");
+    st.textContent = approve ? "已执行" : "已拒绝";
+    toast(approve ? "已批准并执行" : "已拒绝该操作");
+    if (approve && r.result && r.result.path) {
+      _bcLoadDir(bchat.dir);
+      _bcOpenFile(r.result.path);
+    }
+    _bcRefreshApprovals();
+    _bcRefreshHistory();
+  } catch (e) {
+    st.textContent = e.message;
+    toast(e.message, true);
+    btnA.disabled = false; btnB.disabled = false;
+  }
 }
 
 async function _bcFillModels() {
@@ -1285,12 +1416,16 @@ function _bcScroll() {
 
 function _bcToolCard(step) {
   const chat = $("#bcChat");
+  const res0 = step.result || {};
+  const isPending = !!res0.pending;
   const card = document.createElement("details");
-  card.className = "bc-tool" + (step.ok === false ? " bad" : "");
+  card.className = "bc-tool" + (isPending ? " pending" : (step.ok === false ? " bad" : ""));
   const sum = document.createElement("summary");
-  const icon = step.ok === false ? "✗" : (step.ok === null ? "•" : "✓");
+  const icon = isPending ? "⏳" : (step.ok === false ? "✗" : (step.ok === null ? "•" : "✓"));
   sum.innerHTML = '<span class="bc-tool-name">' + icon + " " + (step.tool || "tool") + "</span>"
-    + '<span class="bc-tool-args">' + _bcArgsBrief(step.args) + "</span>";
+    + '<span class="bc-tool-args">'
+    + (isPending ? "待用户确认：" + (res0.reason || "") : _bcArgsBrief(step.args))
+    + "</span>";
   card.appendChild(sum);
   const box = document.createElement("div");
   box.className = "bc-tool-body";
@@ -1370,6 +1505,7 @@ async function _bcSend() {
       + (r.steps || []).length + " 个工具调用）";
     _bcLoadSessions();
     _bcRefreshHistory();
+    _bcRefreshApprovals();
   } catch (e) {
     wait.remove();
     _bcMsgEl("assistant", "出错了：" + e.message);
@@ -1591,7 +1727,9 @@ function _bcTab(name) {
   $$("#page-builder .bc-tab").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   $("#bcPaneFiles").classList.toggle("hidden", name !== "files");
   $("#bcPaneHistory").classList.toggle("hidden", name !== "history");
+  $("#bcPaneSettings").classList.toggle("hidden", name !== "settings");
   if (name === "history") _bcRefreshHistory();
+  if (name === "settings") _bcLoadSettings();
 }
 
 async function _bcRefreshHistory() {
@@ -1668,6 +1806,25 @@ function initBuilderUI() {
   $("#bcRefreshTree").addEventListener("click", () => _bcLoadDir(bchat.dir));
   $("#bcUp").addEventListener("click", _bcUp);
   $("#bcRefreshHist").addEventListener("click", _bcRefreshHistory);
+  // 设置面板
+  $("#bcPerm").addEventListener("change", _bcPermHint);
+  $("#bcPerm").addEventListener("change", () => _bcSaveSettings(
+    { permission_mode: $("#bcPerm").value }, $("#bcSettingsMsg")));
+  $("#bcWsApply").addEventListener("click", () => _bcSaveSettings(
+    { workspace: $("#bcWs").value.trim() }, $("#bcWsHint")));
+  $("#bcWsReset").addEventListener("click", () => {
+    $("#bcWs").value = "";
+    _bcSaveSettings({ workspace: "" }, $("#bcWsHint"));
+  });
+  $("#bcSettingsSave").addEventListener("click", () => _bcSaveSettings({
+    workspace: $("#bcWs").value.trim(),
+    permission_mode: $("#bcPerm").value,
+    confirm_overwrite: $("#bcConfirmOverwrite").checked,
+    confirm_sensitive: $("#bcConfirmSensitive").checked,
+    confirm_install: $("#bcConfirmInstall").checked,
+    auto_backup: $("#bcAutoBackup").checked,
+    max_steps: parseInt($("#bcMaxSteps").value || "14", 10),
+  }, $("#bcSettingsMsg")));
   $$("#page-builder .bc-tab").forEach(b => b.addEventListener("click", () => _bcTab(b.dataset.tab)));
   $("#bcFileDiff").addEventListener("click", _bcDiffFile);
   $("#bcFileSave").addEventListener("click", _bcSaveFile);

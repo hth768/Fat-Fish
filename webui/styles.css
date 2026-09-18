@@ -233,6 +233,36 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .bc-more { margin-top: 12px; }
 .bc-more > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 
+/* 待确认操作（高危） */
+.bc-approvals {
+  border: 1px solid var(--warn, #d1a24a); border-radius: 10px;
+  background: rgba(209, 162, 74, .08); padding: 8px 10px; margin-bottom: 8px;
+  max-height: 300px; overflow: auto;
+}
+.bc-ap-head { font-size: 12.5px; font-weight: 600; margin-bottom: 6px; color: var(--warn, #d1a24a); }
+.bc-ap {
+  border-top: 1px solid var(--line); padding: 8px 0;
+}
+.bc-ap:first-of-type { border-top: 0; }
+.bc-ap-info { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.bc-ap-risk {
+  border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600;
+  border: 1px solid currentColor;
+}
+.bc-ap-risk.high { color: var(--err); }
+.bc-ap-risk.low { color: var(--accent2); }
+.bc-ap-reason { color: var(--text); word-break: break-all; }
+.bc-tool.pending { border-left-color: var(--warn, #d1a24a); }
+
+/* 设置面板 */
+.bc-settings { flex: 1; overflow: auto; padding: 10px 12px; }
+.bc-settings .input, .bc-settings .select { width: 100%; }
+.bc-check {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12.5px; color: var(--text); padding: 3px 0; cursor: pointer;
+}
+.bc-check input { margin-top: 3px; }
+
 /* 历史列表（左栏「历史」页签复用） */
 .history-list { flex: 1; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 10px; }
 .hist-item { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel2); }

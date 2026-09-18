@@ -239,6 +239,10 @@ def make_handler(bridge):
                     return self._json(builder_api.get_history_sync(int((q.get("limit") or ["60"])[0])))
                 if path == "/api/builder/sessions":
                     return self._json(builder_api.list_chat_sessions())
+                if path == "/api/builder/settings":
+                    return self._json(builder_api.get_settings_sync())
+                if path == "/api/builder/approvals":
+                    return self._json(builder_api.list_approvals_sync())
                 if path == "/api/builder/session":
                     return self._json({"ok": True, "state": builder_api.load_chat_session(
                         (q.get("name") or [""])[0])})
@@ -329,6 +333,16 @@ def make_handler(bridge):
                     return self._json(builder_api.new_chat_session(body.get("title", "") or ""))
                 if path == "/api/builder/session/delete":
                     return self._json(builder_api.delete_chat_session(body.get("name", "") or ""))
+                # ----- 构建助手：权限 / 工作区设置 与 高危操作审批 -----
+                if path == "/api/builder/settings/save":
+                    return self._json(builder_api.set_settings_sync(body))
+                if path == "/api/builder/approval/approve":
+                    return self._json(builder_api.approve_approval_http_sync(
+                        bridge, body.get("id", "") or ""))
+                if path == "/api/builder/approval/reject":
+                    return self._json(builder_api.reject_approval_sync(body.get("id", "") or ""))
+                if path == "/api/builder/approval/clear":
+                    return self._json(builder_api.clear_approvals_sync())
                 # ----- 构建助手：智能体 / 插件 生成与落盘 -----
                 if path == "/api/builder/agent/generate":
                     return self._json(builder_api.generate_agent_sync(
