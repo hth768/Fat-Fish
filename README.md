@@ -34,6 +34,7 @@
 - [安卓版](#安卓版)
 - [安全边界与合规](#安全边界与合规)
 - [测试 / 回归](#测试--回归)
+- [可观测性与静默异常治理](#可观测性与静默异常治理)
 - [发布与安装](#发布与安装)
 - [许可证](#许可证)
 - [常见问题](#常见问题)
@@ -106,6 +107,7 @@ qq_bot 运行时在 2026-09 重构为「**智能体核心 + 插件系统**」：
 | `knowledge_store.py` / `self_knowledge.py` | 通用知识库 / 自我知识管理 |
 | `identity.py` | QQ↔MC 游戏名双向确认绑定 |
 | `emotion.py` | AI 情绪模块（心情状态 `emotion_data.json`） |
+| `quiet.py` | **降级留痕原语**：`degrade` / `attention`，统一替代 `except …: pass`，治理静默吞异常 |
 
 详细架构见 `libs/qq_bot_runtime/ARCHITECTURE.md` 与 `ARCHITECTURE_TREE.md`。
 
@@ -118,6 +120,8 @@ feiyu_standalone/
 ├── app.py                 # 肥鱼娘 App 入口：解析 qq_bot 运行时 → 启动核心桥与 HTTP 服务 → 打开桌面窗口
 ├── server.py              # 本机 HTTP 服务：静态前端 + REST API + SSE
 ├── start_app.bat          # 便携启动脚本（自举 venv / 捆绑 Python）
+├── tests/                # 静默异常审计工具：audit_silent_except.py
+├── DEGRADE_AUDIT.md      # 静默异常治理清单（审计自动生成，入版本控制）
 ├── bridge/                # 后端桥接层
 │   ├── core_bridge.py     # 核心桥：串联 App 与智能体
 │   ├── app_window.py      # 桌面窗口（pywebview / Edge App → webui → 命令行 三级降级）
@@ -381,6 +385,27 @@ python -m unittest discover -s tests -v      # 当前 43 项全过
 ```
 
 > 视觉/向量等重依赖模块需在完整依赖环境下测试；若仅用捆绑精简 Python，相关用例可能无法完整加载。CI / 本机验证均建议使用带重依赖的 venv。
+
+---
+
+## 可观测性与静默异常治理
+
+为防止「异常被 `except …: pass` 静默吞掉、出事无迹可寻」，项目内置统一的降级留痕原语 `quiet.py` 与一键审计工具 `tests/audit_silent_except.py`。
+
+- **`quiet.degrade(where, exc, note)`**：刻意降级 / 非关键失败（探测失败、资源清理、客户端断开等）。默认**只计数不打印**，仅当开启 `enable_print` 或累计超阈值时才输出，避免常态噪声刷屏。
+- **`quiet.attention(where, exc, note)`**：用户或外部可感知的失败（会话落盘失败、进程 kill 兜底失败、残留 sidecar 等）。**始终输出 traceback**，确保运维可见。
+- **强制留痕**：所有 `except X: pass / continue` 类静默吞异常，改写为上述两档之一——空 `pass` 体改为 `degrade(...)`，需要被发现的失败升级为 `attention`。
+
+**审计工具**：
+
+```powershell
+python tests/audit_silent_except.py                                         # 扫描全仓静默 except → DEGRADE_AUDIT.md + data/degrade_inventory.json
+python tests/audit_silent_except.py --convert <目录> --buckets A --write     # 把 A 桶（探测/回落）批量改 degrade
+```
+
+按风险分桶：A=探测/回落（可安全批量降级）、B=分布广/需看上下文（多转 `degrade`，关键失败转 `attention`）、C=兜底/未知（逐条判定，亦可先基线 `degrade` 留痕）。报告含按文件分布与「已留痕」计数；`data/degrade_inventory.json` 为运行态（git 忽略），`DEGRADE_AUDIT.md` 入版本控制。
+
+> 当前状态：生产代码静默 `except` 已清零；`DEGRADE_AUDIT.md` 为最新清单。
 
 ---
 
