@@ -56,6 +56,27 @@
   否则 cmd 会吃掉 `>` `>=` 等符号）→ `POST uploads.github.com/.../assets`
 - **`git revert` 一个"新增文件"的提交会真删工作区文件**，恢复用 `git checkout <hash> -- <目录>`
 
+## 构建助手（bridge/builder_api.py）— 2026-09-18 升级为代码 Agent
+- `bridge/builder_api.py` 8 类能力（提交 `d6b30f4` 加 5 类 → `b4e3bcf` 加 3 类）：
+  1. `list_context_files`/`read_context_file` —— 白名单路径下的源码作 LLM 上下文
+  2. `append_history`/`get_history` —— `data/builder_history.jsonl` few-shot 注入
+  3. `generate_agent`/`generate_plugin` —— 生成新产物
+  4. `improve_agent`/`improve_plugin` —— 按指令改已有产物
+  5. `save_agent`/`save_plugin` —— 落盘校验
+  6. `list_workspace_sync`/`read_workspace_sync`/`write_workspace_sync` —— 工作区源码读写
+  7. `workspace_diff_sync` —— 显示前后 diff
+  8. `list_plugin_files_sync` —— 按插件名列出包内文件
+- 路由前缀 `/api/builder/*`（server.py），含 `workspace/{list,read,write,diff}` + `plugin/files`。
+- **工作区安全机制**（写文件必看）：
+  - `_WORKSPACE_ROOTS = (plugins, libs, bridge, webui, agents, config)` 白名单；白名单外的路径一律拒绝。
+  - `_WORKSPACE_DENY` 黑名单：`/\\.(codebuddy|git|env)/`、`__pycache__/`、`settings_store.py`、`ai_providers.json`、`data/`、`user_profiles.json`。
+  - `_resolve_rooted(rel)` 双层校验：白名单前缀匹配 → `os.path.realpath` 二次确认解析后在 `APP_DIR` 之下（防 `../` 越界）。
+  - `_is_text_file` 拒二进制（检测 NUL 字节）；单文件 512KB 上限 `_MAX_FILE_BYTES`。
+  - **每次写入前自动备份**到 `data/builder_bak/<rel>.<YYYYMMDD_HHMMSS_microsec>`，每文件最多 20 份（按 mtime 删最旧）。
+- **路径守卫坑**：`list_context_files` 早期用顶级目录 `libs` 匹配 `libs/qq_bot_runtime` 失败 → 改前缀匹配 `rel.startswith("libs/")`。新加 `_resolve_rooted` 也用前缀匹配，正确。
+- **运行时 vs 开发副本的 APP_DIR 不对称**：开发副本 `feiyu_standalone` 与运行时 `feiyu_app` 顶层结构类似但内容差异大——`feiyu_app/plugins/` 有真实插件包、`feiyu_app/libs/` 不存在；UI 默认进入目录应避开 libs（运行时没这个目录）。`feiyu_app` 实际靠环境变量 `FEIYU_QQ_BOT=E:\qq_bot` 把引擎指向 `e:\qq_bot`，工作区路径以 `feiyu_app` 为 APP_DIR 解析。
+- **测试时务必小心写接口**：直接打 `POST /api/builder/workspace/write` 会立刻覆盖磁盘文件（即使没改过内容，UI 仍会用编辑过的覆盖）。首次测试误把 builder_api.py 覆盖 → 走 `data/builder_bak/bridge/builder_api.py.20260918_174326_479530` 完整还原 1024 行。
+
 ## git 提交规范（PowerShell 中文坑）
 - 环境：Windows + PowerShell 5.1，git 默认 `i18n.commitEncoding=utf-8`。PowerShell 以 **GBK** 代码页传中文参数给 git → 中文 commit message 会**乱码存储**（chcp 65001 后仍乱码即说明已存乱码）。
 - 正确方法：用工具（非命令行中文）写 UTF-8 的 message 文件，再 `git commit -F <file>`；amend 同样 `git commit --amend -F <file>`。
