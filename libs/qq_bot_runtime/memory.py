@@ -27,6 +27,7 @@ from collections import defaultdict, deque
 from typing import Dict, Optional
 
 import config
+import agent_ctx
 from quiet import attention
 
 # 落盘防抖间隔（秒）：一次聊天回合会触发多次写入（user/assistant/topic），
@@ -205,9 +206,10 @@ class Session(Memory):
     本类只补「会话标识 / 预热」两件事，读写方法签名与原 Session 完全一致。
     """
 
-    def __init__(self, session_id: str, persistent: bool = True, **kw):
+    def __init__(self, session_id: str, persistent: bool = True, agent_id: str = None, **kw):
         # 先建结构、设好会话专属落盘路径，再触发加载（避免先读全局文件）
         self.session_id = session_id
+        self.agent_id = agent_id
         self._store = defaultdict(lambda: deque(maxlen=config.MAX_HISTORY))
         self._summary = defaultdict(str)
         self._topic = defaultdict(str)
@@ -217,7 +219,7 @@ class Session(Memory):
             safe = "".join(ch if (ch.isalnum() or ch in "-_") else "_"
                            for ch in str(session_id))
             self._file = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
+                agent_ctx.agent_storage_dir(os.path.dirname(os.path.abspath(__file__)), agent_id),
                 f"memory_session_{safe}.json")
         else:
             self._file = os.path.join(
@@ -261,7 +263,8 @@ class Session(Memory):
 class SessionManager:
     """会话管理器（支持热切换）—— 行为与原 session_manager.SessionManager 一致。"""
 
-    def __init__(self):
+    def __init__(self, agent_id: str = "feiyu"):
+        self.agent_id = agent_id
         self._sessions: Dict[str, Session] = {}
         self._current_session_id: Dict[str, str] = {}   # user_id -> session_id
         self._next_session_id: Dict[str, str] = {}      # user_id -> next_session_id
@@ -281,7 +284,7 @@ class SessionManager:
         with self._lock:
             if user_id not in self._current_session_id:
                 session_id = self._generate_session_id(user_id)
-                session = Session(session_id)
+                session = Session(session_id, agent_id=self.agent_id)
                 self._sessions[session_id] = session
                 self._current_session_id[user_id] = session_id
                 if _has_running_loop():
@@ -302,7 +305,7 @@ class SessionManager:
                 return
 
             session_id = self._generate_session_id(user_id)
-            session = Session(session_id)
+            session = Session(session_id, agent_id=self.agent_id)
             self._sessions[session_id] = session
             self._next_session_id[user_id] = session_id
 
@@ -362,22 +365,29 @@ class SessionManager:
 
 
 # 全局单例
-_session_manager: Optional[SessionManager] = None
+_session_managers: Dict[str, SessionManager] = {}
 
 
-def get_session_manager() -> SessionManager:
-    """获取全局会话管理器实例。"""
-    global _session_manager
-    if _session_manager is None:
-        _session_manager = SessionManager()
-    return _session_manager
+def get_session_manager(agent_id: str = None) -> SessionManager:
+    """获取（按 agent 隔离的）会话管理器单例。
+
+    agent_id 省略时回落到默认 "feiyu"（既有主 bot），保持与旧调用兼容。
+    不同 bot 拥有完全独立的会话集合与落盘文件。
+    """
+    aid = agent_id or "feiyu"
+    mgr = _session_managers.get(aid)
+    if mgr is None:
+        mgr = SessionManager(agent_id=aid)
+        _session_managers[aid] = mgr
+    return mgr
 
 
 class SessionManagerAdapter:
     """SessionManager 适配器，提供与 Memory 类相同的 API。"""
 
-    def __init__(self):
-        self._manager = get_session_manager()
+    def __init__(self, agent_id: str = "feiyu"):
+        self.agent_id = agent_id
+        self._manager = get_session_manager(agent_id)
 
     def add(self, message_type: str, group_id, user_id, role: str, content: str):
         """添加一条对话。"""

@@ -39,3 +39,31 @@ def ns_dir(agent_id: "str | None" = None) -> "str | None":
     if aid:
         return os.path.join(AGENTS_DIR, aid, "memory")
     return None
+
+
+# 既有主 bot 的 id：仍使用引擎目录下的历史文件（memory_session_*.json /
+# user_profiles.json / persona_data.json 等），不做迁移，避免丢失线上数据。
+LEGACY_DEFAULT_AGENT = "feiyu"
+
+
+def agent_storage_dir(module_dir: "str | None" = None, agent_id: "str | None" = None) -> str:
+    """返回某智能体的「存储目录」——记忆类 JSON 文件落盘位置。
+
+    - 默认/空 agent，或既有的主 bot（feiyu）：回落到引擎模块目录，保持历史数据兼容；
+    - 其它 bot：落在 agents/<id>/memory，实现记忆/人格/配置完全隔离。
+
+    `module_dir` 一般为调用方模块目录（如 os.path.dirname(__file__)）；省略时取
+    本引擎目录。
+    """
+    if module_dir is None:
+        module_dir = _BASE
+    aid = agent_id or current_agent()
+    if aid and aid != LEGACY_DEFAULT_AGENT:
+        d = ns_dir(aid)
+        if d:
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError:
+                pass
+            return d
+    return module_dir

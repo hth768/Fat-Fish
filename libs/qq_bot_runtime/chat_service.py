@@ -1288,6 +1288,15 @@ class ChatService:
         messages = self.memory.get(channel_type, channel_id, user_id)
         use_reasoner = False
 
+        # 每 bot 人格覆盖：若该 bot 在 AgentCore 上设置了 _persona_override，
+        # 用它替换基座人设（config.SYSTEM_PROMPT），实现多 bot 人格隔离。
+        persona_override = getattr(getattr(self, "core", None), "_persona_override", None)
+        if persona_override:
+            if messages and messages[0].get("role") == "system":
+                messages[0]["content"] = persona_override
+            else:
+                messages.insert(0, {"role": "system", "content": persona_override})
+
         # 注入被引用的消息内容
         if (msg.quoted_text or msg.quoted_image_refs) and has_quote:
             quote_parts = []

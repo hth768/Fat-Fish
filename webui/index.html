@@ -44,9 +44,11 @@
       <header class="page-head">
         <h1>仪表盘</h1>
         <div class="head-actions">
+          <div class="bot-switch"><span class="bot-switch-k">Bot</span><select class="botSwitcher select"></select><button class="btn ghost sm botManageBtn" type="button">管理</button></div>
           <button class="btn primary" id="btnCoreToggle">启动核心</button>
         </div>
       </header>
+      <div id="botCard" class="panel" style="margin-bottom:14px"></div>
       <div class="cards">
         <div class="card"><div class="card-k">核心状态</div><div class="card-v" id="stCore">—</div></div>
         <div class="card"><div class="card-k">运行插件</div><div class="card-v" id="stPlugins">—</div></div>
@@ -90,6 +92,7 @@
       <header class="page-head">
         <h1>记忆中心</h1>
         <div class="head-actions">
+          <div class="bot-switch"><span class="bot-switch-k">Bot</span><select class="botSwitcher select"></select><button class="btn ghost sm botManageBtn" type="button">管理</button></div>
           <select id="memUser" class="select"><option value="">全部用户</option></select>
           <input id="memSearch" class="input" placeholder="搜索…">
         </div>
@@ -126,7 +129,12 @@
 
     <!-- 总结 -->
     <section class="page hidden" id="page-summary">
-      <header class="page-head"><h1>总结中心</h1></header>
+      <header class="page-head">
+        <h1>总结中心</h1>
+        <div class="head-actions">
+          <div class="bot-switch"><span class="bot-switch-k">Bot</span><select class="botSwitcher select"></select><button class="btn ghost sm botManageBtn" type="button">管理</button></div>
+        </div>
+      </header>
       <div class="panel">
         <div class="panel-title">当前会话摘要（app_owner，实时注入上下文）</div>
         <textarea id="liveSummary" class="textarea" rows="6" placeholder="（空）"></textarea>
@@ -202,9 +210,11 @@
       <header class="page-head">
         <h1>配置中心</h1>
         <div class="head-actions">
+          <div class="bot-switch"><span class="bot-switch-k">Bot</span><select class="botSwitcher select"></select><button class="btn ghost sm botManageBtn" type="button">管理</button></div>
           <button class="btn primary" id="btnSaveConfig">保存全部</button>
         </div>
       </header>
+      <div id="botConfigPanel" class="panel"></div>
       <div id="configBody">加载中…</div>
 
       <!-- AI 供应商 / 模型管理（原「AI 供应商」与「自定义模型供应商」合并） -->
@@ -541,6 +551,7 @@
     </div>
   </div>
 </div>
+<div class="modal hidden" id="botModal"></div>
 <div class="toast hidden" id="toast"></div>
 <script src="/static/app.js"></script>
 </body>

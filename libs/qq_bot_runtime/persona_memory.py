@@ -37,10 +37,8 @@ def _base_dir():
 
 
 def _ns_base():
-    # 当前智能体上下文存在时，记忆落到 agents/<id>/memory/
-    d = agent_ctx.ns_dir() or _base_dir()
-    os.makedirs(d, exist_ok=True)
-    return d
+    # 按当前 bot 命名空间隔离；默认 feiyu 回落到引擎目录（不迁移历史数据）
+    return agent_ctx.agent_storage_dir(_base_dir())
 
 
 def _persona_file():

@@ -10,6 +10,8 @@ from urllib.parse import parse_qs, urlparse
 
 from quiet import attention, degrade
 
+import agent_ctx
+
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 WEBUI_DIR = os.path.join(APP_DIR, "webui")
 if APP_DIR not in sys.path:
@@ -208,6 +210,9 @@ def make_handler(bridge):
             parsed = urlparse(self.path)
             path = parsed.path
             q = self._qs()
+            # 按 bot_id 路由：记忆子系统按 agent_ctx.current_agent() 隔离各 bot 数据
+            bid = (q.get("bot_id") or ["feiyu"])[0] or "feiyu"
+            tok = agent_ctx.set_agent(bid)
             try:
                 if path in ("/", "/index.html"):
                     return self._serve_static("index.html")
@@ -253,7 +258,9 @@ def make_handler(bridge):
                                                              q=(q.get("q") or [""])[0],
                                                              limit=int((q.get("limit") or ["100"])[0])))
                 if path == "/api/summary/overview":
-                    return self._json(summary_api.summary_overview(bridge))
+                    return self._json(summary_api.summary_overview(bridge, bid))
+                if path == "/api/bots":
+                    return self._json({"bots": bridge.bot_manager.list_specs(), "default": "feiyu"})
                 if path == "/api/plugins":
                     return self._json(plugins_api.list_plugins(bridge))
                 if path == "/api/plugins/market":
@@ -305,24 +312,54 @@ def make_handler(bridge):
                 return self._json({"error": "not found"}, 404)
             except Exception as e:
                 return self._json({"error": repr(e)}, 500)
+            finally:
+                agent_ctx.reset_agent(tok)
 
         # ---------------- POST 路由 ----------------
         def do_POST(self):
             path = urlparse(self.path).path
             body = self._body()
+            # 按 bot_id 路由：记忆子系统按 agent_ctx.current_agent() 隔离各 bot 数据
+            bid = (body.get("bot_id") or (self._qs().get("bot_id") or ["feiyu"])[0] or "feiyu")
+            tok = agent_ctx.set_agent(bid or "feiyu")
             try:
                 if path == "/api/chat":
                     return self._json(bridge.submit_chat(
                         text=body.get("text", ""),
                         session=body.get("session", "web"),
                         user_id=body.get("user_id", "app_owner"),
-                        name=body.get("name", "主人")))
+                        name=body.get("name", "主人"),
+                        bot_id=body.get("bot_id")))
                 if path == "/api/core/start":
                     return self._json(bridge.start(wait=True))
                 if path == "/api/core/stop":
                     return self._json(bridge.stop(wait=True))
                 if path == "/api/core/restart":
                     return self._json(bridge.restart())
+                # ----- 多 bot 管理 -----
+                if path == "/api/bots/create":
+                    return self._json(bridge.bot_manager.create_bot(
+                        name=body.get("name", "新 Bot"),
+                        persona=body.get("persona"),
+                        model=body.get("model"),
+                        plugins=body.get("plugins"),
+                        autostart=bool(body.get("autostart", False))))
+                if path == "/api/bots/update":
+                    return self._json(bridge.bot_manager.update_bot(
+                        body.get("id", ""), **{
+                            "name": body.get("name"),
+                            "persona": body.get("persona"),
+                            "model": body.get("model"),
+                            "plugins": body.get("plugins"),
+                            "autostart": body.get("autostart"),
+                            "enabled": body.get("enabled"),
+                        }))
+                if path == "/api/bots/start":
+                    return self._json(bridge.bot_manager.start_bot(body.get("id", ""), wait=True))
+                if path == "/api/bots/stop":
+                    return self._json(bridge.bot_manager.stop_bot(body.get("id", ""), wait=True))
+                if path == "/api/bots/delete":
+                    return self._json({"ok": bridge.bot_manager.delete_bot(body.get("id", ""))})
                 if path == "/api/memory/action":
                     return self._json(memory_api.memory_action(body.get("kind", ""),
                                                                body.get("payload") or body))
@@ -333,7 +370,7 @@ def make_handler(bridge):
                         body.get("text", ""), body.get("uid") or "app_owner",
                         body.get("target", "knowledge"), body.get("mode", "auto")))
                 if path == "/api/summary/session":
-                    return self._json(summary_api.set_session_summary(bridge, body.get("text", "")))
+                    return self._json(summary_api.set_session_summary(bridge, body.get("text", ""), bid))
                 if path == "/api/summary/run":
                     return self._json(self._run_summary(body))
                 if path == "/api/plugins/toggle":
@@ -478,6 +515,8 @@ def make_handler(bridge):
                 return self._json({"error": "not found"}, 404)
             except Exception as e:
                 return self._json({"error": repr(e)}, 500)
+            finally:
+                agent_ctx.reset_agent(tok)
 
         def _run_summary(self, body):
             import asyncio
@@ -485,7 +524,8 @@ def make_handler(bridge):
                 user_id=body.get("uid", "app_owner"),
                 count=int(body.get("count", 60)),
                 save_to=body.get("save_to", "none"),
-                keyword=body.get("keyword", "")), timeout=180)
+                keyword=body.get("keyword", ""),
+                bot_id=body.get("bot_id")), timeout=180)
 
     return Handler
 

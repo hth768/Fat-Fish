@@ -43,6 +43,10 @@ class CoreBridge:
         # 核心构建钩子：包管理器在 register_builtin_plugins 之后、core.start 之前注册插件包
         self._build_hook = None
 
+        # 多 bot 生命周期管理器（默认主 bot 为 "feiyu"，其余运行时动态增删）
+        from .bot_manager import BotManager
+        self.bot_manager = BotManager(self)
+
     def set_build_hook(self, fn):
         """fn(core)：核心构建后、启动前调用（插件包预注册入口）。"""
         self._build_hook = fn
@@ -90,11 +94,16 @@ class CoreBridge:
     async def _async_start(self):
         core = self._build_core()
         self.core = core
+        # 登记进 BotManager，避免下方 autostart_all 对默认主 bot 二次 start()
+        self.bot_manager.cores[core.agent_id] = core
         await core.start()
 
     async def _async_stop(self):
         core = self.core
         self.core = None
+        if core is not None:
+            # 同步清理 BotManager 登记，避免 stop 后 is_running/start 误判
+            self.bot_manager.cores.pop(getattr(core, "agent_id", None), None)
         if core is None:
             return
         try:
@@ -112,6 +121,8 @@ class CoreBridge:
         try:
             if wait:
                 self.lt.run_coro(self._async_start(), timeout=180)
+                # 非阻塞启动其余 autostart bot（多 bot 可同时运行）
+                self.bot_manager.autostart_all()
                 state = {"ok": True, "state": "running"}
             else:
                 self.lt.schedule(self._async_start())
@@ -312,12 +323,13 @@ class CoreBridge:
         return self._msg_classes
 
     def submit_chat(self, text: str, session: str = "web", user_id: str = OWNER_ID,
-                    name: str = OWNER_NAME) -> dict:
-        """提交一条用户消息到 ChatService（异步执行，回复走 SSE）。"""
+                    name: str = OWNER_NAME, bot_id: str = None) -> dict:
+        """提交一条用户消息到指定 bot 的 ChatService（异步执行，回复走 SSE）。"""
         text = (text or "").strip()
         if not text:
             return {"ok": False, "error": "消息为空"}
-        if not self.is_running():
+        core = self.bot_manager.core_for(bot_id)
+        if core is None or not getattr(core, "running", False):
             return {"ok": False, "error": "核心未运行，请先在仪表盘启动核心"}
         InboundMessage, AppReplyTarget, _ = self._ensure_msg_classes()
         msg = InboundMessage(
@@ -329,10 +341,9 @@ class CoreBridge:
             message_id=str(uuid.uuid4()),
             text=text,
             mentioned=True,
-            raw={"session": session, "source": "app"},
+            raw={"session": session, "source": "app", "bot_id": bot_id or ""},
         )
         reply = AppReplyTarget(session, msg=msg)
-        core = self.core
         bridge = self
 
         async def _run():

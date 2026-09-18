@@ -13,6 +13,9 @@ const state = {
   memQ: "",
   plugins: null,
   config: null,
+  botId: "feiyu",
+  defaultBot: "feiyu",
+  bots: [],
 };
 
 /* ---------------- 基础请求 ---------------- */
@@ -24,6 +27,18 @@ async function api(path, opts) {
 }
 const GET = (p) => api(p);
 const POST = (p, body) => api(p, { method: "POST", body: JSON.stringify(body || {}) });
+
+/* 带 bot_id 的请求包装：切换 Bot 后，所有相关接口都带上当前 bot_id */
+function withBot(p, params) {
+  const u = new URL(p, location.origin);
+  const qs = new URLSearchParams(u.search);
+  if (params) Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) qs.set(k, v); });
+  qs.set("bot_id", state.botId);
+  u.search = qs.toString();
+  return u.pathname + u.search;
+}
+const GB = (p, params) => GET(withBot(p, params));
+const PB = (p, body) => POST(p, Object.assign({ bot_id: state.botId }, body || {}));
 
 let toastTimer = null;
 function toast(msg, isErr) {
@@ -128,13 +143,26 @@ function appendEventLog(ev) {
 /* ---------------- 仪表盘 ---------------- */
 async function loadDashboard() {
   await refreshStatus();
+  renderBotCard();
   try {
-    const ms = await GET("/api/memory/stats");
+    const ms = await GB("/api/memory/stats");
     $("#stProfiles").textContent = ms.profiles;
     $("#stNotes").textContent = ms.notes;
     $("#stKnowledge").textContent = ms.knowledge;
     $("#stReflection").textContent = ms.reflection;
   } catch (e) { }
+}
+
+function renderBotCard() {
+  const b = state.bots.find(x => x.id === state.botId) || { id: state.defaultBot, name: "肥鱼娘", persona: null, running: false, autostart: true, model: null };
+  const el = $("#botCard");
+  if (!el) return;
+  el.innerHTML = `<div class="panel-title">当前查看的 Bot：${esc(b.name || b.id)} <span class="badge ${b.running ? "ok" : "off"}">${b.running ? "运行中" : "已停止"}</span></div>
+    <div class="hint wrap" style="margin:6px 0">${esc(b.persona || "（沿用基座人设）")}</div>
+    <div class="row-actions">
+      <button class="btn ghost sm botManageBtn" type="button">管理 Bot</button>
+      <span class="hint">模型覆盖：${esc(b.model || "全局默认")} · 自启：${b.autostart ? "是" : "否"}</span>
+    </div>`;
 }
 
 async function refreshStatus() {
@@ -239,7 +267,7 @@ $("#memSearch").addEventListener("keydown", e => {
 });
 
 async function loadMemory() {
-  const users = await GET("/api/memory/users");
+  const users = await GB("/api/memory/users");
   const sel = $("#memUser"), sumSel = $("#sumUser");
   const cur = sel.value, cur2 = sumSel.value;
   sel.innerHTML = `<option value="">全部用户</option>` + users.items.map(u =>
@@ -262,8 +290,8 @@ async function renderMemory() {
     knowledge: "/api/memory/knowledge", history: "/api/memory/history",
   };
   try {
-    if (tab === "sessions") { const d = await GET("/api/memories"); body.innerHTML = renderSessions(d); return; }
-    const d = await GET(map[tab] + (qs.toString() ? "?" + qs : ""));
+    if (tab === "sessions") { const d = await GB("/api/memories"); body.innerHTML = renderSessions(d); return; }
+    const d = await GB(map[tab], { uid, q });
     body.innerHTML = (renderers[tab] || (() => "<div class='hint'>未知页签</div>"))(d);
     bindMemoryActions();
   } catch (e) { body.innerHTML = `<div class="hint">加载失败: ${esc(e.message)}</div>`; }
@@ -335,35 +363,35 @@ function bindMemoryActions() {
     const card = b.closest(".mem-card");
     const uid = card.dataset.uid;
     const facts = $(".facts", card).value.split("\n").map(s => s.trim()).filter(Boolean);
-    const r = await POST("/api/memory/action", { kind: "profiles", payload: { op: "save", uid, facts } });
+    const r = await PB("/api/memory/action", { kind: "profiles", payload: { op: "save", uid, facts } });
     toast(r.ok ? "档案已保存" : (r.error || "保存失败"), !r.ok);
   }));
   $$("#memBody .act-del").forEach(b => b.addEventListener("click", async () => {
     const uid = b.closest(".mem-card").dataset.uid;
     if (!confirm(`确定删除 ${uid} 的人物档案？`)) return;
-    await POST("/api/memory/action", { kind: "profiles", payload: { op: "delete", uid } });
+    await PB("/api/memory/action", { kind: "profiles", payload: { op: "delete", uid } });
     toast("已删除"); renderMemory();
   }));
   $$("#memBody .act-note-del").forEach(b => b.addEventListener("click", async () => {
     const li = b.closest("li");
-    await POST("/api/memory/action", { kind: "notes", payload: { op: "delete", uid: li.dataset.uid, index: +li.dataset.idx } });
+    await PB("/api/memory/action", { kind: "notes", payload: { op: "delete", uid: li.dataset.uid, index: +li.dataset.idx } });
     renderMemory();
   }));
   $$("#memBody .act-note-add").forEach(b => b.addEventListener("click", async () => {
     const card = b.closest(".mem-card");
     const inp = $(".new-note", card);
     if (!inp.value.trim()) return;
-    await POST("/api/memory/action", { kind: "notes", payload: { op: "add", uid: state.memUser || "app_owner", text: inp.value.trim() } });
+    await PB("/api/memory/action", { kind: "notes", payload: { op: "add", uid: state.memUser || "app_owner", text: inp.value.trim() } });
     toast("已添加"); renderMemory();
   }));
   $$("#memBody [data-act='clear-persona']").forEach(b => b.addEventListener("click", async () => {
     if (!confirm("清空该用户的人格记忆？")) return;
-    await POST("/api/memory/action", { kind: "persona", payload: { op: "clear", uid: b.dataset.uid } });
+    await PB("/api/memory/action", { kind: "persona", payload: { op: "clear", uid: b.dataset.uid } });
     toast("已清空"); renderMemory();
   }));
   $$("#memBody [data-act='kb-del']").forEach(b => b.addEventListener("click", async () => {
     if (!confirm("删除该知识主题？")) return;
-    await POST("/api/memory/action", { kind: "knowledge", payload: { op: "delete", keyword: b.dataset.kw } });
+    await PB("/api/memory/action", { kind: "knowledge", payload: { op: "delete", keyword: b.dataset.kw } });
     toast("已删除"); renderMemory();
   }));
   const kbAdd = $("#memBody .act-kb-add");
@@ -371,14 +399,14 @@ function bindMemoryActions() {
     const topic = $("#memBody .new-kw").value.trim();
     const facts = $("#memBody .new-facts").value.split(/[;；]/).map(s => s.trim()).filter(Boolean);
     if (!topic || !facts.length) return toast("主题与事实必填", true);
-    const r = await POST("/api/memory/action", { kind: "knowledge", payload: { op: "add", topic, facts } });
+    const r = await PB("/api/memory/action", { kind: "knowledge", payload: { op: "add", topic, facts } });
     toast(r.ok ? "已入库" : (r.error || "失败"), !r.ok); renderMemory();
   });
 }
 
 /* ---------------- 总结中心 ---------------- */
 async function loadSummary() {
-  const ov = await GET("/api/summary/overview");
+  const ov = await GB("/api/summary/overview");
   const live = ov.live || {};
   $("#liveSummary").value = live.summary || "";
   $("#liveSummaryMeta").textContent = live.topic ? `当前话题: ${live.topic} · 短期记忆 ${live.short_turns} 条` : "";
@@ -387,7 +415,7 @@ async function loadSummary() {
 }
 
 $("#btnSaveSummary").addEventListener("click", async () => {
-  const r = await POST("/api/summary/session", { text: $("#liveSummary").value });
+  const r = await PB("/api/summary/session", { text: $("#liveSummary").value });
   toast(r.ok ? (r.mode === "live" ? "已保存（运行中，立即生效）" : "已保存（落盘，下次启动核心生效）") : "保存失败", !r.ok);
 });
 
@@ -396,7 +424,7 @@ $("#btnRunSummary").addEventListener("click", async () => {
   btn.disabled = true; btn.textContent = "总结中…（LLM 调用约 10-30s）";
   const box = $("#sumResult"); box.classList.add("hidden");
   try {
-    const r = await POST("/api/summary/run", {
+    const r = await PB("/api/summary/run", {
       uid: $("#sumUser").value || "app_owner",
       count: +$("#sumCount").value || 60,
       save_to: $("#sumSaveTo").value,
@@ -408,6 +436,156 @@ $("#btnRunSummary").addEventListener("click", async () => {
   } catch (e) { toast(e.message, true); }
   btn.disabled = false; btn.textContent = "生成总结";
 });
+
+/* ---------------- 多 Bot 切换与管理 ---------------- */
+const DEFAULT_BOT_ID = "feiyu";
+
+async function loadBots() {
+  try {
+    const r = await GET("/api/bots");
+    state.bots = (r && r.bots) || [];
+    state.defaultBot = (r && r.default) || DEFAULT_BOT_ID;
+  } catch (e) { state.bots = []; }
+  if (!state.bots.find(b => b.id === state.botId)) state.botId = state.defaultBot;
+  renderBotSwitchers();
+}
+
+function renderBotSwitchers() {
+  const opts = state.bots.map(b =>
+    `<option value="${esc(b.id)}">${esc(b.name || b.id)}${b.id === state.defaultBot ? "（主）" : ""}</option>`).join("");
+  document.querySelectorAll(".botSwitcher").forEach(sel => { sel.innerHTML = opts; sel.value = state.botId; });
+  const page = document.querySelector(".page:not(.hidden)");
+  if (page && page.id === "page-dashboard") renderBotCard();
+  if (page && page.id === "page-config") renderBotConfigPanel();
+}
+
+function onBotSwitched() {
+  const page = document.querySelector(".page:not(.hidden)");
+  const id = page && page.id;
+  if (id === "page-dashboard") loadDashboard();
+  else if (id === "page-memory") loadMemory();
+  else if (id === "page-summary") loadSummary();
+  else if (id === "page-config") loadConfig();
+}
+
+document.addEventListener("change", e => {
+  const sel = e.target.closest && e.target.closest(".botSwitcher");
+  if (sel) { state.botId = sel.value; onBotSwitched(); }
+});
+document.addEventListener("click", e => {
+  if (e.target.closest && e.target.closest(".botManageBtn")) { openBotModal(); return; }
+  const t = e.target.closest && e.target.closest(".botStartStop");
+  if (t) { botToggle(t.getAttribute("data-id")); }
+});
+
+function botModalHtml() {
+  const rows = state.bots.map(b => `
+    <tr>
+      <td>${esc(b.name || b.id)}<div class="hint">${esc(b.id)}</div></td>
+      <td class="wrap" style="max-width:260px">${esc(b.persona || "（沿用基座人设）")}</td>
+      <td><span class="badge ${b.running ? "ok" : "off"}">${b.running ? "运行中" : "已停止"}</span></td>
+      <td>${b.autostart ? "是" : "否"}</td>
+      <td class="row-actions">
+        <button class="btn small ${b.running ? "danger" : "primary"} botStartStop" data-id="${esc(b.id)}">${b.running ? "停止" : "启动"}</button>
+        <button class="btn small ghost botEdit" data-id="${esc(b.id)}">编辑</button>
+        <button class="btn small danger botDel" data-id="${esc(b.id)}">删除</button>
+      </td>
+    </tr>`).join("");
+  return `
+    <div class="modal-card">
+      <div class="modal-head"><h3>管理 Bot</h3><button class="btn ghost" id="botModalClose">✕</button></div>
+      <div class="modal-body">
+        <table class="tbl"><thead><tr><th>名称</th><th>人格</th><th>状态</th><th>自启</th><th>操作</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="5" class="hint">仅有默认 Bot（肥鱼娘）</td></tr>`}</tbody></table>
+        <hr style="margin:16px 0">
+        <div id="botEditForm"></div>
+      </div>
+    </div>`;
+}
+
+function openBotModal() {
+  const modal = $("#botModal");
+  modal.innerHTML = botModalHtml();
+  modal.classList.remove("hidden");
+  bindBotModal();
+  botEditForm(null);
+}
+
+function bindBotModal() {
+  $("#botModalClose").onclick = () => $("#botModal").classList.add("hidden");
+  $$("#botModal .botStartStop").forEach(b => b.onclick = () => botToggle(b.getAttribute("data-id")));
+  $$("#botModal .botEdit").forEach(b => b.onclick = () => botEditForm(b.getAttribute("data-id")));
+  $$("#botModal .botDel").forEach(b => b.onclick = () => botDelete(b.getAttribute("data-id")));
+}
+
+function botEditForm(id) {
+  const b = id ? state.bots.find(x => x.id === id) : null;
+  const f = $("#botEditForm");
+  if (!f) return;
+  f.innerHTML = `
+    <div class="panel-title">${b ? "编辑 Bot：" + esc(b.id) : "新建 Bot"}</div>
+    <div class="cfg-grid">
+      <label class="cfg-field" style="flex:1 1 100%"><span class="cfg-label">名称（显示名，亦作唯一 ID，建议英文）</span>
+        <input id="bfName" class="input" value="${esc(b ? b.name : "")}" placeholder="如 my_bot" ${b ? "disabled" : ""}></label>
+      <label class="cfg-field" style="flex:1 1 100%"><span class="cfg-label">人格设定（留空=沿用基座人设）</span>
+        <textarea id="bfPersona" class="textarea" rows="4">${esc(b && b.persona ? b.persona : "")}</textarea></label>
+      <label class="cfg-field"><span class="cfg-label">模型覆盖（留空=全局默认）</span>
+        <input id="bfModel" class="input" value="${esc(b && b.model ? b.model : "")}" placeholder="如 deepseek-chat"></label>
+      <label class="cfg-field"><span class="cfg-label">插件（空=全部，逗号分隔名称）</span>
+        <input id="bfPlugins" class="input" value="${esc(b && b.plugins ? b.plugins.join(",") : "")}"></label>
+      <label class="cfg-field cfg-check"><input type="checkbox" id="bfAuto" ${b && b.autostart ? "checked" : (!b ? "checked" : "")}> 随应用自启</label>
+    </div>
+    <div class="row-actions" style="margin-top:10px">
+      <button class="btn primary" id="bfSave">${b ? "保存" : "创建"}</button>
+      <span class="hint" id="bfMsg"></span>
+    </div>`;
+  $("#bfSave").onclick = () => b ? botUpdate(id) : botCreate();
+}
+
+function _botFormData() {
+  const name = ($("#bfName").value || "").trim();
+  const persona = ($("#bfPersona").value || "").trim() || null;
+  const model = ($("#bfModel").value || "").trim() || null;
+  const pluginsRaw = ($("#bfPlugins").value || "").trim();
+  const plugins = pluginsRaw ? pluginsRaw.split(",").map(s => s.trim()).filter(Boolean) : null;
+  const autostart = !!$("#bfAuto").checked;
+  return { name, persona, model, plugins, autostart };
+}
+
+async function botCreate() {
+  const d = _botFormData();
+  if (!d.name) { $("#bfMsg").textContent = "请填写名称"; return; }
+  const r = await PB("/api/bots/create", d);
+  if (r && r.ok !== false) {
+    state.botId = d.name;
+    await loadBots(); onBotSwitched(); $("#botModal").classList.add("hidden");
+    toast("已创建并切换至 " + d.name);
+  } else $("#bfMsg").textContent = "创建失败：" + (r && r.error || "未知");
+}
+
+async function botUpdate(id) {
+  const d = _botFormData();
+  const r = await PB("/api/bots/update", { id, persona: d.persona, model: d.model, plugins: d.plugins, autostart: d.autostart });
+  if (r && r.ok !== false) { await loadBots(); openBotModal(); toast("已保存"); }
+  else $("#bfMsg").textContent = "保存失败：" + (r && r.error || "未知");
+}
+
+async function botToggle(id) {
+  const b = state.bots.find(x => x.id === id);
+  const r = await PB(b && b.running ? "/api/bots/stop" : "/api/bots/start", { id });
+  if (r && r.ok !== false) { await loadBots(); openBotModal(); onBotSwitched(); }
+  else toast("操作失败：" + (r && r.error || "未知"), true);
+}
+
+async function botDelete(id) {
+  if (!confirm(`确定删除 Bot「${id}」？其记忆 / 配置将一并清除（不可恢复）。`)) return;
+  const r = await PB("/api/bots/delete", { id });
+  if (r && r.ok !== false) {
+    if (state.botId === id) state.botId = state.defaultBot;
+    await loadBots(); onBotSwitched(); $("#botModal").classList.add("hidden");
+    toast("已删除 " + id);
+  } else toast("删除失败：" + (r && r.error || "未知"), true);
+}
 
 /* ---------------- 插件中心（插件市场 + 插件包 + 依赖分组） ---------------- */
 const KIND_NAME = { platform: "平台", feature: "功能", brain: "大脑", sidecar: "Sidecar", local: "本地" };
@@ -706,7 +884,50 @@ async function loadConfig() {
     inp.dataset.dirty = "";
     inp.addEventListener("input", () => { inp.dataset.dirty = "1"; });
   });
+  renderBotConfigPanel();
   loadProviders().catch(e => console.warn("loadProviders", e));
+}
+
+/* 当前 Bot 专属配置（人格 / 模型 / 插件 / 自启），随 Bot 切换而切换 */
+function renderBotConfigPanel() {
+  const b = state.bots.find(x => x.id === state.botId)
+    || { id: state.defaultBot, name: "肥鱼娘", persona: null, model: null, plugins: null, autostart: true, running: false };
+  const el = $("#botConfigPanel");
+  if (!el) return;
+  el.innerHTML = `<div class="panel-title">当前 Bot 专属配置：${esc(b.name || b.id)}
+      <span class="badge ${b.running ? "ok" : "off"}">${b.running ? "运行中" : "已停止"}</span></div>
+    <div class="hint wrap" style="margin-bottom:10px">以下配置仅作用于当前选中的 Bot（${esc(b.id)}）。切换上方 Bot 后会显示对应配置；下方「全局配置 / AI 供应商」对所有 Bot 共享。</div>
+    <div class="cfg-grid">
+      <label class="cfg-field" style="flex:1 1 100%"><span class="cfg-label">人格设定（留空=沿用基座人设）</span>
+        <textarea id="botPersona" class="textarea" rows="4">${esc(b.persona || "")}</textarea></label>
+      <label class="cfg-field"><span class="cfg-label">模型覆盖（留空=全局默认）</span>
+        <input id="botModel" class="input" value="${esc(b.model || "")}" placeholder="如 deepseek-chat"></label>
+      <label class="cfg-field"><span class="cfg-label">插件列表（空=全部；逗号分隔名称）</span>
+        <input id="botPlugins" class="input" value="${esc((b.plugins || []).join(","))}"></label>
+      <label class="cfg-field cfg-check"><input type="checkbox" id="botAutostart" ${b.autostart ? "checked" : ""}> 随应用自启</label>
+    </div>
+    <div class="row-actions" style="margin-top:10px">
+      <button class="btn primary" id="btnSaveBotConfig">保存 Bot 配置</button>
+      <button class="btn ghost" id="btnBotStartStop">${b.running ? "停止" : "启动"}</button>
+      <span class="hint" id="botConfigMsg"></span>
+    </div>`;
+  $("#btnSaveBotConfig").onclick = saveBotConfig;
+  $("#btnBotStartStop").onclick = () => botToggle(b.id);
+}
+
+async function saveBotConfig() {
+  const id = state.botId;
+  const persona = ($("#botPersona").value || "").trim() || null;
+  const model = ($("#botModel").value || "").trim() || null;
+  const pluginsRaw = ($("#botPlugins").value || "").trim();
+  const plugins = pluginsRaw ? pluginsRaw.split(",").map(s => s.trim()).filter(Boolean) : null;
+  const autostart = !!$("#botAutostart").checked;
+  const r = await PB("/api/bots/update", { id, persona, model, plugins, autostart });
+  if (r && r.ok !== false) {
+    toast("已保存 Bot 配置（运行中的 Bot 将自动重启生效）");
+    await loadBots();
+    renderBotConfigPanel();
+  } else toast("保存失败：" + (r && r.error || "未知"), true);
 }
 
 /* ---------------- AI 供应商 / 模型管理（注册表） ---------------- */
@@ -2268,6 +2489,7 @@ function _fmtSize(b) {
 window.addEventListener("DOMContentLoaded", async () => {
   connectSSE();
   loadAppearance().catch(() => { });
+  loadBots().catch(() => { });
   await refreshStatus();
   try {
     const recent = await GET("/api/recent");
@@ -2305,7 +2527,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     try {
       const data = JSON.parse(await file.text());
       msg.textContent = "导入中…";
-      const r = await POST("/api/memory/import", { data, mode: mode || "replace" });
+      const r = await PB("/api/memory/import", { data, mode: mode || "replace" });
       if (!r.ok) throw new Error(r.error || "导入失败");
       const parts = Object.entries(r.imported || {}).map(([k, v]) => `${k}=${v}`).join("，");
       msg.textContent = "导入完成：" + parts;
@@ -2322,7 +2544,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     try {
       const text = await file.text();
       msg.textContent = "解析中…";
-      const r = await POST("/api/memory/import_chatlog", {
+      const r = await PB("/api/memory/import_chatlog", {
         text, uid: ($("#memChatlogUid").value || "app_owner").trim(),
         target: $("#memChatlogTarget").value });
       if (!r.ok) throw new Error(r.error || "失败");

@@ -25,21 +25,30 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 import config
+import agent_ctx
 import file_lock
 from quiet import degrade
 
 # ==================================================================
-# 全局缓存（进程级）
+# 全局缓存（进程级，按智能体分桶以实现多 bot 完全隔离）
 # ==================================================================
 
-# 向量数据缓存
-_vector_cache: Optional[dict] = None
+# 向量数据缓存：agent_id -> data
+_vector_cache: Dict[str, dict] = {}
 
-# 解码后的向量矩阵缓存（按 user_id -> np.ndarray）
+# 解码后的向量矩阵缓存（按 "agent:user_id" -> np.ndarray）
 # 避免每次检索都从 JSON list 重新构建 numpy array
 _matrix_cache: Dict[str, np.ndarray] = {}
 _matrix_cache_version: Dict[str, int] = {}  # 跟踪数据版本
 _data_version: Dict[str, int] = {}  # 每次 add_vector 递增
+
+
+def _agent_key(agent_id: "str | None" = None) -> str:
+    return agent_id or agent_ctx.current_agent() or "feiyu"
+
+
+def _ck(user_id: str, agent_id: "str | None" = None) -> str:
+    return f"{_agent_key(agent_id)}:{user_id}"
 
 # 向量维度（取决于模型）
 VECTOR_DIM = 384  # sentence-transformers/all-MiniLM-L6-v2 的维度
@@ -63,11 +72,12 @@ def _base_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-def _vector_file():
+def _vector_file(agent_id: "str | None" = None):
     path = getattr(config, "VECTOR_MEMORY_FILE", "") or "vector_memory.json"
-    if not os.path.isabs(path):
-        path = os.path.join(_base_dir(), path)
-    return path
+    if os.path.isabs(path):
+        return path
+    base = agent_ctx.agent_storage_dir(_base_dir(), agent_id)
+    return os.path.join(base, path)
 
 
 def _default_data() -> dict:
@@ -77,30 +87,37 @@ def _default_data() -> dict:
     }
 
 
-def _load_data() -> dict:
-    global _vector_cache
-    if _vector_cache is not None:
-        return _vector_cache
-    path = _vector_file()
+def _load_data(agent_id: "str | None" = None) -> dict:
+    aid = _agent_key(agent_id)
+    data = _vector_cache.get(aid)
+    if data is not None:
+        return data
+    path = _vector_file(aid)
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                _vector_cache = data
-                _vector_cache.setdefault("vectors", {})
-                return _vector_cache
+                data.setdefault("vectors", {})
+                _vector_cache[aid] = data
+                return data
         except (json.JSONDecodeError, OSError) as e:
             print(f"[VECTOR] 向量档案加载失败: {e}")
-    _vector_cache = _default_data()
-    return _vector_cache
+    data = _default_data()
+    _vector_cache[aid] = data
+    return data
 
 
-def _save_data():
-    path = _vector_file()
+def _save_data(agent_id: "str | None" = None):
+    aid = _agent_key(agent_id)
+    data = _vector_cache.get(aid)
+    if data is None:
+        data = _load_data(aid)
+    path = _vector_file(aid)
     try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(_load_data(), f, ensure_ascii=False)
+            json.dump(data, f, ensure_ascii=False)
     except OSError as e:
         print(f"[VECTOR] 向量档案保存失败: {e}")
 
@@ -130,14 +147,15 @@ def _decode_vector_fp16(encoded: str) -> np.ndarray:
     return arr
 
 
-def _get_or_build_matrix(user_id: str) -> Tuple[np.ndarray, List[dict]]:
+def _get_or_build_matrix(user_id: str, agent_id: "str | None" = None) -> Tuple[np.ndarray, List[dict]]:
     """获取或构建用户的向量矩阵（带缓存）。
     
     Returns:
         (normalized_matrix, items_list)
         matrix 是 L2 归一化后的 fp32 array，shape=(n, dim)
     """
-    data = _load_data()
+    ck = _ck(user_id, agent_id)
+    data = _load_data(agent_id)
     uid = str(user_id)
     items = data["vectors"].get(uid, [])
     
@@ -145,11 +163,11 @@ def _get_or_build_matrix(user_id: str) -> Tuple[np.ndarray, List[dict]]:
         return np.zeros((0, VECTOR_DIM), dtype=np.float32), []
     
     # 检查缓存是否过期
-    current_version = _data_version.get(uid, 0)
-    cached_version = _matrix_cache_version.get(uid, -1)
+    current_version = _data_version.get(ck, 0)
+    cached_version = _matrix_cache_version.get(ck, -1)
     
-    if cached_version == current_version and uid in _matrix_cache:
-        return _matrix_cache[uid], items
+    if cached_version == current_version and ck in _matrix_cache:
+        return _matrix_cache[ck], items
     
     # 构建矩阵：解码 + L2 归一化
     vectors = []
@@ -176,8 +194,8 @@ def _get_or_build_matrix(user_id: str) -> Tuple[np.ndarray, List[dict]]:
         matrix = np.vstack(vectors).astype(np.float32)
     
     # 更新缓存
-    _matrix_cache[uid] = matrix
-    _matrix_cache_version[uid] = current_version
+    _matrix_cache[ck] = matrix
+    _matrix_cache_version[ck] = current_version
     
     # LRU 淘汰
     if len(_matrix_cache) > _VEC_CACHE_MAX:
@@ -188,10 +206,10 @@ def _get_or_build_matrix(user_id: str) -> Tuple[np.ndarray, List[dict]]:
     return matrix, valid_items
 
 
-def _invalidate_matrix_cache(user_id: str):
+def _invalidate_matrix_cache(user_id: str, agent_id: "str | None" = None):
     """用户数据变更后递增版本号，使缓存失效。"""
-    uid = str(user_id)
-    _data_version[uid] = _data_version.get(uid, 0) + 1
+    ck = _ck(user_id, agent_id)
+    _data_version[ck] = _data_version.get(ck, 0) + 1
 
 
 # ==================================================================
@@ -272,12 +290,12 @@ async def generate_embeddings_batch(texts: List[str]) -> List[Optional[List[floa
 # 向量存储与检索
 # ==================================================================
 
-def add_vector(user_id: str, text: str, vector: List[float]):
+def add_vector(user_id: str, text: str, vector: List[float], agent_id: "str | None" = None):
     """添加一条向量记录。
     
     向量应已 L2 归一化（由 generate_embedding 保证）。
     """
-    data = _load_data()
+    data = _load_data(agent_id)
     uid = str(user_id)
     
     if uid not in data["vectors"]:
@@ -296,11 +314,12 @@ def add_vector(user_id: str, text: str, vector: List[float]):
         data["vectors"][uid] = vectors[-max_vectors:]
     
     # 使矩阵缓存失效
-    _invalidate_matrix_cache(uid)
-    _save_data()
+    _invalidate_matrix_cache(uid, agent_id)
+    _save_data(agent_id)
 
 
-def search_similar(user_id: str, query_vector: List[float], top_k: int = 5) -> List[Tuple[str, float]]:
+def search_similar(user_id: str, query_vector: List[float], top_k: int = 5,
+                   agent_id: "str | None" = None) -> List[Tuple[str, float]]:
     """搜索语义相似的历史记录（批量矩阵乘法优化）。
     
     性能优化：
@@ -311,7 +330,7 @@ def search_similar(user_id: str, query_vector: List[float], top_k: int = 5) -> L
     Returns:
         [(text, similarity_score), ...] 按相似度降序
     """
-    matrix, items = _get_or_build_matrix(user_id)
+    matrix, items = _get_or_build_matrix(user_id, agent_id)
     
     if matrix.shape[0] == 0:
         return []
@@ -341,7 +360,7 @@ def search_similar(user_id: str, query_vector: List[float], top_k: int = 5) -> L
     return results
 
 
-async def index_history(user_id: str, texts: List[str]):
+async def index_history(user_id: str, texts: List[str], agent_id: "str | None" = None):
     """为历史记录建立向量索引。"""
     if not texts:
         return
@@ -353,13 +372,14 @@ async def index_history(user_id: str, texts: List[str]):
     count = 0
     for text, emb in zip(texts, embeddings):
         if emb is not None:
-            add_vector(user_id, text, emb)
+            add_vector(user_id, text, emb, agent_id)
             count += 1
     
     print(f"[VECTOR] 用户 {user_id} 索引了 {count} 条记录")
 
 
-async def semantic_search(user_id: str, query: str, top_k: int = 5) -> List[str]:
+async def semantic_search(user_id: str, query: str, top_k: int = 5,
+                          agent_id: "str | None" = None) -> List[str]:
     """语义搜索历史记录。
     
     Args:
@@ -374,7 +394,7 @@ async def semantic_search(user_id: str, query: str, top_k: int = 5) -> List[str]
     if query_vector is None:
         return []
     
-    results = search_similar(user_id, query_vector, top_k)
+    results = search_similar(user_id, query_vector, top_k, agent_id)
     return [text for text, score in results if score > 0.5]  # 过滤低相似度
 
 
@@ -480,9 +500,10 @@ def _bm25_score(
     return scores
 
 
-async def _bm25_search(user_id: str, query: str, top_k: int = 5) -> List[Tuple[str, float]]:
+async def _bm25_search(user_id: str, query: str, top_k: int = 5,
+                      agent_id: "str | None" = None) -> List[Tuple[str, float]]:
     """BM25 关键词检索。"""
-    data = _load_data()
+    data = _load_data(agent_id)
     uid = str(user_id)
     items = data["vectors"].get(uid, [])
     
@@ -552,7 +573,8 @@ def _reciprocal_rank_fusion(
 # 混合检索（BM25 + Cosine + RRF 融合）
 # ==================================================================
 
-async def hybrid_search(user_id: str, query: str, top_k: int = 5) -> List[str]:
+async def hybrid_search(user_id: str, query: str, top_k: int = 5,
+                       agent_id: "str | None" = None) -> List[str]:
     """混合检索：BM25 + Cosine + RRF 融合（N.E.K.O 风格）。
     
     管线：
@@ -563,13 +585,13 @@ async def hybrid_search(user_id: str, query: str, top_k: int = 5) -> List[str]:
     性能：5000 条语料实测 ~84ms（优化前 190ms）。
     """
     # 并行执行 BM25 和 Cosine
-    bm25_task = asyncio.create_task(_bm25_search(user_id, query, top_k=top_k * 2))
+    bm25_task = asyncio.create_task(_bm25_search(user_id, query, top_k=top_k * 2, agent_id=agent_id))
     
     # Cosine 检索
     query_vector = await generate_embedding(query)
     cosine_results = []
     if query_vector is not None:
-        cosine_results = search_similar(user_id, query_vector, top_k=top_k * 2)
+        cosine_results = search_similar(user_id, query_vector, top_k=top_k * 2, agent_id=agent_id)
         cosine_results = [(text, score) for text, score in cosine_results if score > 0.3]
     
     bm25_results = await bm25_task
@@ -585,31 +607,35 @@ async def hybrid_search(user_id: str, query: str, top_k: int = 5) -> List[str]:
 # 工具函数
 # ==================================================================
 
-def get_vector_stats() -> dict:
+def get_vector_stats(agent_id: "str | None" = None) -> dict:
     """获取向量记忆统计信息。"""
-    data = _load_data()
+    aid = _agent_key(agent_id)
+    data = _load_data(aid)
     vectors = data.get("vectors", {})
     return {
         "user_count": len(vectors),
         "total_vectors": sum(len(v) for v in vectors.values()),
         "model_name": data.get("model_name", VECTOR_MODEL_NAME),
-        "matrix_cache_size": len(_matrix_cache),
+        "matrix_cache_size": len([k for k in _matrix_cache if k.startswith(aid + ":")]),
     }
 
 
-def clear_vectors(user_id: str = ""):
+def clear_vectors(user_id: str = "", agent_id: "str | None" = None):
     """清空向量记忆。"""
-    data = _load_data()
+    aid = _agent_key(agent_id)
+    ck = _ck(user_id, aid) if user_id else None
+    data = _load_data(aid)
     if user_id:
         uid = str(user_id)
         if uid in data["vectors"]:
             del data["vectors"][uid]
-        _matrix_cache.pop(uid, None)
-        _matrix_cache_version.pop(uid, None)
-        _data_version.pop(uid, None)
+        _matrix_cache.pop(ck, None)
+        _matrix_cache_version.pop(ck, None)
+        _data_version.pop(ck, None)
     else:
         data["vectors"] = {}
-        _matrix_cache.clear()
-        _matrix_cache_version.clear()
-        _data_version.clear()
-    _save_data()
+        for k in [k for k in _matrix_cache if k.startswith(aid + ":")]:
+            _matrix_cache.pop(k, None)
+            _matrix_cache_version.pop(k, None)
+            _data_version.pop(k, None)
+    _save_data(aid)
