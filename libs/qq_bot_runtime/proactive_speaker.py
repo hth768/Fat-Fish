@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 
 import config
 from ai_provider import get_llm
+from quiet import degrade
 
 # 全局单例
 _speaker_instance: Optional["ProactiveSpeaker"] = None
@@ -132,8 +133,8 @@ class ProactiveSpeaker:
             s = get_sender()
             if s is not None:
                 self._sender = s
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/proactive_speaker.py:135 ProactiveSpeaker.set_ws", e, "降级：from message_bus import get_sender")
 
     def set_sender(self, sender):
         """新接口：注入统一 MessageSender（优先使用，替代裸 ws）。"""
@@ -279,8 +280,8 @@ class ProactiveSpeaker:
         try:
             from realtime import format_now
             time_ctx = format_now()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/proactive_speaker.py:282 ProactiveSpeaker._generate_no_game_msg", e, "降级：from realtime import format_now")
         
         # 注入屏幕感知上下文（如果启用）
         screen_ctx = ""
@@ -289,8 +290,8 @@ class ProactiveSpeaker:
             awareness = get_screen_awareness()
             if awareness.enabled:
                 screen_ctx = awareness.get_state_hint()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/proactive_speaker.py:292 ProactiveSpeaker._generate_no_game_msg", e, "降级：from screen_awareness import get_screen_awareness")
         
         user_content = f"当前真实时间：{time_ctx}"
         if screen_ctx:
@@ -433,8 +434,8 @@ class ProactiveSpeaker:
         try:
             from realtime import format_now
             time_ctx = format_now()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/proactive_speaker.py:436 ProactiveSpeaker._generate_message", e, "降级：from realtime import format_now")
         # 注入完整记忆库（人物档案/重要信息/AI自我认知/历史）
         memory_msgs = self._build_memory_messages()
         messages = [{"role": "system", "content": _ACTIVE_SYSTEM_PROMPT}]

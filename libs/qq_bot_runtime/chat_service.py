@@ -26,6 +26,7 @@ import knowledge_service
 from deepseek_client import DeepSeekClient
 from glm_client import detect_image_type
 from session_manager import SessionManagerAdapter
+from quiet import degrade
 try:  # 视觉捕获依赖 cv2/mss，未安装时聊天优雅降级（仍可用文本/记忆等功能）
     from vision_capture import vision_capture
 except Exception:
@@ -132,8 +133,8 @@ class ChatService:
                 try:
                     from proactive_speaker import get_speaker
                     get_speaker().notify_reply()
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("libs/qq_bot_runtime/chat_service.py:135 ChatService._handle_message", e, "降级：from proactive_speaker import get_speaker")
 
         has_voice = bool(msg.audio_wav)
         has_quote = bool(msg.quoted_text or msg.quoted_image_refs or msg.quoted_sender)
@@ -536,8 +537,8 @@ class ChatService:
             if len(raw) > 1:
                 try:
                     count = int(raw[1])
-                except ValueError:
-                    pass
+                except ValueError as e:
+                    degrade("libs/qq_bot_runtime/chat_service.py:540 ChatService._handle_message", e, "降级：count = int(raw[1])")
             result = await _mcw.craft(item, count)
             if result.get("ok"):
                 await reply.reply(f"合成了 {count} 个 {item}~（注意：需要游戏开启作弊）")
@@ -808,8 +809,8 @@ class ChatService:
                 else:
                     await reply.reply(f"没有第 {idx} 条哦，看看 /重要信息 里的序号~")
                 return
-            except ValueError:
-                pass
+            except ValueError as e:
+                degrade("libs/qq_bot_runtime/chat_service.py:812 ChatService._handle_message", e, "降级：idx = int(raw)")
             removed = important_notes.delete_note(user_id, keyword=raw)
             if removed:
                 await reply.reply(f"好哒，我忘了 {removed} 条相关的重要信息~")
@@ -1508,8 +1509,8 @@ class ChatService:
             try:
                 from realtime import get_time_context
                 messages.append({"role": "system", "content": f"【当前实时时间】{get_time_context()}"})
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/chat_service.py:1511 ChatService._chat_pipeline", e, "降级：from realtime import get_time_context")
 
             messages.append({"role": "user", "content": effective_text or text})
 
@@ -1802,8 +1803,8 @@ class ChatService:
                 if action:
                     lines.append(f"你刚才在做：{action}")
                 parts.append("".join(lines))
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/chat_service.py:1805 ChatService._build_stream_mc_hint", e, "降级：st = core.brains.get('mc_bot').status()")
         # 模组世界自主大脑（mc_mod）
         try:
             brain = core.brains.get("mc_mod")
@@ -1815,8 +1816,8 @@ class ChatService:
                 if acts:
                     lines.append("你最近的动作：" + "；".join(str(a)[:40] for a in acts[:3]))
                 parts.append("".join(lines))
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/chat_service.py:1818 ChatService._build_stream_mc_hint", e, "降级：brain = core.brains.get('mc_mod')")
         if not parts:
             return ""
         return ("\n".join(parts)
@@ -2187,8 +2188,8 @@ def _parse_mood_line(line_clean: str) -> dict:
     if len(parts) >= 2:
         try:
             strength = max(1, min(int(parts[1]), 3))
-        except ValueError:
-            pass
+        except ValueError as e:
+            degrade("libs/qq_bot_runtime/chat_service.py:2191 _parse_mood_line", e, "降级：strength = max(1, min(int(parts[1]), 3))")
     why = parts[2] if len(parts) >= 3 else ""
     return {"emotion": label, "strength": strength, "why": why[:80]}
 

@@ -19,6 +19,7 @@ import sys
 import time
 
 import config
+from quiet import degrade
 
 # 所有被本进程拉起的 sidecar 子进程句柄（退出时统一清理）
 _SIDECARS = []
@@ -98,8 +99,8 @@ async def _monitor_push_loop(core):
                 vision = {}
             try:
                 telemetry_save()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/main.py:102 _monitor_push_loop", e, "降级：telemetry_save()")
             payload = {
                 "core": core.status(),
                 "memory_sidecar": await mem_healthy(),
@@ -156,16 +157,16 @@ async def run_bot():
 
     try:
         await asyncio.Future()  # 永久运行
-    except asyncio.CancelledError:
-        pass
+    except asyncio.CancelledError as e:
+        degrade("libs/qq_bot_runtime/main.py:160 run_bot", e, "降级：await asyncio.Future()")
     finally:
         await core.shutdown()
         # 退出时清理本进程拉起的 sidecar 子进程（launcher 托管时不在此列）
         for proc in _SIDECARS:
             try:
                 proc.terminate()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("main.run_bot", e, "退出清理 sidecar 失败")
 
 
 def main():

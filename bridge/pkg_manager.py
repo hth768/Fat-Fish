@@ -377,8 +377,8 @@ class PackageManager:
             # 装载后立即推送已保存的参数（扩展设置）
             try:
                 wrapper.on_config(settings_store.get_plugin_config(name))
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bridge/pkg_manager.py:380 PackageManager.load", e, "降级：wrapper.on_config(settings_store.get_plugin_config")
             _set_enabled(name, True)
             out = {"ok": True, "applied": True, "hint": "已装载"}
             soft = self.soft_deps(meta)
@@ -466,8 +466,8 @@ class PackageManager:
                 if meta["kind"] == "brain":
                     try:
                         core.brains._plugins.pop(meta["plugin_key"], None)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        degrade("bridge/pkg_manager.py:469 PackageManager.attach_to", e, "降级：core.brains._plugins.pop(meta['plugin_key'], None)")
                 continue
             try:
                 wrapper = _load_wrapper(meta["dir"], name)

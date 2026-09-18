@@ -22,6 +22,7 @@ import httpx
 
 import config
 from plugin_base import FeaturePlugin
+from quiet import attention, degrade
 
 # 项目根目录（本文件所在目录）
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -98,8 +99,8 @@ class _SidecarProcess:
             except Exception:
                 try:
                     self.proc.kill()
-                except Exception:
-                    pass
+                except Exception as e:
+                    attention("tts_vox._SidecarProcess.terminate", e, "兜底 kill 失败（可能残留 TTS sidecar）")
         self.proc = None
         self.ready = False
 
@@ -142,8 +143,8 @@ async def _wait_ready() -> None:
             health = await _check_health(timeout=2)
             if health.get("ready"):
                 return
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/tts_vox.py:146 _wait_ready", e, "降级：health = await _check_health(timeout=2)")
         raise RuntimeError("本地 TTS 暂不可用（冷却中，等待自愈）")
 
     deadline = now + getattr(config, "VOXCPM_WAIT_READY_SECONDS", 240)
@@ -200,10 +201,10 @@ def _cache_cleanup():
         for old in sorted(files, key=os.path.getmtime)[:-limit]:
             try:
                 os.remove(old)
-            except OSError:
-                pass
-    except OSError:
-        pass
+            except OSError as e:
+                degrade("tts_vox._cache_cleanup", e, "删 TTS 缓存失败")
+    except OSError as e:
+        degrade("tts_vox._cache_cleanup", e, "列/清 TTS 缓存失败")
 
 
 async def voxcpm_synthesize(text: str) -> str:
@@ -292,8 +293,8 @@ class VoxTTSPlugin(FeaturePlugin):
                     _service.ready = bool(health.get("ready"))
                 except Exception:
                     _service.ready = False
-        except asyncio.CancelledError:
-            pass
+        except asyncio.CancelledError as e:
+            degrade("libs/qq_bot_runtime/tts_vox.py:296 VoxTTSPlugin._health_loop", e, "降级：while True")
         except Exception as e:
             print(f"[VOXCPM] 健康轮询异常: {e}")
 

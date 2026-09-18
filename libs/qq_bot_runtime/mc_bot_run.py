@@ -8,6 +8,7 @@ import asyncio
 import os
 import sys
 import time
+from quiet import degrade
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -45,8 +46,8 @@ async def main() -> int:
             agent.stop()
             try:
                 await task
-            except asyncio.CancelledError:
-                pass
+            except asyncio.CancelledError as e:
+                degrade("libs/qq_bot_runtime/mc_bot_run.py:48 main", e, "降级：await task")
             print("[BOT-RUN] 到时退出")
         else:
             await agent.run()

@@ -28,8 +28,8 @@ class QuietServer(ThreadingHTTPServer):
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             try:
                 self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-            except OSError:
-                pass
+            except OSError as e:
+                degrade("server.QuietServer.server_bind", e, "设独占绑定选项失败")
         super().server_bind()
 
     def handle_error(self, request, client_address):

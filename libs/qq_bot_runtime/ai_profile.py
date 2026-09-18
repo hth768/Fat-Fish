@@ -14,6 +14,8 @@ import time
 import config
 import agent_ctx
 
+from quiet import degrade
+
 # 默认档案（基于现有 SYSTEM_PROMPT 的人设，可被用户修改）
 DEFAULT_PROFILE = {
     "identity": "我是肥鱼娘（DeepSeek娘拟人），昵称小鱼或肥鱼娘，是 DeepSeek 大模型的拟人化萌娘。",
@@ -47,8 +49,8 @@ def load_profile() -> dict:
                 prof = dict(DEFAULT_PROFILE)
                 prof.update(a.get("profile", {}) or {})
                 return prof
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("ai_profile.load_profile", e, "读智能体档案失败，回退默认档案")
         return dict(DEFAULT_PROFILE)
     path = _profile_file()
     if os.path.exists(path):
@@ -57,8 +59,8 @@ def load_profile() -> dict:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            degrade("libs/qq_bot_runtime/ai_profile.py:62 load_profile", e, "降级：with open(path, 'r', encoding='utf-8') as f")
     return dict(DEFAULT_PROFILE)
 
 

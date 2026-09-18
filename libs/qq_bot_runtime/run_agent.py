@@ -11,6 +11,7 @@ import sys
 import config
 
 from agent_core import get_core
+from quiet import degrade
 
 
 async def main():
@@ -36,8 +37,8 @@ async def main():
 
     try:
         await asyncio.Future()
-    except asyncio.CancelledError:
-        pass
+    except asyncio.CancelledError as e:
+        degrade("libs/qq_bot_runtime/run_agent.py:39 main", e, "降级：await asyncio.Future()")
     finally:
         await core.shutdown()
 

@@ -11,6 +11,7 @@
 """
 import os
 import sys
+from quiet import degrade
 
 
 def configure_runtime_env():
@@ -26,8 +27,8 @@ def _configure_stdio_utf8():
             try:
                 if hasattr(s, "reconfigure"):
                     s.reconfigure(encoding="utf-8", errors="replace")
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/launcher_core/bootstrap.py:29 _configure_stdio_utf8", e, "降级：if hasattr(s, 'reconfigure')")
 
 
 def _ensure_utf8_fs():
@@ -40,8 +41,8 @@ def _ensure_utf8_fs():
         os.environ["_QQBOT_FS_UTF8_REEXEC"] = "1"
         try:
             os.execv(sys.executable, [sys.executable] + sys.argv)
-        except OSError:
-            pass
+        except OSError as e:
+            degrade("libs/qq_bot_runtime/launcher_core/bootstrap.py:43 _ensure_utf8_fs", e, "降级：os.execv(sys.executable, [sys.executable] + sys.ar")
 
 
 def reexec_into_venv():

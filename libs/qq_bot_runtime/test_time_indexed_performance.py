@@ -11,6 +11,7 @@ import time
 import json
 import random
 import string
+from quiet import degrade
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -138,8 +139,8 @@ def test_concurrent_performance(num_users=10, records_per_user=100):
         if os.path.exists(db_file):
             try:
                 os.remove(db_file)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("test_time_indexed_performance.test_concurrent_performance", e, "删性能测试 DB 失败")
     
     return elapsed
 

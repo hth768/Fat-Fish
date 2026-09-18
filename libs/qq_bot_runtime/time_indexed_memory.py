@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Tuple
 
 import config
 import agent_ctx
+from quiet import degrade
 
 
 def _base_dir():
@@ -268,8 +269,8 @@ class TimeIndexedMemory:
             for conn in self._connections.values():
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("time_indexed_memory.TimeIndexedMemory.close_all", e, "关数据库连接失败")
             self._connections.clear()
             self._cache.clear()
 

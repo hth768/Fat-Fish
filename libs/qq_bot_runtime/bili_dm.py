@@ -23,6 +23,7 @@ import config
 from bili_api import BiliSession, has_cookies
 from message_bus import InboundMessage, ReplyTarget
 from plugin_base import FeaturePlugin
+from quiet import degrade
 
 _VC = "https://api.vc.bilibili.com"
 _HEADERS = {
@@ -145,8 +146,8 @@ class BilibiliDmPlugin(FeaturePlugin):
         if self._http is not None:
             try:
                 await self._http.aclose()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/bili_dm.py:149 BilibiliDmPlugin.stop", e, "降级：await self._http.aclose()")
             self._http = None
         await super().stop()
 
@@ -161,8 +162,8 @@ class BilibiliDmPlugin(FeaturePlugin):
                 except Exception as e:
                     print("[BILI_DM] 轮询异常: %s" % e)
                 await asyncio.sleep(max(5, int(getattr(config, "BILIBILI_DM_POLL_SEC", 15))))
-        except asyncio.CancelledError:
-            pass
+        except asyncio.CancelledError as e:
+            degrade("libs/qq_bot_runtime/bili_dm.py:164 BilibiliDmPlugin._loop", e, "降级：while True")
 
     async def _poll_once(self):
         # 白名单模式：直接轮询每个白名单 UID 的私信历史（无需会话列表接口）

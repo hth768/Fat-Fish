@@ -283,7 +283,8 @@ def list_disk_dirs(path: str = "") -> dict:
                 try:
                     if not e.is_dir():
                         continue
-                except OSError:
+                except OSError as e:
+                    degrade("bridge/builder_api.py:286 list_disk_dirs", e, "降级：if not e.is_dir()")
                     continue
                 dirs.append({"name": e.name, "path": os.path.join(ap, e.name)})
     except PermissionError:
@@ -1439,20 +1440,20 @@ def set_settings(patch: dict) -> dict:
         try:
             s["web_max_chars"] = max(1000, min(int(patch["web_max_chars"]), 200000))
             changed.append("web_max_chars")
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("bridge/builder_api.py:1442 set_settings", e, "降级：s['web_max_chars'] = max(1000, min(int(patch['web_")
     if "web_max_pages" in patch:
         try:
             s["web_max_pages"] = max(1, min(int(patch["web_max_pages"]), 10))
             changed.append("web_max_pages")
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("bridge/builder_api.py:1448 set_settings", e, "降级：s['web_max_pages'] = max(1, min(int(patch['web_max")
     if "max_steps" in patch:
         try:
             s["max_steps"] = max(1, min(int(patch["max_steps"]), 40))
             changed.append("max_steps")
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("bridge/builder_api.py:1454 set_settings", e, "降级：s['max_steps'] = max(1, min(int(patch['max_steps']")
     if "deny_extra" in patch:
         v = patch["deny_extra"]
         if isinstance(v, str):

@@ -13,6 +13,7 @@ import os
 import httpx
 
 import config
+from quiet import degrade
 
 TTS_URL = "https://api.z.ai/api/paas/v4/audio/speech"
 ASR_URL = "https://api.z.ai/api/paas/v4/audio/transcriptions"
@@ -74,10 +75,10 @@ def _write_atomic(path: str, data: bytes) -> None:
         for old in sorted(files, key=os.path.getmtime)[:-limit]:
             try:
                 os.remove(old)
-            except OSError:
-                pass
-    except OSError:
-        pass
+            except OSError as e:
+                degrade("voice_client._write_atomic", e, "删 TTS 缓存失败")
+    except OSError as e:
+        degrade("voice_client._write_atomic", e, "清 TTS 缓存失败")
 
 
 def _get_api_key():
@@ -116,8 +117,8 @@ async def text_to_speech(text: str) -> bytes:
         try:
             with open(cache_path, "rb") as f:
                 return f.read()
-        except FileNotFoundError:
-            pass
+        except FileNotFoundError as e:
+            degrade("libs/qq_bot_runtime/voice_client.py:120 text_to_speech", e, "降级：with open(cache_path, 'rb') as f")
         except OSError as e:
             print(f"[WARN] TTS 缓存读取失败，本次不缓存: {e}")
             cache_path = None  # 缓存损坏：放弃写缓存，避免把坏数据固化成永久错误

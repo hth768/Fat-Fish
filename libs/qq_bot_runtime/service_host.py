@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from quiet import degrade
 
 # 单调用超时默认值（通用）：普通 RPC 足够用。需要给「首次懒加载重模型」留时间的
 # 服务（如 memory 的 sentence-transformers）请在 serve(timeout=...) 里显式传大值。
@@ -46,13 +47,13 @@ def _to_jsonable(obj):
     if hasattr(obj, "item"):  # numpy / torch 标量
         try:
             return obj.item()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/service_host.py:49 _to_jsonable", e, "降级：return obj.item()")
     if hasattr(obj, "tolist"):
         try:
             return _to_jsonable(obj.tolist())
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/service_host.py:54 _to_jsonable", e, "降级：return _to_jsonable(obj.tolist())")
     return str(obj)
 
 
@@ -162,8 +163,8 @@ def serve(modules, host="127.0.0.1", port=8766, banner="rpc-service", timeout=No
     print(f"[{banner}] 已启动 http://{host}:{port}  托管模块: {modules}", flush=True)
     try:
         httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
+    except KeyboardInterrupt as e:
+        degrade("libs/qq_bot_runtime/service_host.py:165 serve", e, "降级：httpd.serve_forever()")
     finally:
         httpd.server_close()
 

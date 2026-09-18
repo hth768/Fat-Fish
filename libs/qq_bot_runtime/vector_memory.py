@@ -26,6 +26,7 @@ import numpy as np
 
 import config
 import file_lock
+from quiet import degrade
 
 # ==================================================================
 # 全局缓存（进程级）
@@ -392,8 +393,8 @@ def _tokenize_cjk_ngram(text: str) -> List[str]:
         import opencc
         converter = opencc.OpenCC("t2s")
         text = converter.convert(text)
-    except ImportError:
-        pass  # 没有 opencc 就用原文
+    except ImportError as e:
+        degrade("libs/qq_bot_runtime/vector_memory.py:395 _tokenize_cjk_ngram", e, "降级：import opencc")
     
     tokens = []
     # 匹配 CJK 字符和拉丁词

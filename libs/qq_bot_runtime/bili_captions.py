@@ -22,6 +22,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config
+from quiet import degrade
 
 _MAX_LINES = 50
 _PORT = 8768
@@ -162,8 +163,8 @@ def stop():
         try:
             _server.shutdown()
             _server.server_close()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/bili_captions.py:165 stop", e, "降级：_server.shutdown()")
         _server = None
     if _thread is not None:
         _thread = None

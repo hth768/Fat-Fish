@@ -103,8 +103,13 @@ def bootstrap():
             _telemetry_mod.time = _time_mod
         if not hasattr(_telemetry_mod, "hmac"):
             _telemetry_mod.hmac = _hmac_mod
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            from quiet import degrade
+        except Exception:
+            degrade = None
+        if degrade is not None:
+            degrade("app.bootstrap", e, "补齐 telemetry 依赖失败")
     return settings_store
 
 
@@ -151,8 +156,8 @@ def main():
             try:
                 import ctypes
                 ctypes.windll.user32.MessageBoxW(None, msg, "肥鱼娘 App", 0x40)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("app.main", e, "弹错误对话框失败")
             sys.exit(1)
         raise
     url = f"http://127.0.0.1:{srv.server_address[1]}"

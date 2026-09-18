@@ -19,6 +19,7 @@ import httpx
 
 import config
 from bili_api import BiliSession, wbi_sign
+from quiet import degrade
 
 _API_BASE = "https://api.bilibili.com"
 # 主站接口需要主站 Referer/Origin（live.bilibili.com 的会被网关 412 拦截）
@@ -176,8 +177,8 @@ async def fetch_audio_transcript(bvid: str) -> str:
         finally:
             try:
                 os.remove(wav_path)
-            except OSError:
-                pass
+            except OSError as e2:
+                degrade("bili_learn.fetch_audio_transcript", e2, "删转写临时音频失败")
     except Exception as e:
         print(f"[BILI_LEARN] 音频 ASR 补齐失败（降级为仅用元信息）: {e}")
         return ""

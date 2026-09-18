@@ -20,6 +20,7 @@ import urllib.error
 import urllib.request
 
 import config
+from quiet import degrade
 
 ENABLE = getattr(config, "ENABLE_MEMORY_SERVER", False)
 HOST = getattr(config, "MEMORY_SERVER_HOST", "127.0.0.1")
@@ -75,9 +76,8 @@ class _ModuleProxy:
             if ENABLE:
                 try:
                     return await _http_call(self._module, func, args, kwargs)
-                except _ServerUnavailable:
-                    # 服务不可用：降级到进程内调用，保证功能不中断
-                    pass
+                except _ServerUnavailable as e:
+                    degrade("libs/qq_bot_runtime/memory_client.py:78 _ModuleProxy.__getattr__._call", e, "降级：return await _http_call(self._module, func, args, ")
             return await _local_call(self._module, func, args, kwargs)
 
         return _call

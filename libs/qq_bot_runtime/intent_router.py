@@ -22,6 +22,7 @@ import asyncio
 import re
 import time
 from typing import Dict, List, Optional, Tuple
+from quiet import degrade
 
 try:
     from mc_watcher import mc_watcher
@@ -555,8 +556,8 @@ async def detect_intent_ai(text: str):
         try:
             from memory_context import build_memory_messages
             messages.extend(build_memory_messages("", include={"profile": False, "notes": False, "ai_profile": True}))
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/intent_router.py:558 detect_intent_ai", e, "降级：from memory_context import build_memory_messages")
         messages.append({"role": "user", "content": f"用户说：\"{text}\"\n请判断意图。"})
         raw = await client.chat(messages, model=config.DEEPSEEK_MODEL, think=False, capability="chat")
         import json

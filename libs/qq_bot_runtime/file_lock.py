@@ -13,6 +13,7 @@ import contextlib
 import os
 import threading
 import time
+from quiet import degrade
 
 try:
     import msvcrt  # Windows
@@ -89,8 +90,8 @@ def file_lock(target_path: str, timeout: float = 10.0):
                 f.seek(0)
                 try:
                     msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
+                except OSError as e:
+                    degrade("libs/qq_bot_runtime/file_lock.py:93 file_lock", e, "降级：msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)")
                 with _depth_lock:
                     _lock_depth.pop(path, None)
                     _lock_handles.pop(path, None)
@@ -118,8 +119,8 @@ def file_lock(target_path: str, timeout: float = 10.0):
         os.close(fd)
         try:
             os.remove(path)
-        except OSError:
-            pass
+        except OSError as e:
+            degrade("file_lock.file_lock", e, "删锁文件失败")
         with _depth_lock:
             _lock_depth.pop(path, None)
             _lock_handles.pop(path, None)

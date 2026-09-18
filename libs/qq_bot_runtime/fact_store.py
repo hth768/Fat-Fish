@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Tuple
 
 import config
 import agent_ctx
+from quiet import degrade
 
 
 def _base_dir():
@@ -240,9 +241,8 @@ class FactStore:
                         (user_id, fact_hash, fact_text, confidence, created_at, updated_at)
                         VALUES (?, ?, ?, 1.0, ?, ?)
                     """, (user_id, fact["hash"], fact["text"], fact["created_at"], fact["updated_at"]))
-                except sqlite3.IntegrityError:
-                    # 已存在，跳过
-                    pass
+                except sqlite3.IntegrityError as e:
+                    degrade("fact_store.FactStore._main_insert", e, "唯一约束冲突，已忽略重复事实")
     
     def update_fact_confidence(self, user_id: str, fact_text: str, confidence: float):
         """更新事实的置信度。"""

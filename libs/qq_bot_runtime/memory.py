@@ -27,6 +27,7 @@ from collections import defaultdict, deque
 from typing import Dict, Optional
 
 import config
+from quiet import attention
 
 # 落盘防抖间隔（秒）：一次聊天回合会触发多次写入（user/assistant/topic），
 # 合并成最多每 2 秒一次全量写，避免每条消息都重写整个记忆文件
@@ -56,8 +57,8 @@ class Memory:
         try:
             if self._dirty:
                 self._flush()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/memory.py:60 Memory._atexit_flush", e, "降级：if self._dirty")
 
     def _key(self, message_type: str, group_id, user_id) -> str:
         # 统一按「用户」记忆：私聊和群聊共享同一个人的记忆，跨场景互通
@@ -448,6 +449,6 @@ class SessionManagerAdapter:
             try:
                 sess.save(force=force)
                 saved += 1
-            except Exception:
-                pass
+            except Exception as e:
+                attention("memory.SessionManagerAdapter.save", e, "会话落盘失败（可能丢聊天记录）")
         return saved

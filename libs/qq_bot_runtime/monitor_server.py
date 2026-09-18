@@ -23,6 +23,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import urlopen
 from urllib.error import URLError
+from quiet import degrade
 
 START_TS = time.time()
 LATEST = {"core": None, "memory_sidecar": None, "providers": None, "vision": None, "ts": None}
@@ -135,8 +136,8 @@ def main():
     print(f"[monitor] 已启动 http://{args.host}:{args.port} (看板: / )", flush=True)
     try:
         httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
+    except KeyboardInterrupt as e:
+        degrade("libs/qq_bot_runtime/monitor_server.py:138 main", e, "降级：httpd.serve_forever()")
     finally:
         httpd.server_close()
 

@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config
+from quiet import degrade
 
 # ---- 监听地址（兼容 launcher 的 --host/--port 与旧 argv[1] 端口两种调用）----
 def _resolve_host_port():
@@ -87,8 +88,8 @@ def _save():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_agg, f, ensure_ascii=False)
         os.replace(tmp, STORE_FILE)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("telemetry_server._save", e, "聚合统计落盘失败")
 
 
 _load()
@@ -209,8 +210,8 @@ def main():
           flush=True)
     try:
         httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
+    except KeyboardInterrupt as e:
+        degrade("libs/qq_bot_runtime/telemetry_server.py:213 main", e, "降级：httpd.serve_forever()")
     finally:
         _save()
         httpd.server_close()

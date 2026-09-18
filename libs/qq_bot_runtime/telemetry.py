@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 import config
+from quiet import degrade
 
 # 是否在 launcher 托管下向遥测 sidecar（telemetry_server.py）上报。
 # 关闭时退回纯本地文件聚合（默认/旧行为，零回归）。
@@ -54,8 +55,8 @@ def _load():
                 loaded = json.load(f)
             _data["providers"] = loaded.get("providers", {})
             _data["vision"] = loaded.get("vision", {})
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/telemetry.py:58 _load", e, "降级：if os.path.exists(_TELEMETRY_FILE)")
 
 
 def _save():
@@ -67,8 +68,8 @@ def _save():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(_data, f, ensure_ascii=False)
         os.replace(tmp, _TELEMETRY_FILE)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("telemetry._save", e, "telemetry 落盘失败")
 
 
 # 启动时合并磁盘数据（仅保留已知 key 的累计）
@@ -169,8 +170,8 @@ def _enqueue(group: str, key: str, event: str, **metrics):
                 "error": str(metrics.get("error", ""))[:200]}
         with _q_lock:
             _q.append(item)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/telemetry.py:173 _enqueue", e, "降级：item = {'group': group, 'key': key, 'event': event")
 
 
 def _flush_once():
@@ -189,9 +190,8 @@ def _flush_once():
         req = Request(_SERVER_URL + "/report", data=payload, headers=headers,
                       method="POST")
         urlopen(req, timeout=3)
-    except (URLError, OSError, Exception):
-        # 上报失败静默丢弃，绝不影响主流程（含 sidecar 未启动的情况）
-        pass
+    except (URLError, OSError, Exception) as e:
+        degrade("libs/qq_bot_runtime/telemetry.py:193 _flush_once", e, "降级：import json as _json")
 
 
 def _reporter_loop():
@@ -199,8 +199,8 @@ def _reporter_loop():
         time.sleep(5)
         try:
             _flush_once()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/telemetry.py:202 _reporter_loop", e, "降级：_flush_once()")
 
 
 if _ENABLE_SERVER:

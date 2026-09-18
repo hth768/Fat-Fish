@@ -220,8 +220,8 @@ def plugin_config_save(name: str, values: dict) -> dict:
     try:
         if _pkg is not None:
             applied = _pkg.set_config(name, final)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/plugins_api.py:223 plugin_config_save", e, "降级：if _pkg is not None")
     return {"ok": True, "name": name, "values": final, "applied": applied}
 
 
@@ -340,8 +340,8 @@ def market_action(bridge, action: str, name: str) -> dict:
                 return {"ok": False, "error": f"安装失败: {e!r}"}
             try:
                 rescan(bridge)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bridge/plugins_api.py:343 market_action", e, "降级：rescan(bridge)")
             return {"ok": True, "hint": f"插件已安装到插件库: {name}（到列表中启用）"}
 
         targets = PACK_TARGETS.get(name)
@@ -371,16 +371,16 @@ def market_action(bridge, action: str, name: str) -> dict:
                     _pkg = manager()
                     if _pkg is not None:
                         _pkg.unload(name)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bridge/plugins_api.py:374 market_action", e, "降级：if bridge.core is not None")
             try:
                 shutil.rmtree(pkg_dst)
             except Exception as e:
                 return {"ok": False, "error": f"卸载失败: {e!r}"}
             try:
                 rescan(bridge)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bridge/plugins_api.py:382 market_action", e, "降级：rescan(bridge)")
             return {"ok": True, "hint": f"插件已从插件库移除: {name}"}
 
         targets = PACK_TARGETS.get(name)
@@ -583,8 +583,8 @@ def market_seek(bridge) -> dict:
     if installed:
         try:
             rescan(bridge)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("bridge/plugins_api.py:586 market_seek", e, "降级：rescan(bridge)")
     return {"ok": True, "timeout": timeout_hit,
             "drives": _fixed_drives(),
             "found": {"plugins": found_plugins, "packs": found_packs},

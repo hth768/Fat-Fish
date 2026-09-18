@@ -24,6 +24,7 @@ import numpy as np
 
 import config
 from bili_api import BiliSession, get_json, has_cookies, post_json
+from quiet import attention, degrade
 
 _PCM_RATE = 16000                                  # ffmpeg 模式音频管道格式：16k 单声道 s16le
 _CHUNK_MS = 100
@@ -65,8 +66,8 @@ def _resolve_ffmpeg() -> str:
     try:
         import imageio_ffmpeg
         return imageio_ffmpeg.get_ffmpeg_exe()
-    except ImportError:
-        pass
+    except ImportError as e:
+        degrade("libs/qq_bot_runtime/bili_streamer.py:69 _resolve_ffmpeg", e, "降级：import imageio_ffmpeg")
     return getattr(config, "FFMPEG_PATH", "") or "ffmpeg"
 
 
@@ -142,16 +143,17 @@ class BiliStreamer:
         if self._ffmpeg:
             try:
                 self._ffmpeg.stdin.close()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bili_streamer.stop.stdin", e, "关 ffmpeg stdin 失败")
             try:
                 self._ffmpeg.terminate()
                 self._ffmpeg.wait(timeout=8)
             except Exception:
                 try:
                     self._ffmpeg.kill()
-                except Exception:
-                    pass
+                except Exception as e:
+                    attention("bili_streamer.stop.kill", e,
+                              "兜底 kill ffmpeg 失败（可能残留推流进程）")
             self._ffmpeg = None
         if self._audio_thread:
             self._audio_thread.join(timeout=2)
@@ -160,14 +162,14 @@ class BiliStreamer:
             try:
                 self._sd_stream.stop()
                 self._sd_stream.close()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bili_streamer.stop.sd_stream", e, "停本地声音通道失败")
             self._sd_stream = None
         if self._ffmpeg_log:
             try:
                 self._ffmpeg_log.close()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bili_streamer.stop.ffmpeg_log", e, "关 ffmpeg 日志句柄失败")
             self._ffmpeg_log = None
         hime = _push_mode() == "hime"
         self.pushing = False
@@ -365,8 +367,8 @@ class BiliStreamer:
             try:
                 import bili_captions
                 bili_captions.push(text)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bili_streamer.speak.caption", e, "推字幕失败")
         if not self.pushing:
             print(f"[BILI-STREAM] （未推流，仅日志）想说: {text[:40]}")
             return

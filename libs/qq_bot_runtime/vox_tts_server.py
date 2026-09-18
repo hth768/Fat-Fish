@@ -31,6 +31,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import numpy as np
+from quiet import degrade
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.environ.get("VOXCPM_MODEL_DIR") or os.path.join(BASE_DIR, "models", "VoxCPM2")
@@ -199,8 +200,8 @@ def _vram_free_mb() -> int:
         if torch.cuda.is_available():
             free, _ = torch.cuda.mem_get_info()
             return int(free // (1024 * 1024))
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/vox_tts_server.py:202 _vram_free_mb", e, "降级：import torch")
     return -1
 
 
@@ -468,8 +469,8 @@ def main():
         _vox_log = open(os.path.join(BASE_DIR, "vox_tts_server.log"), "a", encoding="utf-8")
         sys.stdout = _vox_log
         sys.stderr = _vox_log
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/vox_tts_server.py:471 main", e, "降级：_vox_log = open(os.path.join(BASE_DIR, 'vox_tts_se")
     sys.setrecursionlimit(20000)  # 模型反序列化/构建有深层递归，默认 1000 不够
     _log(f"VoxCPM2 TTS sidecar 启动: http://{HOST}:{PORT}  模型: {MODEL_DIR}")
     headroom = _commit_headroom_mb()

@@ -27,6 +27,7 @@ import tempfile
 import time
 import shutil
 import webbrowser
+from quiet import degrade
 
 CONFIG = "config.py"
 GEN_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
@@ -123,15 +124,15 @@ def _decrypt_value(value: bytes, key: bytes) -> str:
             nonce, ct = payload[:12], payload[12:]
             try:
                 return AESGCM(key).decrypt(nonce, ct, None).decode("utf-8", "ignore")
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/get_bili_cookie.py:127 _decrypt_value", e, "降级：return AESGCM(key).decrypt(nonce, ct, None).decode")
         # 某些版本 32 字节 nonce 前缀
         if len(payload) > 32 + 16:
             nonce, ct = payload[32:44], payload[44:]
             try:
                 return AESGCM(key).decrypt(nonce, ct, None).decode("utf-8", "ignore")
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/get_bili_cookie.py:134 _decrypt_value", e, "降级：return AESGCM(key).decrypt(nonce, ct, None).decode")
         return ""
     # 老版本：直接 DPAPI
     try:
@@ -177,8 +178,8 @@ def read_from_browser() -> None:
             finally:
                 try:
                     os.remove(tmp)
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("get_bili_cookie.read_from_browser", e, "删临时 cookie 文件失败")
             pairs = {}
             for cname, enc, plain in rows:
                 val = plain or _decrypt_value(enc, key)
@@ -259,14 +260,14 @@ def do_qr() -> None:
             print("（用手机 B 站 App「扫一扫」扫描该图片）")
             try:
                 os.startfile(png)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/get_bili_cookie.py:263 do_qr", e, "降级：os.startfile(png)")
         else:
             print("\n未能生成二维码图片，改用浏览器打开链接：\n    " + qr_url)
             try:
                 webbrowser.open(qr_url)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/get_bili_cookie.py:269 do_qr", e, "降级：webbrowser.open(qr_url)")
         print("\n二维码链接（可复制到手机/浏览器打开）：\n    " + qr_url)
         print("\n等待扫码登录（最多 180 秒，扫完并在手机上点「确认」）...")
         deadline = time.time() + 180

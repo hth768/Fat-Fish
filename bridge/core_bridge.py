@@ -15,6 +15,7 @@ from collections import deque
 from typing import Dict, Optional
 
 from .loop import LoopThread
+from quiet import degrade
 
 OWNER_ID = "app_owner"
 OWNER_NAME = "主人"
@@ -188,8 +189,8 @@ class CoreBridge:
         for q in targets:
             try:
                 q.put_nowait(event)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bridge/core_bridge.py:191 CoreBridge.push", e, "降级：q.put_nowait(event)")
 
     def subscribe(self, session: str):
         import queue

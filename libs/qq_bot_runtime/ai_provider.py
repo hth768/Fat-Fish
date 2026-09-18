@@ -34,6 +34,7 @@ import httpx
 
 import config
 import telemetry
+from quiet import degrade
 
 # ============ 配置中心（对标 N.E.K.O config/api_providers.json） ============
 # AI_PROVIDERS / AI_CAPABILITY_ROUTING / AI_VISION_ROUTING / AI_ROLE_ROUTING
@@ -371,7 +372,8 @@ class UnifiedLLM:
                         break
                     try:
                         obj = json.loads(chunk)
-                    except Exception:
+                    except Exception as e:
+                        degrade("libs/qq_bot_runtime/ai_provider.py:374 UnifiedLLM._call_openai_stream", e, "降级：obj = json.loads(chunk)")
                         continue
                     if obj.get("usage"):
                         usage = obj["usage"]
@@ -385,15 +387,15 @@ class UnifiedLLM:
                         parts_reason.append(rc)
                         try:
                             on_delta("think", rc)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            degrade("libs/qq_bot_runtime/ai_provider.py:390 UnifiedLLM._call_openai_stream", e, "降级：on_delta('think', rc)")
                     c = delta.get("content")
                     if c:
                         parts_text.append(c)
                         try:
                             on_delta("content", c)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            degrade("libs/qq_bot_runtime/ai_provider.py:397 UnifiedLLM._call_openai_stream", e, "降级：on_delta('content', c)")
                     for tc in (delta.get("tool_calls") or []):
                         idx = tc.get("index")
                         if idx is None:

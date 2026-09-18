@@ -31,6 +31,7 @@ import agent_ctx
 from brain_base import AgentBrain, BrainManager, brain_event
 from message_bus import AgentEventBus, get_event_bus
 from plugin_base import FeaturePlugin, PlatformPlugin, PluginManager
+from quiet import degrade
 from tts_vox import VoxTTSPlugin  # 本地 VoxCPM2 TTS sidecar 管理（轻依赖，无模型加载）
 
 
@@ -82,8 +83,8 @@ class ProactiveSpeakerPlugin(FeaturePlugin):
         try:
             while True:
                 await asyncio.sleep(3600)
-        except asyncio.CancelledError:
-            pass
+        except asyncio.CancelledError as e:
+            degrade("libs/qq_bot_runtime/agent_core.py:86 ProactiveSpeakerPlugin._hold", e, "降级：while True")
 
     async def stop(self):
         if self._keepalive:
@@ -92,8 +93,8 @@ class ProactiveSpeakerPlugin(FeaturePlugin):
         try:
             from proactive_speaker import get_speaker
             get_speaker().stop()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("agent_core.ProactiveSpeakerPlugin.stop", e, "停主动发言器失败")
         await super().stop()
 
 
@@ -295,8 +296,8 @@ class AgentCore:
             from mc_watcher import mc_watcher
             if mc_watcher.is_running():
                 mc_watcher.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("agent_core.AgentCore.shutdown.mc_watcher", e, "停 MC 监听器失败")
         print("[CORE] 智能体核心已停止")
 
     # ---- 大脑求助统一通道（brain.event + 主人兜底私聊） ----

@@ -15,6 +15,7 @@ import json
 import time
 import shutil
 from typing import Optional, Dict, Any, List
+from quiet import degrade
 
 _BASE = os.path.dirname(os.path.abspath(__file__))
 AGENTS_DIR = os.path.join(_BASE, "agents")
@@ -72,7 +73,8 @@ def list_agents() -> List[Dict[str, Any]]:
             try:
                 with open(fp, "r", encoding="utf-8") as f:
                     out.append(json.load(f))
-            except Exception:
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/agent_manager.py:75 list_agents", e, "降级：with open(fp, 'r', encoding='utf-8') as f")
                 continue
     out.sort(key=lambda d: d.get("created", 0))
     return out
@@ -191,8 +193,8 @@ def resolve_profile(aid: str) -> Dict[str, Any]:
         base = ai_profile.load_profile()
         for k, v in base.items():
             prof.setdefault(k, v)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/agent_manager.py:194 resolve_profile", e, "降级：import ai_profile")
     return prof
 
 

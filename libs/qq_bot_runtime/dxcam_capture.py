@@ -21,6 +21,7 @@ from typing import Optional
 import numpy as np
 
 import dxcam
+from quiet import degrade
 
 
 class DXCamCapture:
@@ -41,8 +42,8 @@ class DXCamCapture:
                 print("[WARN] DXcam 创建成功但无法捕获帧，将视为不可用")
                 try:
                     self.camera.release()
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("libs/qq_bot_runtime/dxcam_capture.py:44 DXCamCapture.open", e, "降级：self.camera.release()")
                 self.camera = None
                 return False
             print(f"[INFO] DXcam 已打开，output_idx={self.output_idx}")

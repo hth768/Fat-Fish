@@ -21,6 +21,7 @@ import config
 from bili_api import BiliSession, has_cookies, fetch_up_videos, fetch_search_videos
 from bili_dm import send_bili_dm, _split_text
 from plugin_base import FeaturePlugin
+from quiet import degrade
 
 _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "bili_learned.json")
 
@@ -86,8 +87,8 @@ class BilibiliLearnScheduler(FeaturePlugin):
         if self._http is not None:
             try:
                 await self._http.aclose()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/bili_learn_scheduler.py:89 BilibiliLearnScheduler.stop", e, "降级：await self._http.aclose()")
             self._http = None
         await super().stop()
 
@@ -97,8 +98,8 @@ class BilibiliLearnScheduler(FeaturePlugin):
             while True:
                 await asyncio.sleep(60)
                 await self._tick()
-        except asyncio.CancelledError:
-            pass
+        except asyncio.CancelledError as e:
+            degrade("libs/qq_bot_runtime/bili_learn_scheduler.py:100 BilibiliLearnScheduler._loop", e, "降级：while True")
 
     async def _tick(self):
         try:

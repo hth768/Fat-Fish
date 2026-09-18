@@ -23,6 +23,7 @@ import os
 import time
 
 import config
+from quiet import degrade
 
 # 实时版人设：口语短句、可打断；语音里读不出表情/链接，规则写死避免每轮浪费 token
 _REALTIME_INSTRUCTIONS = (
@@ -372,8 +373,8 @@ class VoiceRoom:
             else:
                 # ptt 模式用 on_press/on_release 钩子，宽松清理（仅本进程钩子）
                 self._kb.unhook_all()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/voice_room.py:375 VoiceRoom._cleanup_hotkey", e, "降级：if self._hotkey_handle is not None")
 
     def _free_key_press(self):
         """free 模式：单击切换开/关。keyboard 钩子线程 → 事件循环。"""
@@ -436,8 +437,8 @@ class VoiceRoom:
             return
         try:
             asyncio.run_coroutine_threadsafe(coro, loop)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/voice_room.py:439 VoiceRoom._schedule_loop", e, "降级：asyncio.run_coroutine_threadsafe(coro, loop)")
 
     # ======================================================================
     # 通知：控制台 + 主人 QQ 私聊（自动事件用）

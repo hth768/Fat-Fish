@@ -331,8 +331,8 @@ def export_memory() -> dict:
         degrade("bridge/memory_api.py:329 export_memory", e, "降级：import long_term_memory as ltm")
     try:
         out["sessions"] = _read_json(os.path.join(os.getcwd(), _MEMORY_FILE), {}) or {}
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:334 export_memory", e, "降级：out['sessions'] = _read_json(os.path.join(os.getcw")
     return out
 
 

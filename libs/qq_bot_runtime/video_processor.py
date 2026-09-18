@@ -14,6 +14,7 @@ import cv2
 
 import config
 from ai_provider import get_vision
+from quiet import degrade
 
 
 def get_ffmpeg_path() -> str:
@@ -173,8 +174,8 @@ def extract_audio(video_path: str) -> bytes:
         if os.path.exists(wav_path):
             try:
                 os.remove(wav_path)
-            except OSError:
-                pass
+            except OSError as e:
+                degrade("video_processor.extract_audio", e, "删临时音频失败")
 
 
 def has_audio_stream(video_path: str) -> bool:
@@ -220,8 +221,8 @@ def extract_audio_segment(video_path: str, start: float, end: float) -> bytes:
         if os.path.exists(wav_path):
             try:
                 os.remove(wav_path)
-            except OSError:
-                pass
+            except OSError as e:
+                degrade("video_processor.extract_audio_segment", e, "删临时音频失败")
 
 
 async def _transcribe_audio_segments(video_path: str, segment_len: float = 5.0) -> list:

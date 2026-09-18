@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
+from quiet import attention, degrade
 
 
 @dataclass
@@ -139,15 +140,15 @@ class Launcher:
         if proc is not None:
             try:
                 proc.terminate()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("launcher_core.runtime.Launcher.restart", e, "终止子进程失败")
             try:
                 proc.wait(timeout=5)
             except Exception:
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as e:
+                    attention("launcher_core.runtime.Launcher.restart", e, "兜底 kill 失败（可能残留 sidecar 进程）")
         self.procs.pop(name, None)
         self._spawn_one(spec)
         return True
@@ -164,16 +165,16 @@ class Launcher:
             if proc.poll() is None:
                 try:
                     proc.terminate()
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("launcher_core.runtime.Launcher.shutdown", e, "终止子进程失败")
         for proc in self.procs.values():
             try:
                 proc.wait(timeout=5)
             except Exception:
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as e:
+                    attention("launcher_core.runtime.Launcher.shutdown", e, "兜底 kill 失败（可能残留 sidecar 进程）")
         print("[launcher] 所有 sidecar 已停止", flush=True)
 
     # ---- 主流程（拉起 -> 等就绪 -> 启主程序 -> 监控）----
@@ -182,8 +183,8 @@ class Launcher:
         for s in (signal.SIGINT, signal.SIGTERM):
             try:
                 old[s] = signal.signal(s, self._on_signal)
-            except (ValueError, OSError):
-                pass  # 非主线程 / 平台不支持
+            except (ValueError, OSError) as e:
+                degrade("libs/qq_bot_runtime/launcher_core/runtime.py:186 Launcher.run", e, "降级：old[s] = signal.signal(s, self._on_signal)")
 
         try:
             self.spawn_all()
@@ -202,8 +203,8 @@ class Launcher:
             for s, h in old.items():
                 try:
                     signal.signal(s, h)
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("libs/qq_bot_runtime/launcher_core/runtime.py:206 Launcher.run", e, "降级：signal.signal(s, h)")
 
     def _on_signal(self, signum, frame):
         if self.stop.is_set():

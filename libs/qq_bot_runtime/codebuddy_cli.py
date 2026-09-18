@@ -24,6 +24,7 @@ import uuid
 from typing import Dict, List, Optional
 
 import config
+from quiet import degrade
 
 # CLI 路径（已迁移到 E 盘）
 CLI_PATH = getattr(config, "CODEBUDDY_CLI_PATH", r"E:\codebuddy\bin\codebuddy.exe")
@@ -242,10 +243,10 @@ def request_edit_approval(filepath: str, instruction: str) -> Dict:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 loop.create_task(_notify_edit_request(request))
-        except RuntimeError:
-            pass
-    except Exception:
-        pass
+        except RuntimeError as e:
+            degrade("libs/qq_bot_runtime/codebuddy_cli.py:246 request_edit_approval", e, "降级：loop = asyncio.get_event_loop()")
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/codebuddy_cli.py:248 request_edit_approval", e, "降级：from message_bus import get_event_bus")
     return {
         "ok": False,
         "requires_approval": True,
@@ -264,8 +265,8 @@ async def _notify_edit_request(request: Dict):
             "file": request["filepath"],
             "instruction": request["instruction"],
         })
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("codebuddy_cli._notify_edit_request", e, "通知编辑请求失败")
 
 
 def confirm_edit(request_id: str, approve: bool) -> Dict:

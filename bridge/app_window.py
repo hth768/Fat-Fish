@@ -51,8 +51,8 @@ class _AppearanceApi:
             for w in getattr(wv, "windows", []):
                 try:
                     w.set_title(str(title)[:40])
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("bridge/app_window.py:54 _AppearanceApi.set_title", e, "降级：w.set_title(str(title)[:40])")
         except Exception as e:
             degrade("bridge/app_window.py:53 _AppearanceApi.set_title", e, "降级：for w in getattr(wv, 'windows', [])")
 
@@ -186,5 +186,5 @@ def _wait_for_close(url: str):
     try:
         while True:
             time.sleep(3600)
-    except KeyboardInterrupt:
-        pass
+    except KeyboardInterrupt as e:
+        degrade("bridge/app_window.py:189 _wait_for_close", e, "降级：while True")

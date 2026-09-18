@@ -23,8 +23,8 @@ def _log_dir() -> str:
     d = os.path.join(_qq_bot_dir(), "logs")
     try:
         os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/sidecar_runner.py:26 _log_dir", e, "降级：os.makedirs(d, exist_ok=True)")
     return d
 
 
@@ -134,8 +134,8 @@ class SidecarProcess:
                 p.terminate()
                 try:
                     p.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
+                except subprocess.TimeoutExpired as e:
+                    degrade("bridge/sidecar_runner.py:137 SidecarProcess.stop", e, "降级：p.wait(timeout=5)")
             # Windows 兜底：terminate 对个别服务进程不生效时，taskkill 强杀整个进程树
             if p.poll() is None:
                 try:

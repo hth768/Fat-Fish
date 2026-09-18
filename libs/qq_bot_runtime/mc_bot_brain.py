@@ -29,6 +29,7 @@ import httpx
 import config
 import identity
 from ai_provider import get_llm
+from quiet import degrade
 
 try:
     import mc_skills
@@ -247,8 +248,8 @@ def _owner_call_name() -> str:
         nm = emotion.resolve_display_name(MC_OWNER_QQ)
         if nm:
             return nm
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/mc_bot_brain.py:250 _owner_call_name", e, "降级：import emotion")
     return "伙伴"
 
 
@@ -469,8 +470,8 @@ class BotAgent:
                 st = await asyncio.to_thread(_bridge_get, "/state")
                 _write_live_status(bool(st and st.get("connected")), st,
                                    self._last_action, self._recent_chat, running=self._running)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/mc_bot_brain.py:472 BotAgent._heartbeat", e, "降级：st = await asyncio.to_thread(_bridge_get, '/state'")
             await asyncio.sleep(10)
 
     def _mark_offline(self, state: Optional[Dict]) -> None:
@@ -561,8 +562,8 @@ class BotAgent:
         if st.get("inWater") and _safe_float(st.get("air"), 20.0) <= 12:
             try:
                 _bridge_cmd("swim", timeout=8.0)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/mc_bot_brain.py:565 BotAgent._guard_warning", e, "降级：_bridge_cmd('swim', timeout=8.0)")
             self._reflex_note = f"氧气告急（空气{st.get('air')}），已强制上浮"
             mon = _mon()
             if mon:
@@ -579,8 +580,8 @@ class BotAgent:
                     cat, note = "悬崖", f"脚下悬空 {gap} 格（y={st.get('pos', {}).get('y')}）——别乱跳/别前进，先站稳"
                 elif pr.get("front_cliff"):
                     cat, note = "悬崖", "前方是悬崖可能坠落（转向/后退）"
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/mc_bot_brain.py:582 BotAgent._guard_warning", e, "降级：pr = self._probe_now()")
         if not cat:
             for e in (st.get("entities") or []):
                 if e.get("name") in _HOSTILE and _safe_float(e.get("dist"), 99) <= 3.0:
@@ -619,8 +620,8 @@ class BotAgent:
                 r = _bridge_cmd("goto", x=round(x + step[0]), z=round(z + step[1]), timeout=45.0)
                 if r.get("ok"):
                     saved = f"自动朝{choice}方向走脱困"
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:622 BotAgent._stuck_check", e, "降级：pr = _bridge_cmd('probe', timeout=8.0).get('probe'")
         if not saved:
             r = _bridge_cmd("up", timeout=60.0)
             saved = "自动搭柱爬升脱困" if r.get("ok") else f"自救失败：{str(r.get('msg', ''))[:40]}"
@@ -633,8 +634,8 @@ class BotAgent:
             # 独立生存：不喊救命、不等救援——只低频通报一句状态，然后照常自己干活
             try:
                 _notify_qq(f"游戏里的我在 ({int(x)},{int(z)}) 一时出不去，不用管我——我会绕路/搭柱自己脱困，先去别处继续生存推进了。", "stuck", min_gap=1800.0)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/mc_bot_brain.py:637 BotAgent._stuck_check", e, "降级：_notify_qq(f'游戏里的我在 ({int(x)},{int(z)}) 一时出不去，不用管我")
 
     async def _rule_fallback_round(self, state: Dict) -> None:
         """LLM 连续失败时的规则保命兜底（顺序：吃→脱困→撤→等待）。"""
@@ -788,8 +789,8 @@ class BotAgent:
         say = bot_text[:120]
         try:
             _bridge_cmd("say", text=say, timeout=8.0)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:792 BotAgent._rule_reply", e, "降级：_bridge_cmd('say', text=say, timeout=8.0)")
         now = _now()
         self._recent_chat.append({"who": name, "text": user_text[:60], "t": now})
         self._recent_chat.append({"who": "me", "text": say, "t": now})
@@ -875,8 +876,8 @@ class BotAgent:
                     hs = pr.get("heights") or {}
                     hs_txt = "、".join(f"{d}{h:+d}" for d, h in hs.items() if h is not None)
                     parts.append(f"地形：站在{stand}上，四周高差 {hs_txt} 格（有点崎岖——不用找平地，routine make_flat 能把这里整平）")
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:878 BotAgent._observe", e, "降级：pr = self._probe_now()")
         # 自保反射（桥身体自动做的保命动作，不经你）——增量注入，险情已由身体处理，
         # 你要做的不是重复处理，而是明白"刚才出过险"并调整后续计划
         try:
@@ -940,8 +941,8 @@ class BotAgent:
             tips = match_tips(obs_text, limit=4)
             if tips:
                 parts.append("相关经验（本世界或模组世界学到的，可参考做法）：\n- " + "\n- ".join(tips))
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:943 BotAgent._observe", e, "降级：from mc_tips import match_tips")
         if mc_skills is not None:
             try:
                 skills = mc_skills.match_skills(obs_text, limit=3, env=mc_skills.ENV_BOT)
@@ -960,8 +961,8 @@ class BotAgent:
                                             inventory_items=items, inventory_dict={"items": items})
             if focus:
                 parts.append(focus[:400])
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:963 BotAgent._observe", e, "降级：invd = st.get('inventory') or {}")
         # 没镐却看着矿石/石头 → 提醒（防徒手挖无掉落）
         look = st.get("lookBlock")
         if look and not any("pickaxe" in k for k in inv):
@@ -972,8 +973,8 @@ class BotAgent:
             sugg = self._routine_suggest(st)
             if sugg:
                 parts.append("可用模式（需要就调 routine）：" + "；".join(sugg))
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:976 BotAgent._observe", e, "降级：sugg = self._routine_suggest(st)")
         reflex = ""
         if warning:
             reflex = f"health:{hp:.0f}/food:{food:.0f}"
@@ -992,8 +993,8 @@ class BotAgent:
                 try:
                     if await self._pull_game_chat():
                         continue
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("libs/qq_bot_runtime/mc_bot_brain.py:996 BotAgent._brain_round", e, "降级：if await self._pull_game_chat()")
                 msg = await self._llm.chat_with_tools(self._session, BOT_TOOLS, think=self._use_thinking)
                 self._session.append(msg)
                 content = str(msg.get("content") or "").strip()
@@ -1032,16 +1033,16 @@ class BotAgent:
                                 break
                             try:
                                 _bridge_cmd("stop", timeout=8.0)  # 停下寻路/挖掘，先回应玩家
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                degrade("libs/qq_bot_runtime/mc_bot_brain.py:1036 BotAgent._brain_round", e, "降级：_bridge_cmd('stop', timeout=8.0)")
                             exec_task.cancel()
                             interrupted = True
                             break
                     if interrupted:
                         try:
                             await exec_task
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1044 BotAgent._brain_round", e, "降级：await exec_task")
                         result = "fail:玩家插话，动作已中断（先回应玩家）"
                     else:
                         result = exec_task.result()
@@ -1301,8 +1302,8 @@ class BotAgent:
                 missing = "、".join(str(m) for m in (ck.get("missing") or [])[:6])
                 need_table = "，且需要工作台（先 place crafting_table）" if ck.get("need_table") else ""
                 detail = f"（缺料参考：{missing}{need_table}）"
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1304 BotAgent._t_craft", e, "降级：from mc_recipes import check_craft_materials")
         return f"fail:{r.get('msg', '合成失败')}{detail}"
 
     async def _t_place(self, a, s) -> str:
@@ -1323,8 +1324,8 @@ class BotAgent:
                         count=_safe_int(a.get("count"), 1), timeout=30.0)
         try:
             _bridge_cmd("container", op="close", timeout=8.0)  # 用完即关，防窗口悬挂
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1327 BotAgent._t_chest", e, "降级：_bridge_cmd('container', op='close', timeout=8.0)")
         return f"ok:{r.get('msg', '')}" if r.get("ok") else f"fail:{r.get('msg', '')}"
 
     async def _t_furnace(self, a, s) -> str:
@@ -1348,8 +1349,8 @@ class BotAgent:
             ok = True
         try:
             _bridge_cmd("furnace", op="close", timeout=8.0)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1352 BotAgent._t_furnace", e, "降级：_bridge_cmd('furnace', op='close', timeout=8.0)")
         return f"ok:{msg}" if ok else f"fail:{msg}"
 
     async def _t_equip(self, a, s) -> str:
@@ -1427,8 +1428,8 @@ class BotAgent:
         """停掉桥上的遗留寻路目标（模式跑之前先站稳）。"""
         try:
             _bridge_cmd("stop", timeout=8.0)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1431 BotAgent.stop_move", e, "降级：_bridge_cmd('stop', timeout=8.0)")
 
     async def cmd(self, action: str, timeout: float = 20.0, **kw) -> Dict:
         """模式内部的结构化桥命令（返回 dict，供 dig_at/terrain_grid 等读字段）。"""
@@ -1460,8 +1461,8 @@ class BotAgent:
         try:
             if identity.enabled():
                 return identity.is_owner_game_name(name)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1464 BotAgent.is_owner_name", e, "降级：if identity.enabled()")
         return _legacy_owner_name(name)
 
     def find_landmark(self, name: str, dimension: str = None):
@@ -1471,8 +1472,8 @@ class BotAgent:
             for lm in list_landmarks(seed=VANILLA_WORLD_KEY, dimension=dim):
                 if str(name) in str(lm.get("name", "")):
                     return lm
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1474 BotAgent.find_landmark", e, "降级：from mc_explored import list_landmarks")
         return None
 
     def unexplored_direction(self, x: float, z: float, dimension: str) -> Optional[str]:
@@ -1487,8 +1488,8 @@ class BotAgent:
         try:
             from mc_explored import mark_explored
             mark_explored(x, y, z, seed=VANILLA_WORLD_KEY, dimension=str(dimension or "overworld"))
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1490 BotAgent.mark_explored", e, "降级：from mc_explored import mark_explored")
 
     def _routine_suggest(self, st: Dict) -> List[str]:
         """按背包/场景推荐匹配的模式（观察"可用模式"一栏）。"""
@@ -1521,8 +1522,8 @@ class BotAgent:
                     if d > 120:
                         out.append("go_home：离家太远，回去一趟")
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1524 BotAgent._routine_suggest", e, "降级：from mc_explored import list_landmarks")
         return out[:3]
 
     # ---------------- 技能（与模组世界共享库，bot 环境标签） ----------------
@@ -1578,8 +1579,8 @@ class BotAgent:
                 break
         try:
             mc_skills.record_use(skill.get("name", name), success)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/mc_bot_brain.py:1581 BotAgent._t_run_skill", e, "降级：mc_skills.record_use(skill.get('name', name), succ")
         tag = "ok" if success else "fail"
         return f"{tag}:技能[{skill.get('name')}] " + ";".join(results[:6])
 

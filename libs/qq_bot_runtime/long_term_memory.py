@@ -15,6 +15,7 @@ import fact_store
 import file_lock
 import time_indexed_memory
 import agent_ctx
+from quiet import degrade
 
 
 def _base_dir():
@@ -309,13 +310,14 @@ def merge_alias_history(alias_user_id, canonical_user_id) -> bool:
                 r = json.loads(line)
                 r["user_id"] = canon
                 records.append(json.dumps(r, ensure_ascii=False))
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                degrade("long_term_memory.merge_alias_history", e, "跳过损坏的别名历史记录")
                 continue
         if not records:
             try:
                 os.rename(alias_path, merged_path)
-            except OSError:
-                pass
+            except OSError as e:
+                degrade("libs/qq_bot_runtime/long_term_memory.py:319 merge_alias_history", e, "降级：os.rename(alias_path, merged_path)")
             return False
         # 追加进 canonical 文件（与 append_history 同一把锁）
         canon_path = _user_history_path(canon)
@@ -361,7 +363,8 @@ def _read_user_history_lines(user_id, limit: int) -> list:
             continue
         try:
             records.append(json.loads(line))
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
+            degrade("libs/qq_bot_runtime/long_term_memory.py:366 _read_user_history_lines", e, "降级：records.append(json.loads(line))")
             continue
     return records[-limit:]
 

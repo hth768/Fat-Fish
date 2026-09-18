@@ -31,6 +31,7 @@ import config
 from bili_api import BiliSession, _FACEPACK_RE, _FACE_CODE_RE, _fit_danmaku, get_json, has_cookies, wbi_sign
 from message_bus import InboundMessage, MessageSender, ReplyTarget, get_sender
 from plugin_base import PlatformPlugin
+from quiet import degrade
 
 # ---------------------------------------------------------------------------
 # 弹幕二进制协议
@@ -150,8 +151,8 @@ class LiveReplyTarget(ReplyTarget):
         try:
             import bili_captions
             bili_captions.push(_strip_unspeakable(text))
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("bilibili_plugin.LiveReplyTarget.caption", e, "推字幕失败")
 
     async def fetch_image(self, ref) -> bytes:
         raise RuntimeError("直播模式不支持接收图片")
@@ -330,8 +331,8 @@ class BilibiliPlugin(PlatformPlugin):
         try:
             import bili_captions
             bili_captions.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("bilibili_plugin.BilibiliPlugin._go_standby", e, "停字幕服务失败")
 
     async def stop(self):
         await self._go_standby()
@@ -558,12 +559,12 @@ class BilibiliPlugin(PlatformPlugin):
                     print("[BILI] 120s 未收到弹幕服务器任何数据，主动断开重连")
                     try:
                         await ws.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        degrade("bilibili_plugin.BilibiliPlugin._heartbeat_loop", e, "关弹幕 WS 失败")
                     return
                 await self._refresh_live_status()
-        except asyncio.CancelledError:
-            pass
+        except asyncio.CancelledError as e:
+            degrade("bilibili_plugin.BilibiliPlugin._heartbeat_loop", e, "心跳任务被取消（忽略）")
         except Exception as e:
             print(f"[BILI] 心跳发送失败: {e}")
 
@@ -574,8 +575,8 @@ class BilibiliPlugin(PlatformPlugin):
                 d = await get_json(http, self.session, "/room/v1/Room/room_init",
                                    {"id": self.room_id or self.real_room_id})
                 self.live_status = int(d.get("live_status") or 0)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/bilibili_plugin.py:578 BilibiliPlugin._refresh_live_status", e, "降级：async with httpx.AsyncClient() as http")
 
     # ---- 收包分发 ----
     def _on_ws_data(self, raw: bytes):
@@ -616,7 +617,8 @@ class BilibiliPlugin(PlatformPlugin):
                 continue
             try:
                 data = json.loads(pbody.decode("utf-8"))
-            except Exception:
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/bilibili_plugin.py:620 BilibiliPlugin._on_message_body", e, "降级：data = json.loads(pbody.decode('utf-8'))")
                 continue
             self._dispatch_event(data)
 

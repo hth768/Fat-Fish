@@ -44,6 +44,7 @@ import time
 
 import config
 import file_lock
+from quiet import degrade
 
 _FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "identity_bindings.json")
 _VERSION = 1
@@ -94,8 +95,8 @@ def load_bindings() -> dict:
                 data = json.load(f)
             if isinstance(data, dict) and isinstance(data.get("persons"), list):
                 return data
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            degrade("libs/qq_bot_runtime/identity.py:97 load_bindings", e, "降级：with open(_FILE, 'r', encoding='utf-8') as f")
     return {"version": _VERSION, "persons": []}
 
 
@@ -543,8 +544,8 @@ def mark_mc_asked(mc_name: str):
             if alias and not alias.get("ok"):
                 alias["asked_ts"] = time.time()
                 _touch(data, person)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/identity.py:546 mark_mc_asked", e, "降级：with file_lock.file_lock(_FILE)")
 
 
 def pending_mc_qq_of(mc_name: str):
@@ -560,8 +561,8 @@ def pending_mc_qq_of(mc_name: str):
         alias = _mc_alias(person, name)
         if alias and not alias.get("ok") and alias.get("pending_side") == "mc":
             return _norm_qq(person.get("qq"))
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/identity.py:563 pending_mc_qq_of", e, "降级：data = load_bindings()")
     return None
 
 

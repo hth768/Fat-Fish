@@ -24,6 +24,7 @@ import config
 import voice_client
 from message_bus import InboundMessage, MessageSender, ReplyTarget
 from plugin_base import PlatformPlugin
+from quiet import degrade
 
 
 # ============================================================================
@@ -556,8 +557,8 @@ class QQPlugin(PlatformPlugin):
                 asyncio.get_event_loop().create_task(self.adapter.send_private(priv_target, msg))
         try:
             get_event_bus().on("code.edit_request", _on_edit_request)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/qq_plugin.py:560 QQPlugin.start", e, "降级：get_event_bus().on('code.edit_request', _on_edit_r")
 
         # NapCat 反向 WebSocket 服务端：等 NapCat 主动连进来
         host = config.WS_HOST
@@ -572,8 +573,8 @@ class QQPlugin(PlatformPlugin):
             self._server.close()
             try:
                 await self._server.wait_closed()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/qq_plugin.py:576 QQPlugin.stop", e, "降级：await self._server.wait_closed()")
             self._server = None
         self.ws = None
         plugin_pending_calls.clear()
@@ -594,8 +595,8 @@ class QQPlugin(PlatformPlugin):
         try:
             from vision_capture import vision_capture
             vision_capture.ws = ws
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/qq_plugin.py:597 QQPlugin._handler", e, "降级：from vision_capture import vision_capture")
 
         pending = {}      # 私聊聚合缓冲
         tasks = set()
@@ -603,7 +604,8 @@ class QQPlugin(PlatformPlugin):
             async for raw in ws:
                 try:
                     data = json.loads(raw)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    degrade("libs/qq_bot_runtime/qq_plugin.py:606 QQPlugin._handler", e, "降级：data = json.loads(raw)")
                     continue
 
                 # API 调用响应（echo 匹配）

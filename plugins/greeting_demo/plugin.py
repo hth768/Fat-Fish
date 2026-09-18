@@ -17,6 +17,12 @@
 import asyncio
 
 try:
+    from quiet import degrade
+except ImportError:
+    def degrade(*_a, **_k):
+        pass
+
+try:
     from plugin_base import FeaturePlugin
 except Exception:  # 脱离 qq_bot 环境时的降级基类
     class FeaturePlugin:
@@ -48,8 +54,8 @@ class GreetingDemoPlugin(FeaturePlugin):
         if "interval_seconds" in cfg:
             try:
                 self._cfg["interval_seconds"] = max(10, int(cfg["interval_seconds"]))
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("greeting_demo.apply_config", e, "间隔秒数解析失败，回退默认")
         if cfg.get("text"):
             self._cfg["text"] = str(cfg["text"])
         # 唤醒等待中的循环：改间隔后立刻按新值重新计时（否则要等旧 sleep 走完）
@@ -57,8 +63,8 @@ class GreetingDemoPlugin(FeaturePlugin):
         if ev is not None:
             try:
                 ev.set()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("greeting_demo.apply_config.wake", e, "唤醒循环失败")
 
     # ---- 生命周期 ----
     async def start(self):
@@ -99,8 +105,8 @@ class GreetingDemoPlugin(FeaturePlugin):
             text = f"（示例插件）第 {self._count} 次问候"
         try:
             bridge.push(None, {"type": "message", "role": "assistant", "text": text})
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("greeting_demo._greet", e, "推问候消息失败")
 
 
 _INSTANCE = None

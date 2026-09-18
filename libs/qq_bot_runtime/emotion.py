@@ -26,6 +26,7 @@ import re
 import time
 
 import config
+from quiet import degrade
 
 # 允许的情绪标签（感知 prompt 与映射表共用这份清单，避免两边漂移）
 MOOD_LABELS = [
@@ -277,8 +278,8 @@ def _resolve_name(user_id) -> str:
         override = (getattr(config, "NAME_OVERRIDES", None) or {}).get(uid)
         if override:
             return str(override).strip()
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/emotion.py:280 _resolve_name", e, "降级：override = (getattr(config, 'NAME_OVERRIDES', None")
     # 2. 时间就近
     try:
         import long_term_memory
@@ -295,8 +296,8 @@ def _resolve_name(user_id) -> str:
                 best_name, best_ts = name, ts
         if best_name:
             return best_name
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("libs/qq_bot_runtime/emotion.py:298 _resolve_name", e, "降级：import long_term_memory")
     # 3. 兜底
     return f"QQ用户{uid}"
 

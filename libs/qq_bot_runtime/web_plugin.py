@@ -32,6 +32,7 @@ import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from quiet import degrade
 
 try:
     from plugin_base import PlatformPlugin
@@ -193,8 +194,8 @@ class WebPlugin(PlatformPlugin):
         import webbrowser
         try:
             webbrowser.open(f"http://127.0.0.1:{self.port}")
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/web_plugin.py:197 WebPlugin._open_browser", e, "降级：webbrowser.open(f'http://127.0.0.1:{self.port}')")
 
     def serve_no_core(self):
         """仅前端 + 只读数据模式（无聊天核心）。"""
@@ -205,8 +206,8 @@ class WebPlugin(PlatformPlugin):
         try:
             while True:
                 time.sleep(3600)
-        except KeyboardInterrupt:
-            pass
+        except KeyboardInterrupt as e:
+            degrade("libs/qq_bot_runtime/web_plugin.py:209 WebPlugin.serve_no_core", e, "降级：while True")
 
     # ---- SSE 事件推送 ----
     def push(self, session, event):
@@ -222,8 +223,8 @@ class WebPlugin(PlatformPlugin):
         for q in targets:
             try:
                 q.put_nowait(event)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/web_plugin.py:226 WebPlugin.push", e, "降级：q.put_nowait(event)")
 
     def subscribe(self, session):
         q = queue.Queue()
@@ -249,8 +250,8 @@ class WebPlugin(PlatformPlugin):
             p = os.path.abspath(path)
             if p.startswith(_BASE_DIR):
                 return os.path.relpath(p, _BASE_DIR).replace("\\", "/")
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/web_plugin.py:253 WebPlugin.rel_path", e, "降级：p = os.path.abspath(path)")
         return None
 
     # ---- 在事件循环里调度协程（供 HTTP 线程调用）----
@@ -301,8 +302,8 @@ class WebPlugin(PlatformPlugin):
         if self.core and hasattr(self.core, "status"):
             try:
                 st["status"] = self.core.status()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/web_plugin.py:305 WebPlugin.state", e, "降级：st['status'] = self.core.status()")
         return st
 
     # ---- 插件 / 服务聚合（供 Web「插件管理」面板）----
@@ -315,8 +316,8 @@ class WebPlugin(PlatformPlugin):
                 st = self.core.status()
                 out["platforms"] = st.get("plugins", [])
                 out["features"] = st.get("feature_plugins", [])
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/web_plugin.py:319 WebPlugin._api_plugins", e, "降级：st = self.core.status()")
         # sidecar 服务（来自 launcher 单例；launcher 与 bot 同进程，可统一管理）
         try:
             import launcher
@@ -421,8 +422,8 @@ class WebPlugin(PlatformPlugin):
                     return {"source": "sidecar",
                             "hmac_enforced": d.get("hmac_enforced", False),
                             "stats": d.get("stats", {})}
-            except (URLError, OSError, Exception):
-                pass
+            except (URLError, OSError, Exception) as e:
+                degrade("libs/qq_bot_runtime/web_plugin.py:425 WebPlugin._api_telemetry", e, "降级：with urlopen(url, timeout=2) as r")
         try:
             import telemetry
             return {"source": "local", "stats": {
@@ -644,8 +645,8 @@ class _Handler(BaseHTTPRequestHandler):
                 except queue.Empty:
                     self.wfile.write(b": ping\n\n")
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-            pass
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as e:
+            degrade("web_plugin._Handler._serve_sse", e, "客户端断开 SSE，停止推送")
         finally:
             plugin.unsubscribe(session, q)
 
@@ -735,8 +736,8 @@ class _Handler(BaseHTTPRequestHandler):
                     for line in f.read().splitlines()[-20:]:
                         if line.strip():
                             hints.append(json.loads(line))
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/web_plugin.py:739 _Handler._api_mc", e, "降级：with open(hints_file, 'r', encoding='utf-8') as f")
         return {"live": live, "game_state": state, "skills": skills[:50] if isinstance(skills, list) else [],
                 "recent_hints": hints}
 
@@ -782,8 +783,8 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
                     logs = f.read().splitlines()[-50:]
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/web_plugin.py:786 _Handler._api_system", e, "降级：with open(log_path, 'r', encoding='utf-8', errors=")
         return {
             "core": bool(plugin and plugin.core),
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -907,8 +908,8 @@ def main():
         print("[WEB] 如需排查核心问题，请把上方报错发给我，或运行: python web_plugin.py --no-core")
         try:
             WebPlugin(core=None, port=args.port).serve_no_core()
-        except KeyboardInterrupt:
-            pass
+        except KeyboardInterrupt as e:
+            degrade("libs/qq_bot_runtime/web_plugin.py:911 main", e, "降级：WebPlugin(core=None, port=args.port).serve_no_core")
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ from typing import Optional
 import numpy as np
 
 import config
+from quiet import degrade
 
 # 引擎无音频设备时也允许 py_compile / 单元测试 —— sounddevice 在 start() 里懒加载
 _SD = None
@@ -151,8 +152,8 @@ class RealtimeSession:
                 try:
                     await asyncio.to_thread(st.stop)
                     await asyncio.to_thread(st.close)
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("realtime_voice.RealtimeSession._close_streams", e, "关音频流失败")
                 setattr(self, name, None)
 
     async def _teardown_tasks(self):
@@ -163,8 +164,8 @@ class RealtimeSession:
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):
-                    pass
+                except (asyncio.CancelledError, Exception) as e:
+                    degrade("libs/qq_bot_runtime/realtime_voice.py:167 RealtimeSession._teardown_tasks", e, "降级：await task")
                 setattr(self, name, None)
 
     async def _safe_close_ws(self):
@@ -172,8 +173,8 @@ class RealtimeSession:
         if ws is not None:
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("realtime_voice.RealtimeSession._safe_close_ws", e, "关实时 WS 失败")
 
     # ======================================================================
     # WebSocket 协议
@@ -257,7 +258,8 @@ class RealtimeSession:
                     continue
                 try:
                     evt = json.loads(raw)
-                except json.JSONDecodeError:
+                except json.JSONDecodeError as e:
+                    degrade("libs/qq_bot_runtime/realtime_voice.py:261 RealtimeSession._reader", e, "降级：evt = json.loads(raw)")
                     continue
                 try:
                     await self._dispatch(evt)
@@ -401,8 +403,8 @@ class RealtimeSession:
             return
         try:
             self._send_q.put_nowait(("audio", data))
-        except asyncio.QueueFull:
-            pass
+        except asyncio.QueueFull as e:
+            degrade("libs/qq_bot_runtime/realtime_voice.py:406 RealtimeSession._queue_audio_outbound", e, "降级：self._send_q.put_nowait(('audio', data))")
 
     def set_capture(self, on: bool):
         """开关上行采集（PTT 模式按键用）。线程安全。"""
@@ -674,12 +676,12 @@ class _PCMPlayer:
     def stop(self):
         try:
             self.stream.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("realtime_voice._PCMPlayer.stop", e, "停 PCM 播放失败")
         try:
             self.stream.close()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("realtime_voice._PCMPlayer.stop", e, "关 PCM 流失败")
 
 
 class LocalRealtimeSession:
@@ -743,8 +745,8 @@ class LocalRealtimeSession:
         if getattr(config, "ENABLE_REALTIME_PROACTIVE", False):
             try:
                 self._last_app = (self._get_active_context() or {}).get("app", "")
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/realtime_voice.py:747 LocalRealtimeSession.start", e, "降级：self._last_app = (self._get_active_context() or {}")
             self._proactive_task = asyncio.ensure_future(self._proactive_watch())
 
     async def stop(self):
@@ -756,12 +758,12 @@ class LocalRealtimeSession:
         if self._in_stream is not None:
             try:
                 await asyncio.to_thread(self._in_stream.stop)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("realtime_voice.LocalRealtimeSession.stop", e, "停输入流失败")
             try:
                 self._in_stream.close()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("realtime_voice.LocalRealtimeSession.stop", e, "关输入流失败")
             self._in_stream = None
         if self._proactive_task is not None:
             self._proactive_task.cancel()
@@ -769,8 +771,8 @@ class LocalRealtimeSession:
         if self._player is not None:
             try:
                 self._player.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("realtime_voice.LocalRealtimeSession.stop", e, "停播放器失败")
             self._player = None
         self._emit("stopped", "")
 
@@ -1007,7 +1009,8 @@ class LocalRealtimeSession:
                         break
                     try:
                         obj = json.loads(data)
-                    except Exception:
+                    except Exception as e:
+                        degrade("libs/qq_bot_runtime/realtime_voice.py:1011 LocalRealtimeSession._llm_stream_raw", e, "降级：obj = json.loads(data)")
                         continue
                     delta = obj.get("choices", [{}])[0].get("delta", {}).get("content")
                     if delta:
@@ -1036,8 +1039,8 @@ class LocalRealtimeSession:
             app = ""
             try:
                 app = psutil.Process(pid.value).name()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/realtime_voice.py:1042 LocalRealtimeSession._get_active_context", e, "降级：app = psutil.Process(pid.value).name()")
             # 浏览器窗口标题去掉 " - Google Chrome" 等后缀，露出页面名
             for suf in (" - Google Chrome", " - Microsoft Edge", " - Firefox",
                         " - Brave", " — Mozilla Firefox"):
@@ -1160,8 +1163,8 @@ class LocalRealtimeSession:
             if self._player is not None:
                 try:
                     self._player.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("realtime_voice.LocalRealtimeSession._ensure_player", e, "停旧播放器失败")
             self._player = _PCMPlayer(dev_sr, device=dev)
         if sr != dev_sr:
             if getattr(self, "_resampler", None) is None \
@@ -1190,8 +1193,8 @@ class LocalRealtimeSession:
             if resp is not None:
                 try:
                     resp.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    degrade("realtime_voice.LocalRealtimeSession._interrupt", e, "关响应流失败")
         self._clear_playback()
 
     def _emit(self, state, info=""):

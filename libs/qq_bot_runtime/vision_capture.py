@@ -28,6 +28,7 @@ from PIL import Image
 import config
 from camera_capture import CameraCapture
 from ai_provider import get_vision
+from quiet import degrade
 
 
 # 线程池：截图是 CPU/IO 混合操作，单线程截图足够；编码识别异步执行
@@ -160,14 +161,14 @@ class VisionCapture:
             self._capture_task.cancel()
             try:
                 await self._capture_task
-            except asyncio.CancelledError:
-                pass
+            except asyncio.CancelledError as e:
+                degrade("libs/qq_bot_runtime/vision_capture.py:163 VisionCapture.stop", e, "降级：await self._capture_task")
         if self._recognition_task and not self._recognition_task.done():
             self._recognition_task.cancel()
             try:
                 await self._recognition_task
-            except asyncio.CancelledError:
-                pass
+            except asyncio.CancelledError as e:
+                degrade("libs/qq_bot_runtime/vision_capture.py:169 VisionCapture.stop", e, "降级：await self._recognition_task")
         self._capture_task = None
         self._recognition_task = None
         if self._camera:
@@ -285,8 +286,8 @@ class VisionCapture:
                 try:
                     wait = max(0.05, max_interval - (time.time() - self.last_report_time))
                     await asyncio.wait_for(self._recognition_event.wait(), timeout=wait)
-                except asyncio.TimeoutError:
-                    pass
+                except asyncio.TimeoutError as e:
+                    degrade("libs/qq_bot_runtime/vision_capture.py:288 VisionCapture._recognition_loop", e, "降级：wait = max(0.05, max_interval - (time.time() - sel")
 
                 if not self.running:
                     break
