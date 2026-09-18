@@ -82,6 +82,16 @@
 - **同步后必须重启实例**：`bridge/*.py` 已 import 进内存需重启；`webui/*` 虽 no-store 但窗口不刷新也要重启。姿势：筛 `feiyu_app\app.py` 的 python 进程（父子两个 PID）全部 `Stop-Process`，再 `Start-Process cmd.exe -ArgumentList '/c','set FEIYU_QQ_BOT=E:\qq_bot&& E:\qq_bot\venv\Scripts\python.exe E:\feiyu_app\app.py --with-core'`（detached）。
 - **同步前先比哈希定位真正落后的文件**：`Get-FileHash` 逐文件比对 repo vs 部署版，避免只凭记忆漏同步（本次即靠此发现 plugins_api.py/pkg_manager.py 严重落后）。
 
+## 构建助手 = 对话式 Agent（Codex 式界面，提交 bcafa09）
+- **界面**：`#page-builder` 三栏（左：工作区文件树 + 构建历史页签；中：对话框；右：文件编辑器）。原 6 个堆叠面板已整合；`#page-builder { height: calc(100vh - 72px) }` + flex 让三栏内部各自滚动。表单式「导入智能体 / 接入外部 API」收进底部 `.bc-more` details（保留原 id）。
+- **对话 Agent 主循环** `run_chat()`：15 个 LLM 工具（`builder_tools()`）→ 多轮 tool-calling（上限 `CHAT_MAX_STEPS=14`）。生成类工具只写 `state["drafts"]`（UI 显示草稿卡片），点保存或模型调 `save_*` 才落盘。
+- **会话**：`data/builder_chat/<id>.json`（gitignore 的 data/ 下），`list/load/new/delete_chat_session`；历史只存原始用户文本，不落上下文文件正文。
+- **关键坑：`capability="tools"` 无路由**。`e:\qq_bot\ai_providers.json` 的 `capability_routing` 只有 chat/reasoning/vision → 传 `capability="tools"` 会抛「无可用供应商」。
+  - 解法：`_chat_with_tools()` 先试 `tools`，异常信息含 `tools`/`无可用供应商`/`不支持能力` 时回退 `capability="chat"`。
+  - 原理：`_build_payload()` 只要传了 `tools` 就会写进请求体；OpenAI 兼容路径在 `tools` 非空时返回完整 message dict（含 `tool_calls`），与 capability 无关。
+  - `think` 支持 "low/medium/high" 三档（`_think_level`）；low = 不触发 think_body，最快。
+- 前端 JS 约定：状态对象 `bchat`，函数前缀 `_bc*`（旧的 `builder`/`_bld*`/`_ws*` 已全删），导航入口仍是 `loadBuilder()`，事件绑定集中在 `initBuilderUI()`。改 UI 后可用 `node --check webui/app.js` 校验语法。
+
 ## git 提交规范（PowerShell 中文坑）
 - 环境：Windows + PowerShell 5.1，git 默认 `i18n.commitEncoding=utf-8`。PowerShell 以 **GBK** 代码页传中文参数给 git → 中文 commit message 会**乱码存储**（chcp 65001 后仍乱码即说明已存乱码）。
 - 正确方法：用工具（非命令行中文）写 UTF-8 的 message 文件，再 `git commit -F <file>`；amend 同样 `git commit --amend -F <file>`。
