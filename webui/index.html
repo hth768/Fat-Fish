@@ -456,6 +456,66 @@
         </div>
         <div id="bldHistory" class="history-list"></div>
       </div>
+
+      <div class="panel">
+        <div class="panel-title">工作区源码读写（让构建助手像代码 Agent 一样改 / 升级 / debug 源码）</div>
+        <div class="hint wrap" style="margin-bottom:8px">
+          直接浏览并编辑 <code>plugins/</code>、<code>libs/qq_bot_runtime/</code>、<code>bridge/</code> 等工作区源码。
+          每次写入会先把原文件备份到 <code>data/builder_bak/</code>（每文件最多 20 份），可放心反复修改 / 调试 / 升级；
+          LLM 也可借助这些接口自动读写，实现完整的"生成 → 保存 → 反馈 → 再改进"闭环。
+        </div>
+        <div class="workspace-grid" style="display:grid;grid-template-columns:280px 1fr;gap:12px">
+          <div class="workspace-left">
+            <label class="cfg-field">
+              <span class="cfg-label">当前目录</span>
+              <div class="row-actions">
+                <button class="btn ghost" id="wsGoRoot">根</button>
+                <button class="btn ghost" id="wsRefresh">刷新</button>
+              </div>
+              <input id="wsDir" class="input" placeholder="plugins / libs/qq_bot_runtime/agents" />
+              <div class="row-actions" style="margin-top:6px">
+                <button class="btn ghost" id="wsGoDir">进入</button>
+              </div>
+            </label>
+            <div class="cfg-label" style="margin-top:10px">常用根</div>
+            <div class="quick-roots" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+              <button class="btn ghost" data-root="plugins">plugins</button>
+              <button class="btn ghost" data-root="bridge">bridge</button>
+              <button class="btn ghost" data-root="webui">webui</button>
+              <button class="btn ghost" data-root="libs">libs</button>
+            </div>
+            <div class="cfg-label" style="margin-top:10px">列出内容</div>
+            <div id="wsList" class="ws-list"></div>
+          </div>
+          <div class="workspace-right">
+            <label class="cfg-field">
+              <span class="cfg-label">文件路径（相对工作区根）</span>
+              <input id="wsPath" class="input" placeholder="plugins/bili_learn/plugin.py" />
+            </label>
+            <label class="cfg-field">
+              <span class="cfg-label">文件内容（编辑后保存；改动会先备份）</span>
+              <textarea id="wsContent" class="textarea code" rows="18" spellcheck="false" placeholder="选择左侧文件后这里显示内容"></textarea>
+            </label>
+            <div class="hint" id="wsInfo" style="margin:6px 0"></div>
+            <div class="row-actions">
+              <button class="btn ghost" id="wsRead">读取</button>
+              <button class="btn ghost" id="wsDiff">查看 diff</button>
+              <button class="btn primary" id="wsWrite">保存</button>
+              <span class="hint" id="wsMsg"></span>
+            </div>
+            <pre id="wsDiffOut" class="diff-out hidden"></pre>
+          </div>
+        </div>
+        <details style="margin-top:12px">
+          <summary style="cursor:pointer">插件包文件列表（按名浏览 / 一键载入）</summary>
+          <div class="row-actions" style="margin-top:8px">
+            <input id="wsPluginName" class="input" placeholder="插件名，如 bili_learn" style="max-width:260px" />
+            <button class="btn ghost" id="wsListPlugin">列出该包文件</button>
+            <span class="hint" id="wsPluginMsg"></span>
+          </div>
+          <div id="wsPluginFiles" class="ws-list" style="margin-top:6px"></div>
+        </details>
+      </div>
     </section>
   </main>
 </div>

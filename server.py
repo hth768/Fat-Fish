@@ -355,6 +355,20 @@ def make_handler(bridge):
                     return self._json(builder_api.connect_external_agent_sync(bridge, body))
                 if path == "/api/builder/plugin/save":
                     return self._json(builder_api.save_plugin_sync(bridge, body))
+                # ----- 构建助手 · 工作区读写（让构建助手像代码 Agent 一样直接改源码） -----
+                if path == "/api/builder/workspace/list":
+                    return self._json(builder_api.list_workspace_sync(body.get("dir", "") or ""))
+                if path == "/api/builder/workspace/read":
+                    return self._json(builder_api.read_workspace_sync(body.get("path", "")))
+                if path == "/api/builder/workspace/write":
+                    return self._json(builder_api.write_workspace_sync(
+                        body.get("path", ""), body.get("content", "") or "",
+                        backup=bool(body.get("backup", True))))
+                if path == "/api/builder/workspace/diff":
+                    return self._json(builder_api.workspace_diff_sync(
+                        body.get("path", ""), body.get("content", "") or ""))
+                if path == "/api/builder/plugin/files":
+                    return self._json(builder_api.list_plugin_files_sync(body.get("name", "")))
                 # ----- 主模型供应商配置保存 -----
                 if path == "/api/providers":
                     return self._json(provider_api.save_model(body))

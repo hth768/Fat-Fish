@@ -1452,6 +1452,122 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#bldRefreshHistory").addEventListener("click", _bldRefreshHistory);
   _bldModeSwitch("agent");
 
+  // ===== 构建助手 · 工作区读写 =====
+  const _ws = {
+    dir: "",
+  };
+  function _wsRenderList(data) {
+    const ul = $("#wsList");
+    ul.innerHTML = "";
+    if (!data.ok) { ul.textContent = "读取失败: " + data.error; return; }
+    const items = data.items || [];
+    if (!items.length) { ul.textContent = "（空目录）"; return; }
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.className = "ws-row";
+      const label = (it.is_dir ? "📁 " : "📄 ") + it.name + (it.is_dir ? "" : `  (${it.size}B)`);
+      row.textContent = label;
+      row.style.cursor = "pointer";
+      row.style.padding = "2px 4px";
+      row.addEventListener("click", () => {
+        if (it.is_dir) {
+          $("#wsDir").value = it.rel;
+          _wsLoadDir(it.rel);
+        } else {
+          $("#wsPath").value = it.rel;
+          _wsRead(it.rel);
+        }
+      });
+      ul.appendChild(row);
+    }
+  }
+  async function _wsLoadDir(dir) {
+    _ws.dir = dir || "";
+    const msg = $("#wsMsg");
+    msg.textContent = "加载中…";
+    try {
+      const data = await POST("/api/builder/workspace/list", { dir });
+      _wsRenderList(data);
+      msg.textContent = data.ok ? `已加载 ${(data.items || []).length} 项` : ("失败: " + (data.error || ""));
+    } catch (e) { msg.textContent = "失败: " + e.message; }
+  }
+  async function _wsRead(path) {
+    path = (path || $("#wsPath").value || "").trim();
+    if (!path) { $("#wsMsg").textContent = "请填写路径"; return; }
+    $("#wsPath").value = path;
+    const msg = $("#wsMsg");
+    msg.textContent = "读取中…";
+    try {
+      const data = await POST("/api/builder/workspace/read", { path });
+      if (!data.ok) { msg.textContent = "失败: " + data.error; return; }
+      $("#wsContent").value = data.content;
+      $("#wsInfo").textContent = `${data.path}  (${data.size} bytes)`;
+      msg.textContent = "已读取";
+    } catch (e) { msg.textContent = "失败: " + e.message; }
+  }
+  async function _wsWrite() {
+    const path = ($("#wsPath").value || "").trim();
+    const content = $("#wsContent").value;
+    if (!path) { $("#wsMsg").textContent = "请填写路径"; return; }
+    if (!confirm(`确认写入 ${path}？原文件将自动备份到 data/builder_bak/`)) return;
+    $("#wsMsg").textContent = "写入中…";
+    try {
+      const data = await POST("/api/builder/workspace/write", { path, content, backup: true });
+      if (!data.ok) { $("#wsMsg").textContent = "失败: " + data.error; return; }
+      $("#wsMsg").textContent = `已保存 ${data.size}B${data.backup ? "（已备份）" : ""}`;
+      $("#wsInfo").textContent = `${data.path}  (${data.size} bytes)`;
+    } catch (e) { $("#wsMsg").textContent = "失败: " + e.message; }
+  }
+  async function _wsDiff() {
+    const path = ($("#wsPath").value || "").trim();
+    const content = $("#wsContent").value;
+    if (!path) { $("#wsMsg").textContent = "请填写路径"; return; }
+    try {
+      const data = await POST("/api/builder/workspace/diff", { path, content });
+      const out = $("#wsDiffOut");
+      if (!data.ok) { out.textContent = "失败: " + data.error; out.classList.remove("hidden"); return; }
+      out.textContent = (data.diff || []).join("\n") + `\n\n（旧 ${data.old_size} 行 → 新 ${data.new_size} 行）`;
+      out.classList.remove("hidden");
+      $("#wsMsg").textContent = "已生成 diff";
+    } catch (e) { $("#wsMsg").textContent = "失败: " + e.message; }
+  }
+  async function _wsListPlugin() {
+    const name = ($("#wsPluginName").value || "").trim();
+    if (!name) { $("#wsPluginMsg").textContent = "请填插件名"; return; }
+    $("#wsPluginMsg").textContent = "加载中…";
+    try {
+      const data = await POST("/api/builder/plugin/files", { name });
+      const box = $("#wsPluginFiles");
+      box.innerHTML = "";
+      if (!data.ok) { $("#wsPluginMsg").textContent = "失败: " + data.error; return; }
+      const files = data.files || [];
+      $("#wsPluginMsg").textContent = `共 ${files.length} 个文件`;
+      for (const f of files) {
+        const row = document.createElement("div");
+        row.className = "ws-row";
+        row.style.cursor = "pointer";
+        row.style.padding = "2px 4px";
+        row.textContent = `${f.text ? "📄" : "🖼"} plugins/${f.name || name}/${f.rel}  (${f.size}B)`;
+        row.addEventListener("click", () => {
+          $("#wsPath").value = `plugins/${name}/${f.rel}`;
+          _wsRead($("#wsPath").value);
+        });
+        box.appendChild(row);
+      }
+    } catch (e) { $("#wsPluginMsg").textContent = "失败: " + e.message; }
+  }
+  // 绑定工作区事件
+  $("#wsRefresh").addEventListener("click", () => _wsLoadDir($("#wsDir").value || _ws.dir));
+  $("#wsGoRoot").addEventListener("click", () => { $("#wsDir").value = ""; _wsLoadDir(""); });
+  $("#wsGoDir").addEventListener("click", () => { _wsLoadDir($("#wsDir").value); });
+  $("#wsRead").addEventListener("click", () => _wsRead());
+  $("#wsWrite").addEventListener("click", _wsWrite);
+  $("#wsDiff").addEventListener("click", _wsDiff);
+  $("#wsListPlugin").addEventListener("click", _wsListPlugin);
+  $$(".quick-roots button").forEach(b => b.addEventListener("click", () => { $("#wsDir").value = b.dataset.root; _wsLoadDir(b.dataset.root); }));
+  // 默认进入 bridge（核心桥接层，常用且肯定存在）
+  _wsLoadDir("bridge");
+
   // ===== 记忆：导入 / 导出 =====
   $("#btnExportMem").addEventListener("click", async () => {
     try {

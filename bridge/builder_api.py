@@ -10,9 +10,11 @@ import json
 import os
 import py_compile
 import re
+import shutil
 import sys
 import tempfile
 import time
+from datetime import datetime
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGINS_DIR = os.path.join(APP_DIR, "plugins")
@@ -925,3 +927,221 @@ def save_plugin_sync(bridge, payload: dict) -> dict:
     if r.get("ok"):
         _record_history("save", "plugin", r.get("name"), True, None, rounds=1, key=r.get("name"))
     return r
+
+
+# ============================================================================
+# 工作区读写：让构建助手像代码 Agent 一样直接读 / 写工作区源码文件
+# ============================================================================
+# 安全根白名单：写文件 / 删文件只能落在这些目录及其子目录内。
+_WORKSPACE_ROOTS = (
+    "plugins",                  # 插件包根目录（plugins/<pkg>/manifest.json + plugin.py）
+    "agents",                   # 智能体根（若某天改放仓库内）
+    "bridge",                   # 桥接层源码
+    "libs",                     # 公共库（含 libs/qq_bot_runtime/agents/）
+    "webui",                    # 前端静态资源
+    "config",                   # 配置目录（若存在）
+)
+
+# 危险文件 / 隐藏目录黑名单：绝对不允许读写
+_WORKSPACE_DENY = (
+    ".git", ".codebuddy", "__pycache__", "node_modules",
+    ".env", ".env.local", "settings_store.py",   # 包含运行时密钥的入口
+    "ai_providers.json", "user_profiles.json",   # 运行时敏感数据
+    "data",                                     # 运行期污染目录
+)
+# 文件大小上限（防止一次性写超大文件 / 读取触发 OOM）
+_MAX_FILE_BYTES = 512 * 1024
+
+
+def _resolve_rooted(rel: str) -> str:
+    """解析相对工作区路径到绝对路径；越界 / 黑名单一律拒绝。"""
+    rel = (rel or "").replace("\\", "/").lstrip("/")
+    if not rel:
+        raise ValueError("路径为空")
+    # 路径中任一段不允许落在黑名单内
+    parts = rel.split("/")
+    if any(p in _WORKSPACE_DENY for p in parts):
+        raise ValueError(f"禁止访问: {rel}")
+    # 必须落在某个允许的根之内
+    if not any(rel == root or rel.startswith(root + "/") for root in _WORKSPACE_ROOTS):
+        raise ValueError(f"路径必须在允许的根内 ({'/'.join(_WORKSPACE_ROOTS)}): {rel}")
+    abs_path = os.path.join(APP_DIR, rel)
+    abs_path = os.path.abspath(abs_path)
+    # 二次校验：解析后仍必须在 APP_DIR 之下
+    app_abs = os.path.realpath(APP_DIR)
+    real = os.path.realpath(abs_path)
+    if not (real == app_abs or real.startswith(app_abs + os.sep)):
+        raise ValueError(f"路径越界: {rel}")
+    return abs_path
+
+
+def _is_text_file(abs_path: str) -> bool:
+    """简单判定是否文本文件，避免写入二进制（图片 / 模型权重）触发乱码。"""
+    try:
+        with open(abs_path, "rb") as f:
+            chunk = f.read(2048)
+    except Exception:
+        return True
+    if not chunk:
+        return True
+    # NUL 字节 = 二进制特征
+    if b"\x00" in chunk:
+        return False
+    return True
+
+
+def list_workspace_sync(rel_dir: str = "") -> dict:
+    """列出工作区子目录。rel_dir 必须在白名单根之下；空字符串=根视图（直接列根目录下的允许项）。"""
+    rel_dir = (rel_dir or "").replace("\\", "/").strip("/")
+    if rel_dir and not any(rel_dir == r or rel_dir.startswith(r + "/") for r in _WORKSPACE_ROOTS):
+        return {"ok": False, "error": f"路径必须在白名单根内: {rel_dir}"}
+    base = os.path.join(APP_DIR, rel_dir) if rel_dir else APP_DIR
+    base = os.path.abspath(base)
+    if not os.path.isdir(base):
+        return {"ok": False, "error": f"目录不存在: {rel_dir or '根'}"}
+    out = []
+    try:
+        for fn in sorted(os.listdir(base)):
+            full = os.path.join(base, fn)
+            rel = (os.path.relpath(full, APP_DIR)).replace("\\", "/")
+            if any(part in _WORKSPACE_DENY for part in rel.split("/")):
+                continue
+            # 仅展示白名单根下的项
+            if rel_dir == "":
+                if fn not in _WORKSPACE_ROOTS and not fn.endswith((".md", ".txt", ".py", ".json", ".html", ".js", ".css")):
+                    # 根视图只展示白名单根 + 顶层关键文件
+                    if fn not in _WORKSPACE_ROOTS:
+                        continue
+            try:
+                stat = os.stat(full)
+                entry = {
+                    "name": fn,
+                    "rel": rel,
+                    "is_dir": os.path.isdir(full),
+                    "size": stat.st_size if not os.path.isdir(full) else None,
+                    "mtime": int(stat.st_mtime),
+                }
+                out.append(entry)
+            except OSError:
+                continue
+    except Exception as e:
+        return {"ok": False, "error": f"读取失败: {e!r}"}
+    return {"ok": True, "dir": rel_dir, "items": out}
+
+
+def read_workspace_sync(rel_path: str) -> dict:
+    """读工作区单个文件，返回内容（文本）。"""
+    try:
+        abs_path = _resolve_rooted(rel_path)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    if not os.path.isfile(abs_path):
+        return {"ok": False, "error": f"不是文件: {rel_path}"}
+    if not _is_text_file(abs_path):
+        return {"ok": False, "error": "二进制文件不允许读取/写入（防止破坏资源）"}
+    try:
+        size = os.path.getsize(abs_path)
+        if size > _MAX_FILE_BYTES:
+            return {"ok": False, "error": f"文件过大 ({size} bytes > {_MAX_FILE_BYTES})"}
+        with open(abs_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return {"ok": True, "path": rel_path, "content": content, "size": size}
+    except UnicodeDecodeError:
+        return {"ok": False, "error": "非 UTF-8 文本，请用其他工具读取"}
+    except Exception as e:
+        return {"ok": False, "error": f"读取失败: {e!r}"}
+
+
+def _make_backup(abs_path: str, rel: str) -> str | None:
+    """写入前自动备份到 .builder_bak/<rel-with-slashes>/<filename>.<timestamp>，最近 20 个。"""
+    bak_root = os.path.join(APP_DIR, "data", "builder_bak")
+    bak_path = os.path.join(bak_root, rel.replace("/", os.sep))
+    os.makedirs(os.path.dirname(bak_path), exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    target = f"{bak_path}.{ts}"
+    if os.path.isfile(abs_path):
+        try:
+            shutil.copy2(abs_path, target)
+        except Exception:
+            return None
+    # 每个文件最多保留 20 个备份
+    parent = os.path.dirname(bak_path)
+    prefix = os.path.basename(bak_path)
+    if os.path.isdir(parent):
+        siblings = sorted(
+            (os.path.join(parent, f) for f in os.listdir(parent) if f.startswith(prefix)),
+            key=os.path.getmtime, reverse=True,
+        )
+        for old in siblings[20:]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+    return target if os.path.isfile(target) else None
+
+
+def write_workspace_sync(rel_path: str, content: str, *, backup: bool = True) -> dict:
+    """写工作区单个文件。自动备份原文件到 data/builder_bak/<rel>.<ts>。"""
+    try:
+        abs_path = _resolve_rooted(rel_path)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    if not _is_text_file(abs_path) if os.path.exists(abs_path) else False:
+        return {"ok": False, "error": "目标路径是二进制文件，禁止写入"}
+    if isinstance(content, str) and len(content.encode("utf-8")) > _MAX_FILE_BYTES:
+        return {"ok": False, "error": f"内容过大 (> {_MAX_FILE_BYTES} bytes)"}
+    bak = None
+    if backup and os.path.isfile(abs_path):
+        bak = _make_backup(abs_path, rel_path)
+    try:
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        with open(abs_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        size = os.path.getsize(abs_path)
+        return {"ok": True, "path": rel_path, "size": size, "backup": bak}
+    except Exception as e:
+        return {"ok": False, "error": f"写入失败: {e!r}"}
+
+
+def workspace_diff_sync(rel_path: str, content: str, *, max_lines: int = 200) -> dict:
+    """把待写入的内容与磁盘现状做 diff（仅返回前 N 行），便于 UI 展示修改前后的对比。"""
+    cur = read_workspace_sync(rel_path)
+    if not cur.get("ok"):
+        return cur
+    old = cur.get("content", "").splitlines()
+    new = (content or "").splitlines()
+    import difflib
+    diff = list(difflib.unified_diff(old, new, fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}", lineterm=""))
+    if len(diff) > max_lines:
+        truncated = diff[:max_lines] + [f"... 省略 {len(diff) - max_lines} 行 ..."]
+    else:
+        truncated = diff
+    return {"ok": True, "path": rel_path, "diff": truncated, "old_size": len(old), "new_size": len(new)}
+
+
+def list_plugin_files_sync(name: str) -> dict:
+    """列出一个插件包（plugins/<name>/）下所有相对路径文件，方便 UI 一键选择要改的文件。"""
+    name = (name or "").strip().strip("/").replace("\\", "/")
+    if not name or "/" in name or name.startswith("."):
+        return {"ok": False, "error": "非法插件名"}
+    pkg_dir = os.path.join(APP_DIR, "plugins", name)
+    pkg_dir = os.path.abspath(pkg_dir)
+    app_abs = os.path.realpath(APP_DIR)
+    if not (pkg_dir == app_abs or pkg_dir.startswith(app_abs + os.sep)):
+        return {"ok": False, "error": "路径越界"}
+    if not os.path.isdir(pkg_dir):
+        return {"ok": False, "error": f"插件目录不存在: plugins/{name}"}
+    out = []
+    for root, dirs, files in os.walk(pkg_dir):
+        # 跳过隐藏 / 缓存
+        dirs[:] = [d for d in dirs if not d.startswith((".", "_", "__pycache__"))]
+        for fn in files:
+            full = os.path.join(root, fn)
+            rel = os.path.relpath(full, pkg_dir).replace("\\", "/")
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                size = 0
+            out.append({"rel": rel, "size": size, "text": _is_text_file(full)})
+    out.sort(key=lambda x: x["rel"])
+    return {"ok": True, "name": name, "files": out}
