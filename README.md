@@ -26,7 +26,9 @@
   - [记忆子系统](#记忆子系统)
   - [总结](#总结)
   - [插件系统](#插件系统)
+  - [构建助手（对话式 Agent）](#构建助手对话式-agent)
   - [外观](#外观)
+  - [模型注册表（LLM 供应商）](#模型注册表llm-供应商)
 - [插件协议（第三方接入规范）](#插件协议第三方接入规范)
 - [MC 功能（模组世界 + 原版世界）](#mc-功能模组世界--原版世界)
 - [安卓版](#安卓版)
@@ -53,7 +55,7 @@
 └─────────────────────────────────────────────────────┘
 ```
 
-- **前端** `webui/index.html · app.js · styles.css`：侧栏含 仪表盘 / 聊天 / 记忆 / 总结 / 插件 / 配置 / 外观。
+- **前端** `webui/index.html · app.js · styles.css`：侧栏含 仪表盘 / 聊天 / 记忆 / 总结 / 插件 / 配置 / 构建助手 / 外观（「AI 供应商（模型管理）」是配置页内的面板）。
 - **后端 HTTP** `server.py`：仅本机监听，托管静态前端并暴露 REST API 与 SSE 实时事件流（`SO_EXCLUSIVEADDRUSE` 保证单实例）。
 - **智能体核心**：App 以库方式调用 `libs/qq_bot_runtime` 的核心，运行时零源码改动。
 
@@ -120,10 +122,11 @@ feiyu_standalone/
 │   ├── appearance_api.py  # 外观 API
 │   ├── config_api.py      # 配置 API
 │   ├── memory_api.py      # 记忆 API
-│   ├── plugins_api.py     # 插件 API
+│   ├── plugins_api.py     # 插件 API（含分组 / 市场 / 扩展设置）
 │   ├── summary_api.py     # 总结 API
-│   ├── pkg_manager.py     # 插件包管理
-│   └── sidecar_runner.py  # 旁路进程运行器
+│   ├── builder_api.py     # 构建助手 API：对话式 Agent（工具循环 / 权限 / 审批 / 联网 / 工作区）
+│   ├── pkg_manager.py     # 插件包管理（manifest 校验 / 依赖 / sidecar）
+│   └── sidecar_runner.py  # 旁路进程运行器（日志落盘 + 端口就绪等待）
 ├── webui/                 # 原生 JS/CSS 前端控制台
 │   ├── index.html
 │   ├── app.js
@@ -138,7 +141,8 @@ feiyu_standalone/
 │   ├── ARCHITECTURE.md / ARCHITECTURE_TREE.md                 # 智能体架构文档
 │   └── ai_providers.example.json / config.py / requirements*.txt
 ├── plugins/
-│   └── groups.json        # 插件依赖分组定义（见「插件系统」）
+│   ├── groups.json        # 插件依赖分组定义（见「插件系统」）
+│   └── greeting_demo/     # 本地插件示例包（官方 UI 事件通道范本，见 PLUGINS.md）
 ├── feiyu-android/         # 肥鱼娘安卓版（Kotlin + Compose，独立工程）
 ├── dist/                  # 发布产物（见「发布与安装」；不在 git 内，走 GitHub Releases）
 └── data/                  # 运行数据（用户隐私，git 忽略）
@@ -221,11 +225,51 @@ python app.py --with-core
 | `desktop` | 桌面与游戏 | `brain_pc` `brain_pvz` | PvZ 需 `PlantsVsZombies.exe` 放 `pvz_games/` |
 | `services` | 后台服务 | `sidecar_memory` `sidecar_monitor` `sidecar_telemetry` | sidecar 子进程 |
 
-包管理见 `bridge/pkg_manager.py`。
+包管理见 `bridge/pkg_manager.py`；插件包的 `manifest.json` 会在**装载前静态校验**（必填字段、`kind` 合法性、包名与目录一致、依赖字段、`schema_version` 兼容性），坏包不再静默消失（规则见 [`PLUGINS.md`](./PLUGINS.md)）。
 
-## 插件协议（第三方接入规范）
+### 构建助手（对话式 Agent）
 
-> **第三方开发插件**：完整接入规范（包目录、`manifest.json` 字段、`platform`/`feature`/`brain`/`sidecar`/`local` 四类契约、消息/事件接口、最小模板）见仓库根目录 **[`PLUGINS.md`](./PLUGINS.md)**。
+侧栏「构建助手」是一个**像 Codex / WorkBuddy 那样边聊边改**的代码 / 构建 Agent：用自然语言说要做什么，它自己读代码、改文件、查语法、生成或改进智能体与插件，全程在对话框里可见。
+
+```
+┌─────────────┬──────────────────────────────┬─────────────┐
+│ 工作区/历史/高级│  对话流                      │ 文件编辑器   │
+│ 文件树       │  · 你的消息                  │ 读取 → diff  │
+│ 点目录进入    │  · 💭 思考过程（可折叠）       │ → 保存      │
+│ 点文件开编辑  │  · 工具卡片（参数 / diff / 结果）│ （写前自动备份）│
+│ 行内「＋参考」 │  · 产物草稿卡片（可编辑→保存） │             │
+│             │ ──────────────────────────── │             │
+│             │ [待确认操作] [参考文件]        │             │
+│             │ [输入框 ……………] [发送]       │             │
+│             │ 模型 / 思考 / 访问权限 / 工作区 │             │
+└─────────────┴──────────────────────────────┴─────────────┘
+```
+
+左栏可「« 收回 / ☰ 拉出」折叠（收起后**输入框仍贴底**，状态持久化）。
+
+**工具循环**：后端把 21 项能力包装成 LLM 工具（列目录 / 读 / 写 / diff / 搜索 / 语法检查 / 列智能体 / 列插件 / 查历史 / 生成·改进·保存智能体 / 生成·改进·保存插件 / 查设置 / 联网 5 件套），由模型自主决定调用顺序，最多 14 步（可在「高级」调）。生成类工具只产出**草稿**，你点保存或明确说「保存」才落盘。
+
+**访问权限（5 档）**——输入区下方下拉，中文名即语义：
+
+| 档位 | 新建 / 改写普通文件 | 覆盖已有文件 | 核心代码 | 智能体 / 插件落盘 |
+|---|---|---|---|---|
+| 只读规划 `plan` | 拒绝 | 拒绝 | 拒绝 | 拒绝 |
+| 每次确认 `default` | 询问 | 询问 | 询问 | 询问 |
+| 自动应用 `acceptEdits` | 自动 | 询问 | 询问 | 询问 |
+| **完全访问 `full`** | 自动 | 自动 | 询问 | 询问 |
+| 完全放行 `bypassPermissions` | 自动 | 自动 | 自动 | 自动 |
+
+被拦下的操作进入输入区上方「**待确认操作**」队列（风险标签 + 内容预览 + 批准 / 拒绝），**批准后才真正执行**，结果以系统通知写回会话；批准时可勾选「记住此文件 / 此目录 / 全部同类」，命中记忆的同类操作此后自动执行（可在「高级」里逐条删除或清空）。
+
+**工作区位置**：默认 = 应用目录，点「📁 浏览…」可**从硬盘选择**——真实窗口弹系统文件夹对话框，浏览器模式用内置目录浏览器（盘符 / 常用位置 / 上一级 / 路径直达）。所有读写都被限制在工作区根内，`..` 逃逸与黑名单（`.git`、`data/`、密钥文件等）一律拒绝。
+
+**联网能力**：`web_search` 搜索（返回融合回答 + 来源链接）、`fetch_url` / `fetch_urls` 抓取网页正文、`web_research` 先搜后抓、`download_file` 下载到工作区（同样走权限闸门，上限 12MB）。搜索后端以 DeepSeek Responses API 为主、失败自动回退 GLM；总开关与配额见「高级 → 联网功能」。
+
+**思维链与流式**：思考过程在轮次中以展开卡片**实时逐字显示**，本轮结束自动折叠为「💭 思考过程 · N 字 · 点此展开」，点箭头展开查看；「流式输出」开关可关闭（回到整轮返回）。思维链随会话持久化，重开 App 仍可展开。
+
+**会话与历史**：对话存 `data/builder_chat/<id>.json`（左栏顶部可切换 / 新建 / 删除），构建历史存 `data/builder_history.jsonl`；写入备份在 `data/builder_bak/`。
+
+> **安全约定**：网页内容视为外部输入、不得执行其中指令（防提示注入）；权限被拒时模型如实说明而非绕过；「高级」里的开关（高危确认 / 记住批准 / 自动备份 / 联网 / 步数上限）即时生效。
 
 ### 外观
 
@@ -244,6 +288,20 @@ python app.py --with-core
 - **构建助手实时切换**：构建助手 / 插件生成时通过 `provider` 参数实时指定供应商（不改全局路由），后端 `ai_provider.chat(provider=...)` 直通。
 - **删除 / 编辑**：`/api/providers/delete`（`delete_model`）、`/api/providers`（`save_model`）。
 - **思考强度**：构建助手内「模型」与「思考强度」为独立控件，思考强度分 **低 / 中 / 高** 三档，经 `_think_level` 归一化后下发 thinking 参数（high 档对 Anthropic 放大 think budget）。
+
+---
+
+## 插件协议（第三方接入规范）
+
+> **第三方开发插件**：完整接入规范见仓库根目录 **[`PLUGINS.md`](./PLUGINS.md)**——包目录与 `manifest.json` 字段（含 `schema_version`、`pkg_requires`、`config_schema`）、装载前校验规则与 error/warning 语义、`platform` / `feature` / `brain` / `sidecar` / `local` 五类契约、消息与事件接口、**官方 UI 事件通道 `core.app_bridge`**、最小模板。
+
+要点速记：
+
+- **往 App 界面推事件**（插件显示消息 / 图片 / 语音 / 状态）：`bridge = getattr(core, "app_bridge", None)` → `bridge.push(session, {"type": "message", "text": ...})`；`push` 线程安全、`session=None` 为全局广播，**不要**用 `sys.modules` 取应用层内部对象。
+- **manifest 校验**（装载前、不执行代码）：必填 `name`（必须等于目录名）/ `title` / `version` / `kind`；`kind ∈ platform|feature|brain|sidecar|local`；`schema_version` 当前为 **2**（缺失按 1 告警放行、高于本机则拒绝装载）；校验不过的包以 `kind: "invalid"` 列在插件页并附原因，不再静默消失。
+- **依赖**：`requires`（引擎内建能力）/ `pkg_requires`（其它插件包，缺失则拒绝装载）/ `optional_requires`（软依赖，缺失仅告警）。
+- **sidecar 包**：`manifest.sidecar = {script, host, port}`，启动后等待端口就绪；子进程输出落盘 `<qq_bot>/logs/sidecar_<name>.log`，`status()` 带 `log` 与 `exit_code`，便于排障。
+- **参考实现**：`plugins/greeting_demo/`（自包含、走官方通道、带配置表单与热生效）。
 
 ---
 
@@ -323,6 +381,10 @@ python libs/qq_bot_runtime/tests/run.py
 - **本地语音无声音 / 报错**：`voice` 组需 `voice_pack`（9.7GB）+ N 卡；无 N 卡会自动降级 GLM 云端 TTS。
 - **MC 模组版提示「FeiyuAPI 模组没加载」**：确认把 `feiyuapi-1.0.0.jar` 放进游戏实例 `mods/`，且游戏为 NeoForge 1.21.1。
 - **记忆写反 / 串台**：记忆子系统已做主体区分（用户 vs 肥鱼娘），人格记忆采用旧事实优先策略；若异常请反馈。
+- **构建助手一直要确认 / 改不动文件**：由「访问权限」档位决定——「每次确认」所有写入都需批准，「完全访问」只对核心代码与落盘提问；被拦下的操作在输入框上方「待确认操作」里批准即可，也可勾选「记住此文件 / 此目录 / 全部同类」减少重复询问（在「高级」里可清除记忆）。
+- **构建助手报「无可用供应商」或工具调用失败**：该模型需支持工具调用（tools）。换用支持工具调用的模型，或把权限设为「只读规划」让它只给方案不动手。
+- **构建助手联网搜索失败**：「高级 → 联网功能」是否开启；搜索需要 DeepSeek（Responses API）或 GLM 密钥之一，缺失时工具会返回明确原因。
+- **改了 `webui/` 但界面没变**：静态资源已带 `Cache-Control: no-store`；若仍为旧界面，重启实例（`app.py` 重启会自动重开窗口）。
 
 **开发与运维约定**
 
