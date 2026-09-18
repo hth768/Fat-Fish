@@ -78,7 +78,7 @@
 - **测试时务必小心写接口**：直接打 `POST /api/builder/workspace/write` 会立刻覆盖磁盘文件（即使没改过内容，UI 仍会用编辑过的覆盖）。首次测试误把 builder_api.py 覆盖 → 走 `data/builder_bak/bridge/builder_api.py.20260918_174326_479530` 完整还原 1024 行。
 - **只读接口必须注册在 `do_GET`**：`/api/builder/{files,file/read,history}` 曾误放进 `do_POST` 分支，而前端用 `GET()` 调用 → 面板 404（`2573bb7` 修复）。新只读查询一律进 `do_GET`（query 传参），`do_POST` 只放写操作。
 - **术语澄清（重要）**：用户说的"独立版" = `e:\qq_bot`，但它**只有引擎、没有 App 层**（无 `bridge/`/`server.py`/`app.py`/`plugins/`；其 `webui/` 是引擎自带控制台）。**构建助手等 App 层改动的同步目标只能是 `E:/feiyu_app`**。
-- **App 层同步清单（repo → E:/feiyu_app）**：`bridge/*`、`webui/*`、`server.py`、`app.py`、`settings_store.py`、`plugins/groups.json`、`README.md`。注意 E:/feiyu_app 无 `libs/`，UI 工作区默认目录须为 `bridge`。
+- **App 层同步清单（repo → E:/feiyu_app）**：`bridge/*`、`webui/*`、`server.py`、`app.py`、`settings_store.py`、`plugins/groups.json`、`README.md`、`OVERVIEW.md`、`PLUGINS.md`。注意 E:/feiyu_app 无 `libs/`，UI 工作区默认目录须为 `bridge`；部署版**原本缺 OVERVIEW.md**（`53c43ab` 时补建），README/PLUGINS 一直都有。
 - **同步后必须重启实例**：`bridge/*.py` 已 import 进内存需重启；`webui/*` 虽 no-store 但窗口不刷新也要重启。姿势：筛 `feiyu_app\app.py` 的 python 进程（父子两个 PID）全部 `Stop-Process`，再 `Start-Process cmd.exe -ArgumentList '/c','set FEIYU_QQ_BOT=E:\qq_bot&& E:\qq_bot\venv\Scripts\python.exe E:\feiyu_app\app.py --with-core'`（detached）。
 - **同步前先比哈希定位真正落后的文件**：`Get-FileHash` 逐文件比对 repo vs 部署版，避免只凭记忆漏同步（本次即靠此发现 plugins_api.py/pkg_manager.py 严重落后）。
 
