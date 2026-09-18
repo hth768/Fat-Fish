@@ -92,6 +92,15 @@
   - `think` 支持 "low/medium/high" 三档（`_think_level`）；low = 不触发 think_body，最快。
 - 前端 JS 约定：状态对象 `bchat`，函数前缀 `_bc*`（旧的 `builder`/`_bld*`/`_ws*` 已全删），导航入口仍是 `loadBuilder()`，事件绑定集中在 `initBuilderUI()`。改 UI 后可用 `node --check webui/app.js` 校验语法。
 
+## 思维链展示（提交 a855966）——含引擎改动
+- 引擎 `ai_provider.py`：`chat()` / `_call_once()` / `_call_anthropic()` 新增 **`keep_reasoning: bool = False`**。默认 False 时行为与旧版一致（OpenAI 兼容路径原本直接 `pop("reasoning_content")` 丢弃）；True 时把 `reasoning_content`（或 Anthropic 的 `thinking`/`redacted_thinking` 块）存进 `msg["_reasoning"]`。
+  - `_reasoning` 是**本地元数据键**：回传历史给 API 前必须剔除 → 构建助手用 `_strip_meta()` 过滤所有 `_` 开头的键。**新增下划线键时记得同步 `_strip_meta` 语义。**
+  - **改了这个文件必须同步 `e:\qq_bot\ai_provider.py`**（引擎副本），否则部署直接 `TypeError: chat() got an unexpected keyword argument 'keep_reasoning'`。
+- `run_chat` 新增 **`blocks`**（有序：`{type:"think"|"tool", round, ...}`）+ `thinkings` + `has_reasoning`；思维链随会话历史持久化在 assistant 消息的 `_reasoning`（单段上限 `REASONING_MAX=12000`）。
+  - **写回历史的 off-by-one 陷阱**：`base_idx` 必须用 `len(convo) - 1`（append 用户消息后的 len 指向下一条），否则会漏掉本轮第一条 assistant（带 tool_calls 的那条），会话结构坏成 `[user, tool, assistant]`。
+- 前端 `_bcThinkCard(text, {live})`：思考中 `open=true` + 秒级计时；结束 `setText()` 填入内容并 `open=false` 自动折叠为「💭 思考过程 · N 字 · 点此展开」，`▸` 靠 `.bc-think[open] > summary::before { rotate(90deg) }` 转向。发送时按 `r.blocks` 顺序渲染；历史回放渲染 `m._reasoning`。
+- **实测**：部署的 `deepseek-flash` 默认返回 `reasoning_content`（deepseek-reasoner / deepseek-v4-flash 同样返回，deepseek-chat 不返回）；`think` 档位对 DeepSeek 无影响（未配 `think_param`/`think_body`）。**过于简单的问题模型可能不产出 reasoning**（属模型行为）。API 是 `stream: False`，故「思考中」只能做展开占位 + 计时，真流式需改引擎 SSE。
+
 ## 构建助手权限模型（WorkBuddy 式，提交 e4cca55 + 0815762）——改构建助手必读
 - 设置文件 `data/builder_settings.json`（`load_settings`/`set_settings`/`get_settings`），字段：`workspace`、`permission_mode`、`confirm_overwrite`、`confirm_sensitive`、`confirm_install`、`auto_backup`、`remember_approvals`、`max_steps`、`deny_extra`。
 - **工作区根**：唯一入口 `workspace_root()`；是否自定义看 `is_custom_workspace()`。所有文件 API（`_resolve_rooted`/`list_workspace_sync`/`_search_workspace`/`list_context_files`/`read_context_file`）都必须基于它，**新增文件能力时不要直接用 `APP_DIR`**，否则自定义工作区失效。
