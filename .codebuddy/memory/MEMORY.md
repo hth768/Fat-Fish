@@ -90,11 +90,17 @@
 ## 9. git 提交规范（PowerShell 中文坑）
 - PowerShell 以 GBK 传参给 git → 中文 commit message 存成乱码。**用 UTF-8 message 文件 + `git commit -F <file>`**（amend 同）。已乱码修正：`git -c i18n.commitEncoding=gbk commit --amend -F <file>`。`-m` 中文含括号等会解析错误，一律 `-F`。验证 `chcp 65001 > $null; git --no-pager log -1 --format=%B`。曾遇 GitHub 443 超时，重试可成功。
 
-## 10. 测试与工程质量现状（提交 ab383da）
-- **两层测试**：引擎 `libs/qq_bot_runtime/tests/`（约 90 项，`python .../tests/run.py`，需完整依赖环境）+ App `tests/`（43 项，`tests\run_tests.bat` 或 `python -m unittest discover -s tests -v`，纯标准库无需 pytest）。**改 bridge/ 后跑后者**，它覆盖：工具契约（21 个 × schema 形状/required）、权限闸门 5 档、批准记忆范围、路径安全、上下文白名单、manifest 校验、sidecar 就绪。
-- 测试自身把 settings/approvals/rules/chat 落到 `tempfile`（`_IsolatedDataMixin`），**不污染仓库 `data/`**；新增测试请沿用该 mixin。
-- **代码体检数据（2026-09-18）**：真正裸 `except:` = **0**；`except Exception:` = **692**（bridge 159 / engine 500）；其中**静默吞掉（`…: pass/continue`）= 259**（builder_api 34、mc_bot_brain 23、memory_api 17）。这是"异常静默降级难排障"的实质，**未批量改**（多数是刻意降级路径，风险不可控）—— 要收紧时优先挑「吞掉后完全无痕迹」的改成日志。
-- **体积真相**：工作副本 ~30GB（`dist/` 16.5GB + `libs/` 13.8GB，其中 `libs/qq_bot_runtime` 8.2GB），但 **git 只跟踪 1522 文件 / 59.2MB**；重的是工作副本与分发产物，`dist/` 已 gitignore。捆绑 Python 是 standalone 的**设计选择**，不要"优化"掉。
-- **LICENSE 仍缺**（`LICENSE*/COPYING` 无，README 未提）—— 属法律决定，需用户选（MIT / Apache-2.0 / 保留所有权利 / 其它）后再加。
+## 10. 测试与工程质量现状（提交 ab383da / 98def16）
+- **两层测试**：引擎 `libs/qq_bot_runtime/tests/`（约 90 项，`python .../tests/run.py`，需完整依赖环境）+ App `tests/`（**57 项**，`tests\run_tests.bat` 或 `python -m unittest discover -s tests -v`，纯标准库无需 pytest）。**改 bridge/ 后跑后者**，它覆盖：工具契约（21 个 × schema 形状/required）、权限闸门 5 档、批准记忆范围、路径安全、上下文白名单、manifest 校验、sidecar 就绪、quiet/审计工具本身。
+- 测试自身把 settings/approvals/rules/chat 落到 `tempfile`（`_IsolatedDataMixin`），**不污染仓库 `data/`**；新增测试请沿用该 mixin。`tests` 的 `sys.path` 需含**引擎目录**（`bridge/*` 会 import 引擎的 `quiet` 等）。
+- **静默异常治理（进行中，用户要求「全量分层改造」）**：
+  - 工具链：`libs/qq_bot_runtime/quiet.py`（`degrade()` 默认静默只计数、`attention()` 始终告警、`snapshot()` 供诊断）+ `tests/audit_silent_except.py`（AST 扫描 → 分桶 A/B/C → 生成 `DEGRADE_AUDIT.md` 清单 + `--convert <前缀> --buckets A [--write]` 批量改写）。
+  - **分桶**：A 探测/默认值回落、B 静默失败风险（写/发/删，按**最外层调用**判定，链式 `open().write()` 归 B）、C 需人工。
+  - **进度**：254 → **213** 剩余（App 层 89→47；A 桶 112→63、B 71、C 79）。已完成第 1 轮 = App 层 A 桶 43 处（app_window 1 / appearance_api 3 / builder_api 21 / memory_api 16 / plugins_api 2），均带 `文件:行 函数` + `降级：<首句>` 说明。
+  - **改写的硬约束**（`convert_file` 已实现，勿退化）：保留原缩进（丢缩进会把 `try` 结构写坏）、保留 CRLF 行尾与末尾换行（否则整文件 diff + 行尾混用）、落盘前 `ast.parse` 自检、B 桶不自动改。
+  - 后续轮次：优先 B 桶（71，静默失败风险）逐个人工判定 degrade/attention/抛错，再处理 C 桶与引擎层。
+- **代码体检数据（2026-09-18）**：真正裸 `except:` = **0**；`except Exception:` = **692**（bridge 159 / engine 500）。
+- **体积真相**：工作副本 ~30GB（`dist/` 16.5GB + `libs/` 13.8GB，其中 `libs/qq_bot_runtime` 8.2GB），但 **git 只跟踪约 1520 文件 / 60MB**；重的是工作副本与分发产物，`dist/` 已 gitignore。捆绑 Python 是 standalone 的**设计选择**，不要"优化"掉。
+- **LICENSE = MIT**（提交 98def16，用户拍板）：`LICENSE` 文件 + README「许可证」节（含第三方组件提示）。
 - **上下文文件白名单的两个坑**（提交 ab383da 修复）：① `CONTEXT_SKIP_DIRS` 必须排除 `hf_cache`/`models`/`site-packages`，否则成千缓存 JSON 挤占 `MAX_CONTEXT_FILES` 名额把真源码挤出去；② 单文件上限 `MAX_CONTEXT_FILE_BYTES` 要 ≥ 最大的源码文件（现 160KB，覆盖 126KB 的 `builder_api.py`），否则会被**静默排除**（曾导致"构建助手读不到自己"）。
 - 文档里的安全边界：README「安全边界与合规」节（HTTP 仅 127.0.0.1 单实例 / 密钥与数据仅本机 / 高权限能力说明 / 第三方平台 ToS 与风控提示 / 无担保）。
