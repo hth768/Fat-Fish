@@ -112,8 +112,18 @@
   3. `agent-browser connect 9222` → `agent-browser open http://127.0.0.1:8900`
   4. `agent-browser screenshot <path>` 后用读图工具自查；`click/fill/press/is visible/is checked` 做交互断言。
   5. 收尾：杀掉带 `edge-cdp-profile` 的 msedge 进程 + `Remove-Item -LiteralPath 'E:\edge-cdp-profile' -Recurse -Force`（批量删除可能被 Safe-delete 守卫拦，单独命令重试即可）。
-- **坑：CLI 传中文参数会被 GBK 破坏**（`find text "构建助手"` → `鏋勫缓鍔╂墜`）。**一律用 CSS 选择器**：`a[data-page="builder"]`（进构建页）、`#bcSideHide`/`#bcSideShow`（侧栏）、`.bc-think > summary`（展开思考链）、`#bcStream`；填输入框用英文提示词，避免中文。
+- **⚠️ 最关键的调用坑（曾导致整轮验证无效）**：**不要**用 PowerShell「函数 + 数组 splat」（`function AB($a){ & agent-browser @a }`）去包 agent-browser —— 实测命令会变成非法参数、**只打印 help 文本**，于是 `is visible` 之类断言拿到空串，看起来像「命令不存在」。**正确姿势**：一行一个命令直接调（`agent-browser click '#sel'`），并且**优先用 `agent-browser eval "<js>"` 做精确断言**（读元素 value / class / textContent 最可靠，本次验证目录选择器全靠它）。
+- 确认存在的子命令：`get <text|html|value|count|box|styles|title|url>`、`is <visible|enabled|checked>`、`find`、`eval`、`screenshot`、`snapshot`（元素 ref 形如 `@e1`）、`wait`、`select`、`check`。
+- **坑：CLI 传中文参数会被 GBK 破坏**（`find text "构建助手"` → `鏋勫缓鍔╂墜`）。**一律用 CSS 选择器**：`a[data-page="builder"]`（进构建页）、`#bcSideHide`/`#bcSideShow`（侧栏）、`.bc-think > summary`（展开思考链）、`#bcStream`、`#bcWsBrowse`/`#pickModal`；填输入框用英文提示词，避免中文。
+- **坑：`cmd /c "powershell -Command ""…""` 嵌套引号必坏**（报 `'Out-Null' is not recognized`）→ 一律**写 `.ps1`/`.py` 脚本再执行**，输出 `>> 日志文件` 后用 grep 读关键行（agent-browser 的 click 输出含整页快照，日志会暴涨到几千行，别整读）。
 - 已由截图确认的既有行为（勿重复怀疑）：侧栏收回后输入框仍贴底；流式时工具卡片在轮次中就渲染；思考链结束自动折叠、点 summary 展开；`bc_stream` / `bc_side_collapsed` 刷新后保持。
+
+## 工作区目录选择（提交 00ab936）
+- 后端：`GET /api/fs/dirs?path=` → `builder_api.list_disk_dirs(path)`：空 path 返回**盘符**（Windows 扫 `A:`–`Z:` 存在者）+ **常用位置**（`_QUICK_DIRS`：用户目录/桌面/文档/下载 + App 目录）+ `current_workspace`；否则返回该目录子目录（`os.scandir`，带 `parent`）。**只列目录名，不返回文件/不读内容/不写**，权限受限与不存在路径给人话错误。
+- 窗口层：`bridge/app_window.py` 的 js_api 新增 **`pick_folder(initial)`** → pywebview `FOLDER_DIALOG` 系统对话框；返回 `{supported, path}`：`supported=False` = 该模式无原生能力（Edge/浏览器模式，前端回退内置选择器）、`path=None` = 用户取消（前端不要再弹）。
+  - **修掉长期潜伏 bug**：`import webview` 在 `try_app_window()` 内是**函数局部名**，js_api 引用它会 `NameError` 被 except 静默吞掉 → **`set_title` 改标题栏其实一直是失效的**（此前记忆里"实时改标题栏"的说法不准确）。现用模块级 **`_webview`**（导入成功时赋值），`set_title` 与 `pick_folder` 都正常。
+- 前端：工作区旁「📁 浏览…」`#bcWsBrowse` → 先试 `window.pywebview.api.pick_folder()`，否则开内置选择器 `#pickModal`（`#pickUp` 上一级 / `#pickPath` 回车跳转 / `#pickQuick` 常用位置 / `#pickList` 目录行含当前工作区 ✓ / `#pickChoose`）；`_bcApplyWorkspace(path)` 统一「写 `#bcWs` → POST settings/save → 重载设置 → 文件树回根 → toast」。
+- **改工作区后文件树必须回根**（旧相对路径在新工作区可能不存在）：`_bcSaveSettings` 在 `changed` 含 `workspace` 时回根。
 
 ## 构建助手权限模型（WorkBuddy 式，提交 e4cca55 + 0815762）——改构建助手必读
 - 设置文件 `data/builder_settings.json`（`load_settings`/`set_settings`/`get_settings`），字段：`workspace`、`permission_mode`、`confirm_overwrite`、`confirm_sensitive`、`confirm_install`、`auto_backup`、`remember_approvals`、`max_steps`、`deny_extra`。
