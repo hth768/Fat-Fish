@@ -144,3 +144,24 @@
 - 若需修正已乱码提交：`git -c i18n.commitEncoding=gbk commit --amend -F <file>`（让 git 把 GBK 字节正确解码为 UTF-8）。注意 `-m "..."` 中文若含括号等会触发 PowerShell 字符串解析错误，故一律用 `-F` 文件法。
 - 验证：`chcp 65001 > $null; git --no-pager log -1 --format=%B` 应正常显示中文。
 - 推送历史：曾遇 GitHub 443 超时，重试可成功。
+
+## 插件协议与加固（提交 84527b3）——写插件 / 改 pkg_manager 必读
+- **官方 UI 事件通道 `core.app_bridge`**：`bridge/core_bridge.py` 的 `build_engine()` 在 core 构建后立刻 `core.app_bridge = self`（try/except）。插件推事件：
+  ```python
+  bridge = getattr(self.core, "app_bridge", None)   # 纯引擎运行时为 None，静默跳过
+  if bridge:
+      bridge.push(session, {"type": "message", "role": "assistant", "text": "..."})
+  ```
+  - `session=None` = 全局广播（所有订阅者）；`push` 线程安全（锁 + queue），可在任意线程/协程调用。
+  - 事件 type：`message` / `image` / `audio` / `tts` / `status` / `error`；自动带 `id`（自增，前端去重）与 `ts`。
+  - **禁止** `from feiyu_app.bridge.ref import get_bridge` 这类 sys.modules hack（旧 greeting_demo 就是这么写的，永远拿不到桥）。
+- **manifest 字段（`MANIFEST_SCHEMA_VERSION = 2`）**：必填 `name`(必须等于目录名) / `title` / `version` / `kind`；`kind ∈ VALID_KINDS = platform/feature/brain/sidecar/local`；可选 `schema_version` / `description` / `switch` / `requires`(引擎内建能力) / `pkg_requires`(其它插件包) / `plugin`(注册键) / `group` / `entry` / `sidecar` / `optional_requires`(软依赖，缺失仅告警) / `builtin` / `default_on` / `config_schema`。
+- **装载前静态校验**（不执行插件代码）：`pkg_manager.validate_manifest(meta, pkg_dir) -> (errors, warns)`；`load_manifest(pkg_dir) -> (meta, errors, warns)` 读+校验（配错 JSON 也给人话原因）。errors 阻止装载，warns 放行。校验不通过的包以 `kind="invalid"` + `manifest_errors` 出现在列表（**不再静默消失**）。
+  - **坑**：`scan_packages()` **跳过 `_` 开头的目录** → 测试插件包名别用 `_` 前缀（用 `zt_*` 之类）。
+  - **坑**：问题包（缺 name / name 与目录不符）的 `name` 键必须用**目录名**，否则 KeyError。
+- **模块残留清理**：`purge_wrapper_modules(name)` 在 `_load_wrapper`（重装/热重载前）、`unload` 成功、装载失败三条路径调用，清 `sys.modules['feiyu_pkg_<name>']` 及子模块；否则同名重装会沿用旧模块对象（改了 plugin.py 行为不变）。
+- **sidecar 可排障**：stdout/stderr 落盘 `<qq_bot>/logs/sidecar_<name>.log`（不再 DEVNULL）；`wait_ready(timeout=15)` 轮询探测 `host:port`（`port=0` 视为无需探测，进程中途退出记 `returncode`）；`status()` 含 `log`/`exit_code`；`tail_log(n)`；`stop()` 关日志句柄。
+- **构建助手可读协议文档**：`builder_api.py` 的 `CONTEXT_ALLOW_FILES`（README / OVERVIEW / PLUGINS / PLUGIN_PROTOCOL / requirements）与 `CONTEXT_ALLOW_DIRS` 并列。
+  - **坑**：`os.path.normcase` 在 Windows 会**小写化**路径 → 文件名比对必须用 `.lower()` 集合（`_CONTEXT_ALLOW_FILES_LC`），否则 `plugins.md` 匹配不到 `PLUGINS.md`。
+- 示例包 `plugins/greeting_demo/`（`manifest.json` + `plugin.py`）：自包含不 import qq_bot、走官方通道、带 `config_schema` + `on_config` 热生效，作为插件范本。`plugins/` 在 .gitignore 里按子目录忽略、该目录已 `!` 放行 → **进版本控制**（主体插件包仍只在部署版）。
+- 文档同步点：`PLUGINS.md` 的 4.5 节（官方通道）、manifest 字段表与校验语义、sidecar 日志与就绪。
