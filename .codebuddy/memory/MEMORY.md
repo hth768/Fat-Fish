@@ -96,9 +96,10 @@
 - **静默异常治理（进行中，用户要求「全量分层改造」）**：
   - 工具链：`libs/qq_bot_runtime/quiet.py`（`degrade()` 默认静默只计数、`attention()` 始终告警、`snapshot()` 供诊断）+ `tests/audit_silent_except.py`（AST 扫描 → 分桶 A/B/C → 生成 `DEGRADE_AUDIT.md` 清单 + `--convert <前缀> --buckets A [--write]` 批量改写）。
   - **分桶**：A 探测/默认值回落、B 静默失败风险（写/发/删，按**最外层调用**判定，链式 `open().write()` 归 B）、C 需人工。
-  - **进度**：254 → **213** 剩余（App 层 89→47；A 桶 112→63、B 71、C 79）。已完成第 1 轮 = App 层 A 桶 43 处（app_window 1 / appearance_api 3 / builder_api 21 / memory_api 16 / plugins_api 2），均带 `文件:行 函数` + `降级：<首句>` 说明。
+  - **进度**：254 → **186** 剩余（App 层 89→21；A 63 / B 46 / C 77）。已完成：第 1 轮 App 层 A 桶 43 处；第 2 轮 App 层 B 桶 25 处（判定原则：刻意降级/非关键→degrade；用户可感知失败→attention。attention 用于写盘失败、进程终止失败、诊断日志写盘；degrade 用于客户端断开、回退默认、关闭清理）。
   - **改写的硬约束**（`convert_file` 已实现，勿退化）：保留原缩进（丢缩进会把 `try` 结构写坏）、保留 CRLF 行尾与末尾换行（否则整文件 diff + 行尾混用）、落盘前 `ast.parse` 自检、B 桶不自动改。
-  - 后续轮次：优先 B 桶（71，静默失败风险）逐个人工判定 degrade/attention/抛错，再处理 C 桶与引擎层。
+  - **坑：`app.py` 不能模块级 `import quiet`** —— qq_bot 运行时路径要等 `bootstrap()` 才加入 `sys.path`，顶部 import 会 ModuleNotFoundError（部署实例启动即崩，部署冒烟当场抓到）。引擎模块一律在 `bootstrap()` 之后再 import。bridge/* 没这问题（它们是在 bootstrap 后才被 import 的）。
+  - 后续轮次：引擎层 B 桶 44 处（`realtime_voice` 9 / `plugins_api` 5 / `napcat_*` 6 / `mc_*` 等）→ C 桶 77 → 引擎 A 桶。复跑：`python tests/audit_silent_except.py --md DEGRADE_AUDIT.md --json data/degrade_inventory.json`。
 - **代码体检数据（2026-09-18）**：真正裸 `except:` = **0**；`except Exception:` = **692**（bridge 159 / engine 500）。
 - **体积真相**：工作副本 ~30GB（`dist/` 16.5GB + `libs/` 13.8GB，其中 `libs/qq_bot_runtime` 8.2GB），但 **git 只跟踪约 1520 文件 / 60MB**；重的是工作副本与分发产物，`dist/` 已 gitignore。捆绑 Python 是 standalone 的**设计选择**，不要"优化"掉。
 - **LICENSE = MIT**（提交 98def16，用户拍板）：`LICENSE` 文件 + README「许可证」节（含第三方组件提示）。
