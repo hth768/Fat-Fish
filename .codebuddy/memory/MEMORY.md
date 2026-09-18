@@ -39,6 +39,23 @@
 - **静态资源缓存坑（重要）**：`server.py._serve_static` 服务 `index.html/app.js/styles.css` 时**必须带 `Cache-Control: no-store`**。WebView2 会缓存旧的 CSS/JS，导致「代码已上线但用户看不到改动」（曾发生：加了侧边栏切换按钮，用户反馈看不到——根因就是缺 no-store，WebView2 用了旧缓存）。每次改 `webui/` 后，除同步 `E:/feiyu_app`，务必**重启实例让窗口重开**以重新加载最新资源。
 - 侧边栏折叠：`index.html` 有常驻浮动按钮 `#sidebarToggle`；`app.js` 切换 `body.sidebar-collapsed`，CSS 用 `.sidebar{margin-left:-216px}` 平滑移出、状态存 `localStorage`。
 
+## 安卓版（feiyu-android）分发约定【用户明确要求】
+- **安卓版不进仓库，只发 GitHub Release**（2026-09-18 用户确认）。
+  - `feiyu-android/` 已被 `.gitignore` 整目录忽略，**不要 git add 它**
+  - 源码在本地独立维护；仓库 `hth768/Fat-Fish` 里没有任何安卓源码
+  - 唯一分发渠道 = Release（tag 形如 `android-v1.0.x`，附件 `feiyu-android-v1.0.x.apk`）
+- 工作流：改代码 → 双击 `feiyu-android/build-apk.bat` 出包 → 发 Release
+- 已发布版本：v1.0 / v1.0.1 / v1.0.2 / v1.0.3 / **v1.0.4（最新，含语音播报）**
+- 构建环境（**全在 E 盘，因 D 盘/SDK 目录写权限异常**）：
+  - JDK17 `E:\jdk17\jdk-17.0.20.1+1`、Gradle 8.9 `E:\gradle-dist\gradle-8.9`、
+    `GRADLE_USER_HOME=E:\gradle-home`、SDK `E:\AndroidSDK`
+  - Android Studio 实际装在 `D:\Android`（自带 JBR 是 Java 25，Gradle 8.9 不兼容，必须用 JDK17 驱动）
+  - 构建加 `--max-workers=2 -Xmx1024m`，否则 15GB 内存易 OOM
+- Release 发布流程：`git credential fill`（**文件喂 stdin，管道会被吞**）取 token →
+  `POST api.github.com/.../releases`（body 用 JSON 文件 `--data-binary @file`，
+  否则 cmd 会吃掉 `>` `>=` 等符号）→ `POST uploads.github.com/.../assets`
+- **`git revert` 一个"新增文件"的提交会真删工作区文件**，恢复用 `git checkout <hash> -- <目录>`
+
 ## git 提交规范（PowerShell 中文坑）
 - 环境：Windows + PowerShell 5.1，git 默认 `i18n.commitEncoding=utf-8`。PowerShell 以 **GBK** 代码页传中文参数给 git → 中文 commit message 会**乱码存储**（chcp 65001 后仍乱码即说明已存乱码）。
 - 正确方法：用工具（非命令行中文）写 UTF-8 的 message 文件，再 `git commit -F <file>`；amend 同样 `git commit --amend -F <file>`。

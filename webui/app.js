@@ -1056,6 +1056,12 @@ async function previewTheme(name) {
   } catch (e) { }
 }
 
+// 选主题即时持久化：进/出外观页会触发 loadAppearance 重新 GET 后端并覆盖样式，
+// 若不即时保存，未点「保存外观」就切走再回来会跳回旧主题。
+async function saveTheme(name) {
+  try { await POST("/api/appearance", { theme: name }); } catch (e) { }
+}
+
 function renderThemeGrid() {
   const grid = $("#themeGrid");
   if (!grid) return;
@@ -1070,6 +1076,7 @@ function renderThemeGrid() {
     appearance.theme = el.dataset.theme;
     $$("#themeGrid .theme-swatch").forEach(x => x.classList.toggle("selected", x === el));
     previewTheme(el.dataset.theme).catch(() => { });
+    saveTheme(el.dataset.theme);
   }));
 }
 
