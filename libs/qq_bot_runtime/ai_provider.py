@@ -266,7 +266,8 @@ class UnifiedLLM:
     async def _call_once(self, name, prov, messages, capability, model,
                          think, tools, images, timeout,
                          role: Optional[str] = None,
-                         keep_reasoning: bool = False) -> object:
+                         keep_reasoning: bool = False,
+                         stream: bool = False, on_delta=None) -> object:
         # api_style: "openai"（默认，/chat/completions）或 "anthropic"（/v1/messages）
         api_style = (prov.get("api_style") or "openai").lower()
         if images:
@@ -275,9 +276,17 @@ class UnifiedLLM:
             else:
                 messages = self._inject_images(messages, images)
         if api_style == "anthropic":
+            # Anthropic 走流式要解析 Messages SSE 事件（复杂度高、风险大），此处不做，
+            # 退化为一次性返回；构建助手会在界面上提示"该供应商不支持流式"。
             return await self._call_anthropic(name, prov, messages, capability,
                                               model, think, tools, timeout, role,
                                               keep_reasoning=keep_reasoning)
+
+        if stream and on_delta is not None:
+            return await self._call_openai_stream(name, prov, messages, capability, model,
+                                                  think, tools, timeout, role,
+                                                  keep_reasoning=keep_reasoning,
+                                                  on_delta=on_delta)
 
         payload = self._build_payload(prov, messages, capability, model,
                                       think, tools, role)
@@ -324,6 +333,111 @@ class UnifiedLLM:
                 msg["_reasoning"] = rc
             return msg
         return msg["content"]
+
+    # ---- OpenAI 兼容路径的流式调用（SSE）----
+    async def _call_openai_stream(self, name, prov, messages, capability, model,
+                                  think, tools, timeout, role, keep_reasoning,
+                                  on_delta) -> object:
+        """流式调用 /chat/completions，逐块回调 on_delta(kind, text)。
+
+        kind: "think"（思维链）| "content"（正文）
+        返回与 _call_once 非流式路径完全一致的消息结构（含 tool_calls / _reasoning）。
+        """
+        payload = self._build_payload(prov, messages, capability, model, think, tools, role)
+        payload["stream"] = True
+        headers = {
+            "Authorization": f"Bearer {prov['api_key']}",
+            "Content-Type": "application/json",
+        }
+        parts_text = []
+        parts_reason = []
+        slots = {}          # index -> {"id","name","args"}
+        usage = {}
+        t0 = time.perf_counter()
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            async with client.stream("POST",
+                                     prov["base_url"].rstrip("/") + "/chat/completions",
+                                     json=payload, headers=headers) as resp:
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    raise ProviderError("%s %s: %s" % (name, resp.status_code,
+                                                       body[:400].decode("utf-8", "replace")))
+                async for raw in resp.aiter_lines():
+                    line = (raw or "").strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    chunk = line[5:].strip()
+                    if chunk == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(chunk)
+                    except Exception:
+                        continue
+                    if obj.get("usage"):
+                        usage = obj["usage"]
+                    choices = obj.get("choices") or []
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta") or {}
+                    # 思维链增量（DeepSeek: reasoning_content；部分网关: reasoning）
+                    rc = delta.get("reasoning_content") or delta.get("reasoning")
+                    if rc:
+                        parts_reason.append(rc)
+                        try:
+                            on_delta("think", rc)
+                        except Exception:
+                            pass
+                    c = delta.get("content")
+                    if c:
+                        parts_text.append(c)
+                        try:
+                            on_delta("content", c)
+                        except Exception:
+                            pass
+                    for tc in (delta.get("tool_calls") or []):
+                        idx = tc.get("index")
+                        if idx is None:
+                            idx = len(slots) - 1 if slots else 0
+                        slot = slots.setdefault(idx, {"id": "", "name": "", "args": ""})
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            slot["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            slot["args"] += fn["arguments"]
+        dt_ms = (time.perf_counter() - t0) * 1000
+        st = self.stats.get(name)
+        tp = int(usage.get("prompt_tokens") or 0)
+        tcn = int(usage.get("completion_tokens") or 0)
+        if st is not None:
+            st["ok"] += 1
+            st["latency_ms"] += dt_ms
+            st["tokens_prompt"] += tp
+            st["tokens_completion"] += tcn
+        telemetry.record_ok("providers", name, dt_ms, tp, tcn)
+
+        text = "".join(parts_text)
+        reason = "".join(parts_reason)
+        if tools:
+            tool_calls = []
+            for idx in sorted(slots):
+                s = slots[idx]
+                if not s.get("name"):
+                    continue
+                tool_calls.append({
+                    "id": s.get("id") or ("call_%d" % idx),
+                    "type": "function",
+                    "function": {"name": s["name"], "arguments": s.get("args") or "{}"},
+                })
+            out = {"role": "assistant", "content": text or "",
+                   "tool_calls": tool_calls}
+            if not tool_calls:
+                out.pop("tool_calls", None)
+            if keep_reasoning and reason:
+                out["_reasoning"] = reason
+            return out
+        return text
 
     # ---- Anthropic 兼容路径（Messages API）----
     @staticmethod
@@ -446,7 +560,8 @@ class UnifiedLLM:
                    tools: Optional[list] = None, images: Optional[List[bytes]] = None,
                    timeout: int = 300, role: Optional[str] = None,
                    provider: Optional[str] = None,
-                   keep_reasoning: bool = False) -> object:
+                   keep_reasoning: bool = False,
+                   stream: bool = False, on_delta=None) -> object:
         # 角色路由（对齐 N.E.K.O 的模型粒度配置：摘要/情感/记忆/判断各用不同模型）。
         # role 在 capability 之上再细化：可覆盖 capability 与 model，缺省则回退到参数。
         cap, mdl = capability, model
@@ -484,6 +599,7 @@ class UnifiedLLM:
                     name, self.providers[name], messages, cap,
                     mdl, think, tools, images, timeout, role,
                     keep_reasoning=keep_reasoning,
+                    stream=stream, on_delta=on_delta,
                 )
             except Exception as e:
                 if st is not None:

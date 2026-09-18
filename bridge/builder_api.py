@@ -2416,31 +2416,40 @@ def _strip_meta(messages: list) -> list:
 
 
 async def _chat_with_tools(llm, convo: list, model=None, think=False, provider=None,
-                           keep_reasoning: bool = True) -> dict:
+                           keep_reasoning: bool = True, stream: bool = False,
+                           on_delta=None) -> dict:
     """带工具调用的对话。
 
     多数部署只配了 chat / reasoning / vision 能力路由（没有单独的 tools 路由），
     而工具调用本身仍是该供应商的 chat 接口能力，故 tools 路由不可用时回退到 chat。
     keep_reasoning=True 时把模型返回的思维链内容带回（存于 _reasoning，回传前需剔除）。
+    stream=True 且给了 on_delta 时走 SSE 增量输出（引擎不支持时会自动降级为非流式）。
     """
     clean = _strip_meta(convo)
+    kw = dict(model=model, think=think, provider=provider, timeout=300,
+              keep_reasoning=keep_reasoning, stream=stream, on_delta=on_delta)
     try:
-        return await llm.chat(clean, capability="tools", tools=builder_tools(),
-                              model=model, think=think, provider=provider, timeout=300,
-                              keep_reasoning=keep_reasoning)
+        return await llm.chat(clean, capability="tools", tools=builder_tools(), **kw)
     except Exception as e:
         msg = str(e)
         if "tools" in msg or "无可用供应商" in msg or "不支持能力" in msg:
-            return await llm.chat(clean, capability="chat", tools=builder_tools(),
-                                  model=model, think=think, provider=provider, timeout=300,
-                                  keep_reasoning=keep_reasoning)
+            return await llm.chat(clean, capability="chat", tools=builder_tools(), **kw)
         raise
 
 
 async def run_chat(bridge, session_id: str = "", message: str = "", model: str = None,
                    think: bool = False, provider: str = None, context_paths: list = None,
-                   use_history: bool = False, max_steps: int = None) -> dict:
-    """跑一轮对话：模型自己决定调用哪些构建工具，最多 max_steps 步。"""
+                   use_history: bool = False, max_steps: int = None,
+                   stream: bool = False, emit=None) -> dict:
+    """跑一轮对话：模型自己决定调用哪些构建工具，最多 max_steps 步。
+
+    stream=True 且给了 emit 回调时，边跑边推送事件（供 SSE 端点转发给界面）：
+      {"type":"delta","kind":"think"|"content","round":n,"text":片段}
+      {"type":"think_end","round":n,"text":完整思维链}
+      {"type":"tool_start","round":n,"tool":名,"args":{...}}
+      {"type":"tool_end","round":n,"step":{...}}
+      {"type":"done","payload":<与非流式接口一致的返回体>}
+    """
     message = (message or "").strip()
     if not message:
         return {"ok": False, "error": "消息为空"}
@@ -2506,8 +2515,19 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
         from ai_provider import get_llm
         llm = get_llm()
         steps_limit = int(max_steps or s.get("max_steps") or CHAT_MAX_STEPS)
+        can_stream = bool(stream and emit)
         for i in range(max(1, steps_limit)):
-            assistant = await _chat_with_tools(llm, convo, model=model, think=think, provider=provider)
+            rnd = i + 1
+            on_delta = None
+            if can_stream:
+                def on_delta(kind, text, _r=rnd):
+                    try:
+                        emit({"type": "delta", "kind": kind, "round": _r, "text": text})
+                    except Exception:
+                        pass
+            assistant = await _chat_with_tools(llm, convo, model=model, think=think,
+                                               provider=provider, stream=can_stream,
+                                               on_delta=on_delta)
             if isinstance(assistant, str):
                 assistant = {"role": "assistant", "content": assistant}
             if assistant.get("content"):
@@ -2521,6 +2541,8 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
                 reasonings[pos] = rc
                 thinkings.append({"round": i + 1, "text": rc})
                 blocks.append({"type": "think", "round": i + 1, "text": rc})
+                if emit:
+                    emit({"type": "think_end", "round": i + 1, "text": rc})
             tcs = assistant.get("tool_calls") or []
             if not tcs:
                 break
@@ -2531,6 +2553,8 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
                     targs = json.loads(fn.get("arguments") or "{}")
                 except Exception:
                     targs = {}
+                if emit:
+                    emit({"type": "tool_start", "round": i + 1, "tool": tname, "args": targs})
                 state.pop("_auto_rule", None)
                 try:
                     res = await _exec_tool(bridge, tname, targs, state)
@@ -2543,13 +2567,15 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
                         "result": _trim_tool_result(res), "round": i + 1}
                 steps.append(step)
                 blocks.append(dict(step, type="tool"))
+                if emit:
+                    emit({"type": "tool_end", "round": i + 1, "step": step})
                 convo.append({"role": "tool", "tool_call_id": tc.get("id") or tname,
                               "content": json.dumps(res, ensure_ascii=False)[:CHAT_TOOL_RESULT_MAX]})
                 if not reply and isinstance(res, dict) and res.get("error"):
                     reply = "执行 %s 时出错：%s" % (tname, res.get("error"))
     except Exception as e:
         return {"ok": False, "error": "对话失败: %r" % e, "session": sid, "steps": steps,
-                "blocks": blocks, "drafts": state.get("drafts") or {}}
+                "blocks": blocks, "thinkings": thinkings, "drafts": state.get("drafts") or {}}
 
     # 只把「原始用户消息 + 助手/工具消息」写入历史（不落上下文文件正文，避免会话文件膨胀）
     turn = convo[base_idx:]
@@ -2564,11 +2590,15 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
     save_chat_session(state)
     _record_history("chat", "chat", message[:200], bool(reply), None,
                     rounds=len(steps) or 1, model=model, provider=provider, key=sid)
-    return {"ok": True, "session": sid, "reply": reply or "（完成）",
-            "steps": steps, "blocks": blocks, "thinkings": thinkings,
-            "has_reasoning": bool(thinkings), "think": think,
-            "drafts": state.get("drafts") or {},
-            "messages": history, "title": state.get("title", "")}
+    out = {"ok": True, "session": sid, "reply": reply or "（完成）",
+           "steps": steps, "blocks": blocks, "thinkings": thinkings,
+           "has_reasoning": bool(thinkings), "think": think,
+           "streamed": bool(stream and emit),
+           "drafts": state.get("drafts") or {},
+           "messages": history, "title": state.get("title", "")}
+    if emit:
+        emit({"type": "done", "payload": out})
+    return out
 
 
 def _trim_tool_result(res: dict) -> dict:
@@ -2589,16 +2619,19 @@ def _trim_tool_result(res: dict) -> dict:
     return out
 
 
-def run_chat_sync(bridge, body: dict) -> dict:
+def run_chat_sync(bridge, body: dict, emit=None) -> dict:
+    """跑一轮对话。emit 不为空则开启流式（边跑边回调事件，供 SSE 端点转发）。"""
     body = body or {}
     ms = body.get("max_steps")
+    stream = bool(body.get("stream")) and emit is not None
     return bridge.lt.run_coro(
         run_chat(bridge, body.get("session", "") or "", body.get("message", "") or "",
                  model=body.get("model") or None, think=body.get("think") or "low",
                  provider=body.get("provider") or None,
                  context_paths=body.get("context_paths") or None,
                  use_history=bool(body.get("use_history", True)),
-                 max_steps=int(ms) if ms else None),
+                 max_steps=int(ms) if ms else None,
+                 stream=stream, emit=emit),
         timeout=900,
     )
 

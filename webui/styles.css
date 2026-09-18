@@ -129,13 +129,30 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 #page-builder { display: flex; flex-direction: column; height: calc(100vh - 72px); min-height: 420px; }
 .bc-layout { flex: 1; min-height: 0; display: flex; gap: 12px; }
 
-/* 左栏：工作区 / 历史 */
+/* 左栏：工作区 / 历史 / 高级（可收回） */
+.bc-layout { position: relative; }
 .bc-side {
   width: 268px; flex-shrink: 0; display: flex; flex-direction: column;
   background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--radius); overflow: hidden;
 }
-.bc-tabs { display: flex; border-bottom: 1px solid var(--line); }
+/* 收回后：左栏隐藏，中栏（含底端输入区）自动占满 */
+#page-builder.bc-side-collapsed .bc-side { display: none; }
+.bc-side-show { display: none; }
+#page-builder.bc-side-collapsed .bc-side-show {
+  display: inline-block; position: absolute; top: 8px; left: 8px; z-index: 6;
+  height: 26px; padding: 0 10px; border-radius: 8px; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+  font-size: 12px; line-height: 24px; white-space: nowrap;
+}
+#page-builder.bc-side-collapsed .bc-side-show:hover { color: var(--accent2); border-color: var(--accent); }
+#page-builder.bc-side-collapsed .bc-chat { padding-left: 96px; }
+.bc-tabs { display: flex; border-bottom: 1px solid var(--line); align-items: center; }
+.bc-side-hide {
+  background: transparent; border: 0; color: var(--muted); cursor: pointer;
+  padding: 8px 10px; font-size: 13px; line-height: 1;
+}
+.bc-side-hide:hover { color: var(--accent2); }
 .bc-tab {
   flex: 1; background: transparent; border: 0; color: var(--muted);
   padding: 9px 0; cursor: pointer; font-size: 13px;

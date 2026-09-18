@@ -1489,6 +1489,12 @@ function _bcThinkCard(text, opts) {
   const api = {
     el: card,
     setLive(t) { label.textContent = "💭 思考中…"; meta.textContent = t || ""; },
+    append(t) {                          // 流式增量：边想边显示
+      if (!t) return;
+      body.textContent += t;
+      meta.textContent = body.textContent.length + " 字（流式）";
+      if (card.open) body.scrollTop = body.scrollHeight;
+    },
     setText(t) {
       body.textContent = t || "";
       const n = (t || "").length;
@@ -1589,6 +1595,70 @@ function _bcBrief(obj) {
   } catch (e) { return String(obj); }
 }
 
+// ---- 流式对话：读 SSE（chunked），实时渲染思维链与正文 ----
+async function _bcChatStream(payload, think) {
+  const resp = await fetch("/api/builder/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(Object.assign({}, payload, { stream: true })),
+  });
+  if (!resp.ok || !resp.body) {
+    throw new Error("流式接口不可用（HTTP " + resp.status + "）");
+  }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  let done = null;
+  let renderedTools = 0;
+  let replyEl = null;
+  let replyText = "";
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    buf += dec.decode(chunk.value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n\n")) >= 0) {
+      const frame = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 2);
+      if (!frame.startsWith("data:")) continue;
+      let ev;
+      try { ev = JSON.parse(frame.slice(5).trim()); } catch (e) { continue; }
+      if (ev.type === "delta") {
+        if (ev.kind === "think") think.append(ev.text);
+        else if (ev.kind === "content") {
+          if (!replyEl) replyEl = _bcMsgEl("assistant", "");
+          replyText += ev.text;
+          const body = replyEl.querySelector(".bc-msg-text");
+          if (body) body.textContent = replyText;
+          _bcScroll();
+        }
+      } else if (ev.type === "think_end") {
+        think.setText(ev.text || "");
+      } else if (ev.type === "tool_start") {
+        think.setLive("正在调用 " + (ev.tool || "工具") + "…");
+      } else if (ev.type === "tool_end") {
+        _bcToolCard(ev.step || {});
+        renderedTools++;
+      } else if (ev.type === "notice") {
+        toast(ev.text || "提示", true);
+      } else if (ev.type === "done") {
+        done = ev.payload || {};
+      } else if (ev.type === "error") {
+        throw new Error(ev.error || "流式对话失败");
+      }
+    }
+  }
+  if (!done) {
+    const err = new Error("流式响应中断（未收到完成事件）");
+    // 已经渲染过增量内容时不做非流式降级，避免界面出现重复内容
+    err.__partial = (renderedTools > 0 || !!replyEl || (think.el.querySelector(".bc-think-body") || {}).textContent);
+    throw err;
+  }
+  done.__renderedTools = renderedTools;
+  done.__replyEl = replyEl;
+  return done;
+}
+
 // ---- 发送 ----
 async function _bcSend() {
   if (bchat.sending) return;
@@ -1613,38 +1683,70 @@ async function _bcSend() {
     $("#bcStatus").textContent = "进行中 " + s + "s …";
     think.setLive(s + "s（" + (msel.think === "low" ? "快速" : msel.think === "high" ? "深度" : "标准") + "）");
   }, 1000);
+  const useStream = $("#bcStream").checked;
   try {
-    const r = await POST("/api/builder/chat", {
+    const payload = {
       session: bchat.session, message: msg,
       model: msel.model, think: msel.think, provider: msel.provider,
       context_paths: bchat.ctx, use_history: $("#bcUseHistory").checked,
-    });
+    };
+    let r, streamed = false;
+    if (useStream) {
+      try {
+        r = await _bcChatStream(payload, think);
+        streamed = true;
+      } catch (se) {
+        if (se.__partial) throw se;          // 已渲染部分增量：直接报错，不重复渲染
+        // 流式端点完全没产出内容时退化为普通请求，保证对话可用
+        toast("流式失败，已降级为普通请求：" + se.message, true);
+        r = await POST("/api/builder/chat", payload);
+      }
+    } else {
+      r = await POST("/api/builder/chat", payload);
+    }
     // 用真实内容替换占位：有思维链就展示（折叠），没有则给出提示
     const thinks = (r.thinkings || []).filter(t => t && t.text);
     if (thinks.length) {
-      think.setText(thinks.map(t => t.text).join("\n\n———\n\n"));
+      if (!streamed) think.setText(thinks.map(t => t.text).join("\n\n———\n\n"));
       think.finish(thinks.length);
     } else {
       think.el.remove();
       const tip = document.createElement("div");
       tip.className = "hint wrap bc-think-tip";
-      tip.textContent = "本轮未返回思考内容：当前模型/供应商未开启思维链。"
-        + "可在下方把「思考」切到标准或深度，或改用支持推理的模型（如 deepseek-reasoner）后重试。";
+      tip.textContent = streamed
+        ? "本轮未返回思考内容：该模型未输出思维链（流式仅在有思考时显示）。"
+        : "本轮未返回思考内容：当前模型/供应商未开启思维链。可在下方把「思考」切到标准或深度，"
+          + "或改用支持推理的模型（如 deepseek-reasoner）后重试。";
       $("#bcChat").appendChild(tip);
     }
-    // 按顺序渲染本轮块：思维链（已渲染）→ 工具卡片
-    (r.blocks && r.blocks.length ? r.blocks : (r.steps || [])).forEach(b => {
-      if (b && b.type === "think") return;      // 思维链已合并渲染
-      _bcToolCard(b);
-    });
-    if (r.reply) _bcMsgEl("assistant", r.reply);
+    if (streamed) {
+      // 工具卡片与正文已在流中实时渲染，只补上没收到的部分
+      const all = (r.blocks || []).filter(b => b && b.type !== "think");
+      all.slice(r.__renderedTools || 0).forEach(_bcToolCard);
+      if (r.__replyEl) {
+        // 已有流式正文气泡：用最终文本校正一次
+        const body = r.__replyEl.querySelector(".bc-msg-text");
+        if (body && r.reply && body.textContent !== r.reply) body.textContent = r.reply;
+        if (!r.reply) r.__replyEl.remove();
+      } else if (r.reply) {
+        _bcMsgEl("assistant", r.reply);
+      }
+    } else {
+      // 按顺序渲染本轮块：思维链（已渲染）→ 工具卡片
+      (r.blocks && r.blocks.length ? r.blocks : (r.steps || [])).forEach(b => {
+        if (b && b.type === "think") return;      // 思维链已合并渲染
+        _bcToolCard(b);
+      });
+      if (r.reply) _bcMsgEl("assistant", r.reply);
+    }
     if (!r.ok) throw new Error(r.error || "对话失败");
     bchat.session = r.session || bchat.session;
     bchat.drafts = r.drafts || bchat.drafts;
     Object.values(bchat.drafts).forEach(d => d && _bcRenderDraft(d));
     $("#bcStatus").textContent = "完成（" + Math.round((Date.now() - t0) / 1000) + "s，"
       + (r.steps || []).length + " 个工具调用"
-      + (thinks.length ? "，思考 " + thinks.length + " 段" : "") + "）";
+      + (thinks.length ? "，思考 " + thinks.length + " 段" : "")
+      + (streamed ? "，流式" : "") + "）";
     _bcLoadSessions();
     _bcRefreshHistory();
     _bcRefreshApprovals();
@@ -1994,6 +2096,15 @@ function initBuilderUI() {
   $("#bcFileSave").addEventListener("click", _bcSaveFile);
   $("#bcEditorClose").addEventListener("click", _bcCloseEditor);
   $("#bcFileCtx").addEventListener("click", () => _bcAddCtx($("#bcFile").value.trim()));
+  // 侧边栏收回 / 拉出（状态存 localStorage；收回后输入框仍贴在底端）
+  $("#bcSideHide").addEventListener("click", () => _bcSide(true));
+  $("#bcSideShow").addEventListener("click", () => _bcSide(false));
+  _bcSide(localStorage.getItem("bc_side_collapsed") === "1");
+  $("#bcStream").checked = localStorage.getItem("bc_stream") !== "0";
+  $("#bcStream").addEventListener("change", () => {
+    localStorage.setItem("bc_stream", $("#bcStream").checked ? "1" : "0");
+    toast($("#bcStream").checked ? "已开启流式输出" : "已关闭流式输出（等整轮返回后一次性显示）");
+  });
   $("#bcInput").addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); _bcSend(); }
   });
@@ -2001,6 +2112,14 @@ function initBuilderUI() {
     const a = e.target.closest ? e.target.closest("a") : null;
     if (a) e.preventDefault();
   });
+}
+
+// 侧边栏收起：只隐藏左栏，中栏（对话 + 底端输入区）自动占满，输入框仍在底端
+function _bcSide(collapsed) {
+  const page = $("#page-builder");
+  if (!page) return;
+  page.classList.toggle("bc-side-collapsed", !!collapsed);
+  localStorage.setItem("bc_side_collapsed", collapsed ? "1" : "0");
 }
 
 function _fmtTime(ts) {

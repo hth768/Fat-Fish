@@ -341,11 +341,13 @@
       </header>
 
       <div class="bc-layout">
+        <button class="bc-side-show" id="bcSideShow" title="拉出侧边栏">☰ 拉出</button>
         <aside class="bc-side">
           <div class="bc-tabs">
             <button class="bc-tab active" data-tab="files">工作区</button>
             <button class="bc-tab" data-tab="history">历史</button>
             <button class="bc-tab" data-tab="settings">高级</button>
+            <button class="bc-side-hide" id="bcSideHide" title="收回侧边栏">«</button>
           </div>
           <div id="bcPaneFiles" class="bc-pane">
             <div class="bc-bar">
@@ -409,6 +411,10 @@
               <button class="btn primary" id="bcSend">发送</button>
               <button class="btn ghost" id="bcStop" style="display:none">停止</button>
               <label class="cfg-field" style="display:inline-flex;flex-direction:row;align-items:center;gap:6px;margin-left:6px">
+                <input type="checkbox" id="bcStream" checked>
+                <span class="cfg-label">流式输出</span>
+              </label>
+              <label class="cfg-field" style="display:inline-flex;flex-direction:row;align-items:center;gap:6px">
                 <input type="checkbox" id="bcUseHistory" checked>
                 <span class="cfg-label">参考历史成功案例</span>
               </label>

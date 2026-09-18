@@ -153,6 +153,54 @@ def make_handler(bridge):
             except Exception:
                 pass
 
+        # ---------------- 构建助手：流式对话（POST 上行的 SSE） ----------------
+        def _builder_chat_stream(self, body):
+            """POST 请求体上行，响应按 SSE 分块下发（Transfer-Encoding: chunked）。
+
+            前端用 fetch + ReadableStream 逐帧解析，实现思维链 / 正文的实时增量显示。
+            """
+            closed = {"v": False}
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+
+            def _chunk(payload: bytes):
+                self.wfile.write(b"%x\r\n" % len(payload) + payload + b"\r\n")
+                self.wfile.flush()
+
+            def emit(ev):
+                if closed["v"]:
+                    return
+                try:
+                    _chunk(b"data: " + json.dumps(ev, ensure_ascii=False).encode("utf-8")
+                           + b"\n\n")
+                except Exception:
+                    closed["v"] = True      # 客户端断开：静默停写，等本轮结束
+
+            try:
+                _chunk(b": open\n\n")
+            except Exception:
+                closed["v"] = True
+            try:
+                body = dict(body or {})
+                body["stream"] = True
+                res = builder_api.run_chat_sync(bridge, body, emit=emit)
+                if isinstance(res, dict) and not res.get("streamed"):
+                    # 供应商不支持流式（如 Anthropic 路径）→ 明确告知界面降级
+                    emit({"type": "notice",
+                          "text": "当前供应商不支持流式输出，已按非流式返回。"})
+                    emit({"type": "done", "payload": res})
+            except Exception as e:
+                emit({"type": "error", "error": "%r" % e})
+            try:
+                self.wfile.write(b"0\r\n\r\n")      # chunked 结束帧
+                self.wfile.flush()
+            except Exception:
+                pass
+
         # ---------------- GET 路由 ----------------
         def do_GET(self):
             parsed = urlparse(self.path)
@@ -331,6 +379,8 @@ def make_handler(bridge):
                 # ----- 构建助手：对话式 Agent（工具循环）与会话管理 -----
                 if path == "/api/builder/chat":
                     return self._json(builder_api.run_chat_sync(bridge, body))
+                if path == "/api/builder/chat/stream":
+                    return self._builder_chat_stream(body)
                 if path == "/api/builder/session/new":
                     return self._json(builder_api.new_chat_session(body.get("title", "") or ""))
                 if path == "/api/builder/session/delete":
