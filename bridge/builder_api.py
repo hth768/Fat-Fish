@@ -1198,14 +1198,17 @@ CHAT_SEARCH_MAX = 40                 # search_code 最多返回条数
 #      由用户在界面上点「批准」后才执行（批准结果会写回会话，模型下一轮可见）
 SETTINGS_PATH = os.path.join(DATA_DIR, "builder_settings.json")
 APPROVALS_PATH = os.path.join(DATA_DIR, "builder_approvals.json")
+RULES_PATH = os.path.join(DATA_DIR, "builder_rules.json")     # 已记住的批准（减少重复询问）
 
-PERM_MODES = ("plan", "default", "acceptEdits", "bypassPermissions")
+PERM_MODES = ("plan", "default", "acceptEdits", "full", "bypassPermissions")
 
 _MODE_DESC = {
     "plan": "只读规划：可读文件与检索，任何写入都被拒绝（只给方案，不动代码）",
     "default": "默认：所有写入 / 落盘都进「待确认」，你批准后才执行",
     "acceptEdits": "自动应用：新建 / 改普通文件自动写入（自动备份）；覆盖已有文件、改核心代码仍需确认",
-    "bypassPermissions": "完全放行：全部自动执行（建议只在临时工作区使用）",
+    "full": "完全访问：普通文件读写（含覆盖改写）全部自动执行，只有改核心代码与智能体/插件落盘会问；"
+            "批准后可记住，同类操作不再重复询问",
+    "bypassPermissions": "完全放行：不询问、全部自动执行（连核心代码与落盘也不问，建议只在临时工作区使用）",
 }
 
 DEFAULT_SETTINGS = {
@@ -1215,6 +1218,7 @@ DEFAULT_SETTINGS = {
     "confirm_sensitive": True,          # 修改核心代码（bridge/ libs/ webui/ 顶层脚本）需确认
     "confirm_install": True,            # 智能体 / 插件落盘需确认
     "auto_backup": True,                # 写入前自动备份
+    "remember_approvals": True,         # 批准后记住同类操作，减少重复询问
     "max_steps": CHAT_MAX_STEPS,        # 单轮最多工具步数
     "deny_extra": [],                   # 额外禁写路径片段（黑名单追加）
 }
@@ -1290,6 +1294,7 @@ def get_settings() -> dict:
             "app_dir": os.path.abspath(APP_DIR), "is_custom": is_custom_workspace(),
             "modes": [{"id": k, "desc": _MODE_DESC[k]} for k in PERM_MODES],
             "deny": list(_WORKSPACE_DENY),
+            "rules": _load_rules(), "rule_count": len(_load_rules()),
             "pending": len(_load_approvals())}
 
 
@@ -1314,7 +1319,8 @@ def set_settings(patch: dict) -> dict:
             return {"ok": False, "error": "未知权限模式: %s" % pm}
         s["permission_mode"] = pm
         changed.append("permission_mode")
-    for k in ("confirm_overwrite", "confirm_sensitive", "confirm_install", "auto_backup"):
+    for k in ("confirm_overwrite", "confirm_sensitive", "confirm_install",
+              "auto_backup", "remember_approvals"):
         if k in patch:
             s[k] = bool(patch[k])
             changed.append(k)
@@ -1334,6 +1340,131 @@ def set_settings(patch: dict) -> dict:
     out = get_settings()
     out["changed"] = changed
     return out
+
+
+# ---------------- 已记住的批准（减少重复询问） ----------------
+# scope: once(不记) / file(该文件或该插件) / dir(该目录下所有文件) / all(所有同类操作)
+RULE_SCOPES = ("file", "dir", "all")
+
+_RULE_SCOPE_DESC = {
+    "file": "该目标（文件 / 插件）",
+    "dir": "该目录下所有文件",
+    "all": "所有同类操作",
+}
+
+
+def _load_rules() -> list:
+    try:
+        if os.path.isfile(RULES_PATH):
+            with open(RULES_PATH, "r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, list):
+                return [x for x in d if isinstance(x, dict)]
+    except Exception:
+        pass
+    return []
+
+
+def _save_rules(items: list) -> None:
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = RULES_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(items[-200:], f, ensure_ascii=False, indent=2)
+        os.replace(tmp, RULES_PATH)
+    except Exception:
+        pass
+
+
+def list_rules() -> dict:
+    rs = _load_rules()
+    rs.sort(key=lambda x: x.get("created", 0), reverse=True)
+    return {"ok": True, "rules": rs, "count": len(rs)}
+
+
+def delete_rule(rid: str) -> dict:
+    rs = _load_rules()
+    keep = [x for x in rs if x.get("id") != rid]
+    _save_rules(keep)
+    return {"ok": True, "count": len(keep)}
+
+
+def clear_rules() -> dict:
+    _save_rules([])
+    return {"ok": True, "count": 0}
+
+
+def _norm_rel(p) -> str:
+    return os.path.normpath((p or "").replace("\\", "/").lstrip("/")).replace("\\", "/")
+
+
+def _rule_target(tool: str, args: dict, scope: str) -> dict:
+    """把一次批准转成可复用的规则；scope=once 或无法归纳时返回 {}。"""
+    if scope not in RULE_SCOPES:
+        return {}
+    a = args if isinstance(args, dict) else {}
+    if tool == "write_file":
+        rel = _norm_rel(a.get("path"))
+        if not rel:
+            return {}
+        if scope == "all":
+            return {"value": "*", "desc": "所有文件写入"}
+        if scope == "dir":
+            d = os.path.dirname(rel).replace("\\", "/")
+            if not d:
+                return {"value": rel, "scope": "file", "desc": "写入 %s" % rel}
+            return {"value": d + "/", "desc": "写入 %s/ 下的文件" % d}
+        return {"value": rel, "desc": "写入 %s" % rel}
+    if tool in ("save_plugin", "save_agent"):
+        label = "插件落盘" if tool == "save_plugin" else "智能体落盘"
+        name = (a.get("name") or "").strip()
+        if tool == "save_agent":
+            name = ((a.get("data") or {}).get("name") or "").strip()
+        if scope == "all" or not name:
+            return {"value": "*", "desc": "所有%s操作" % label}
+        return {"value": name, "desc": "%s：%s" % (label, name)}
+    return {}
+
+
+def _add_rule(tool: str, args: dict, scope: str) -> dict:
+    t = _rule_target(tool, args, scope)
+    if not t:
+        return {}
+    rs = _load_rules()
+    rs.append({"id": "ru_" + time.strftime("%Y%m%d_%H%M%S") + "_" + str(len(rs) + 1),
+               "tool": tool, "scope": t.get("scope") or scope,
+               "value": t.get("value", "*"), "desc": t.get("desc", tool),
+               "created": time.time()})
+    _save_rules(rs)
+    rs.sort(key=lambda x: x.get("created", 0), reverse=True)
+    return rs[0]
+
+
+def _match_rule(tool: str, args: dict) -> dict:
+    """命中已记住的批准则返回该规则（调用方据此跳过询问）。"""
+    a = args if isinstance(args, dict) else {}
+    for r in _load_rules():
+        if r.get("tool") != tool:
+            continue
+        v = r.get("value") or "*"
+        if v == "*":
+            return r
+        if tool == "write_file":
+            rel = _norm_rel(a.get("path"))
+            if not rel:
+                continue
+            if r.get("scope") == "dir":
+                if rel.startswith(v):
+                    return r
+            elif rel == v:
+                return r
+        else:
+            name = (a.get("name") or "").strip()
+            if tool == "save_agent":
+                name = ((a.get("data") or {}).get("name") or "").strip()
+            if name and name == v:
+                return r
+    return None
 
 
 # ---------------- 高危操作确认队列 ----------------
@@ -1361,43 +1492,72 @@ def _save_approvals(items: list) -> None:
 
 
 def classify_operation(tool: str, args: dict, settings: dict = None) -> dict:
-    """给一次写操作定风险级别：low（普通改动）/ high（覆盖、核心代码、落盘）。"""
+    """给一次写操作定级。
+
+    level: low（普通改动）/ high（覆盖、核心代码、落盘）
+    kind : create（新建）/ overwrite（覆盖普通文件）/ sensitive（核心代码）/ install（落盘）
+            ——「完全访问」档位只对 sensitive / install 询问。
+    """
     s = settings or load_settings()
     a = args if isinstance(args, dict) else {}
-    rel = (a.get("path") or "").replace("\\", "/").lstrip("/")
+    rel = _norm_rel(a.get("path"))
     if tool == "write_file":
         try:
             exists = os.path.isfile(_resolve_rooted(rel))
         except Exception:
             exists = False
+        sensitive = _sensitive_path(rel) and s.get("confirm_sensitive", True)
+        if sensitive:
+            return {"level": "high", "kind": "sensitive", "reason": "修改核心代码 %s" % rel}
         if exists and s.get("confirm_overwrite", True):
-            return {"level": "high", "reason": "覆盖已有文件 %s" % rel}
-        if _sensitive_path(rel) and s.get("confirm_sensitive", True):
-            return {"level": "high", "reason": "修改核心代码 %s" % rel}
-        return {"level": "low", "reason": ("新建文件 %s" % rel) if not exists else ("改写 %s" % rel)}
+            return {"level": "high", "kind": "overwrite", "reason": "覆盖已有文件 %s" % rel}
+        return {"level": "low", "kind": "overwrite" if exists else "create",
+                "reason": ("改写 %s" % rel) if exists else ("新建文件 %s" % rel)}
     if tool == "save_agent":
         return {"level": "high" if s.get("confirm_install", True) else "low",
+                "kind": "install" if s.get("confirm_install", True) else "create",
                 "reason": "把智能体落盘注册到 agents/"}
     if tool == "save_plugin":
         return {"level": "high" if s.get("confirm_install", True) else "low",
+                "kind": "install" if s.get("confirm_install", True) else "create",
                 "reason": "把插件包落盘到 plugins/"}
-    return {"level": "low", "reason": tool}
+    return {"level": "low", "kind": "create", "reason": tool}
 
 
 def _gate_operation(tool: str, args: dict, state: dict) -> dict | None:
-    """权限闸门：返回 None 表示放行；否则返回给模型的「被拦下 / 待确认」结果。"""
+    """权限闸门：返回 None 表示放行；否则返回给模型的「被拦下 / 待确认」结果。
+
+    顺序：只读模式直接拒绝 → 命中「已记住的批准」直接放行 → 完全放行 → 按模式定是否询问。
+    各模式询问策略：
+      default           → 所有写操作都问
+      acceptEdits       → 高危（覆盖 / 核心代码 / 落盘）都问
+      full（完全访问）  → 只问核心代码与落盘（普通覆盖不问，询问频率最低的非全放行档）
+      bypassPermissions → 不问
+    """
     if tool not in WRITE_TOOLS:
         return None
     s = load_settings()
     mode = s["permission_mode"]
-    if mode == "bypassPermissions":
-        return None
     if mode == "plan":
         return {"ok": False, "blocked": True, "error":
                 "当前是「只读规划」权限模式，禁止任何写入。请只输出方案与改动建议，"
                 "并提示用户到左栏「设置」里切换权限模式后再让我动手。"}
+    if s.get("remember_approvals", True):
+        rule = _match_rule(tool, args)
+        if rule:
+            state["_auto_rule"] = rule.get("desc") or "已记住的批准"
+            return None
+    if mode == "bypassPermissions":
+        return None
     risk = classify_operation(tool, args, s)
-    need = (mode == "default") or (risk["level"] == "high")
+    if mode == "default":
+        need = True
+    elif mode == "acceptEdits":
+        need = risk["level"] == "high"
+    elif mode == "full":
+        need = risk.get("kind") in ("sensitive", "install")
+    else:
+        need = risk["level"] == "high"
     if not need:
         return None
     return _queue_approval(tool, args, risk, state)
@@ -1407,14 +1567,16 @@ def _queue_approval(tool: str, args: dict, risk: dict, state: dict) -> dict:
     items = _load_approvals()
     aid = "ap_" + time.strftime("%Y%m%d_%H%M%S") + "_" + str(len(items) + 1)
     item = {"id": aid, "tool": tool, "args": args, "level": risk.get("level", "high"),
-            "reason": risk.get("reason", tool), "session": state.get("id") or "",
+            "kind": risk.get("kind", ""), "reason": risk.get("reason", tool),
+            "session": state.get("id") or "",
             "created": time.time(), "status": "pending"}
     items.append(item)
     _save_approvals(items)
     return {"ok": False, "pending": True, "approval_id": aid, "risk": item["level"],
             "reason": item["reason"],
             "message": ("已提交待确认：%s（%s）。请提示用户到「构建助手 → 待确认操作」点「批准」，"
-                        "执行结果我会拿到；在此之前不要重复提交同一操作。" % (tool, item["reason"]))}
+                        "用户可勾选「记住」以免同类操作反复询问；在批准前不要重复提交同一操作。"
+                        % (tool, item["reason"]))}
 
 
 def list_approvals() -> dict:
@@ -1461,7 +1623,8 @@ def _note_session(session: str, text: str) -> None:
     save_chat_session(st)
 
 
-def approve_approval_sync(bridge, aid: str) -> dict:
+def approve_approval_sync(bridge, aid: str, remember: bool = False, scope: str = "once") -> dict:
+    """批准并执行一个待确认操作；remember=True 时把本次批准记为规则，减少后续询问。"""
     items = _load_approvals()
     item = next((x for x in items if x.get("id") == aid and x.get("status") == "pending"), None)
     if not item:
@@ -1470,14 +1633,31 @@ def approve_approval_sync(bridge, aid: str) -> dict:
     item["status"] = "approved" if r.get("ok") else "failed"
     item["result"] = str(r.get("error") or "")[:300] if not r.get("ok") else ""
     _save_approvals(items)
+    rule = {}
+    if remember and r.get("ok"):
+        rule = _add_rule(item.get("tool", ""), item.get("args") or {}, scope)
+        item["remembered"] = rule.get("desc") or ""
     note = ("你申请的操作已获用户批准并执行：%s → %s"
             % (item.get("reason") or item.get("tool"),
                ("成功" + ("（已保存 %s）" % r.get("path") if r.get("path") else "")) if r.get("ok")
                else ("失败：" + str(r.get("error")))))
+    if rule:
+        note += ("；用户同时记住了「%s」，同类操作后续会直接执行、不再询问。"
+                 % rule.get("desc"))
     _note_session(item.get("session") or "", note)
     _record_history("approve", "chat", item.get("reason") or item.get("tool"),
                     bool(r.get("ok")), None, rounds=1, key=item.get("session"))
-    return {"ok": bool(r.get("ok")), "result": r, "item": item, "note": note}
+    return {"ok": bool(r.get("ok")), "result": r, "item": item, "note": note, "rule": rule}
+
+
+def approve_all_sync(bridge, remember: bool = False, scope: str = "once") -> dict:
+    """一键批准当前所有待确认操作（减少逐个点击）。"""
+    pend = list_approvals()["pending"]
+    out = []
+    for p in pend:
+        out.append(approve_approval_sync(bridge, p["id"], remember=remember, scope=scope))
+    ok = sum(1 for x in out if x.get("ok"))
+    return {"ok": True, "approved": ok, "total": len(out), "results": out}
 
 
 def reject_approval(aid: str) -> dict:
@@ -1522,11 +1702,14 @@ CHAT_SYSTEM = """你是「构建助手」——肥鱼娘桌面 App 内置的代�
   · `plan`（只读规划）→ 任何写入都会被拒绝，你只能给方案，并提示用户去左栏「设置」改权限；
   · `default`（默认）→ 所有写入进「待确认」，等用户在界面点「批准」后才真正执行；
   · `acceptEdits`（自动应用）→ 普通文件改动自动生效，覆盖已有文件与核心代码仍要确认；
-  · `bypassPermissions` → 全部直接执行。
+  · `full`（完全访问）→ 普通文件读写（含覆盖改写）自动生效，只有改核心代码与落盘才需要确认；
+  · `bypassPermissions`（完全放行）→ 全部直接执行。
 - 被拦下时工具会返回 `pending: true` + `approval_id`：**不要重复提交同一操作**，
   用一句话告诉用户「已提交待确认，请在「待确认操作」里批准」，然后结束本轮。
 - 覆盖已有文件、修改核心代码（bridge/ libs/ webui/ 顶层脚本）、智能体与插件落盘属于高危操作，
-  说明理由后再提交，不要为了绕过确认而改写成别的方式（例如换个路径重写同一个文件）。"""
+  说明理由后再提交，不要为了绕过确认而改写成别的方式（例如换个路径重写同一个文件）。
+- 用户批准过的操作可能已被「记住」（工具结果里会出现 `auto_approved` 字段），这属于正常情况，
+  不必再解释权限；若结果里带 `pending` 才表示在等待确认。"""
 
 
 def _tool(name: str, desc: str, props: dict, required: list) -> dict:
@@ -1709,6 +1892,8 @@ async def _exec_tool(bridge, name: str, args: dict, state: dict) -> dict:
                 "confirm_sensitive": g["settings"]["confirm_sensitive"],
                 "confirm_install": g["settings"]["confirm_install"],
                 "auto_backup": g["settings"]["auto_backup"],
+                "remember_approvals": g["settings"]["remember_approvals"],
+                "remembered_rules": [r.get("desc") for r in (g.get("rules") or [])][:20],
                 "pending": g["pending"]}
     if name == "write_file":
         path, content = a.get("path", ""), a.get("content", "") or ""
@@ -1891,6 +2076,10 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
     if pending.get("count"):
         env_block += ("- 当前有 %d 个待用户确认的操作（等用户点批准，不要重复提交）\n"
                       % pending["count"])
+    rules = _load_rules() if s.get("remember_approvals", True) else []
+    if rules:
+        env_block += ("- 用户已记住 %d 条批准（%s）：命中这些的操作会自动执行，不再询问\n"
+                      % (len(rules), "、".join((r.get("desc") or "") for r in rules[:6])))
 
     sys_parts = [CHAT_SYSTEM, env_block]
     if state["ctx"]:
@@ -1929,10 +2118,14 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
                     targs = json.loads(fn.get("arguments") or "{}")
                 except Exception:
                     targs = {}
+                state.pop("_auto_rule", None)
                 try:
                     res = await _exec_tool(bridge, tname, targs, state)
                 except Exception as e:
                     res = {"ok": False, "error": "工具执行异常: %r" % e}
+                note = state.pop("_auto_rule", None)
+                if note and isinstance(res, dict) and res.get("ok"):
+                    res["auto_approved"] = note      # 命中「已记住的批准」自动执行
                 steps.append({"tool": tname, "args": targs, "ok": bool(res.get("ok")),
                               "result": _trim_tool_result(res)})
                 convo.append({"role": "tool", "tool_call_id": tc.get("id") or tname,
@@ -2002,8 +2195,12 @@ def list_approvals_sync() -> dict:
     return list_approvals()
 
 
-def approve_approval_http_sync(bridge, aid: str) -> dict:
-    return approve_approval_sync(bridge, aid)
+def approve_approval_http_sync(bridge, aid: str, remember: bool = False, scope: str = "once") -> dict:
+    return approve_approval_sync(bridge, aid, remember=remember, scope=scope)
+
+
+def approve_all_http_sync(bridge, remember: bool = False, scope: str = "once") -> dict:
+    return approve_all_sync(bridge, remember=remember, scope=scope)
 
 
 def reject_approval_sync(aid: str) -> dict:
@@ -2012,3 +2209,15 @@ def reject_approval_sync(aid: str) -> dict:
 
 def clear_approvals_sync() -> dict:
     return clear_approvals()
+
+
+def list_rules_sync() -> dict:
+    return list_rules()
+
+
+def delete_rule_sync(rid: str) -> dict:
+    return delete_rule(rid)
+
+
+def clear_rules_sync() -> dict:
+    return clear_rules()

@@ -1167,10 +1167,42 @@ async function _bcLoadSettings() {
     $("#bcConfirmSensitive").checked = s.confirm_sensitive !== false;
     $("#bcConfirmInstall").checked = s.confirm_install !== false;
     $("#bcAutoBackup").checked = s.auto_backup !== false;
+    $("#bcRemember").checked = s.remember_approvals !== false;
     $("#bcMaxSteps").value = s.max_steps || 14;
     $("#bcSettingsMsg").textContent = "";
+    bchat.mode = s.permission_mode || "default";
+    _bcRenderRules(d.rules || []);
   } catch (e) { $("#bcWsHint").textContent = "读取设置失败: " + e.message; }
   _bcRefreshApprovals();
+}
+
+// ---- 已记住的批准（减少重复询问） ----
+function _bcRenderRules(rules) {
+  const box = $("#bcRules");
+  box.innerHTML = "";
+  if (!rules.length) {
+    box.innerHTML = '<div class="hint wrap">暂无。批准待确认操作时可选择「记住」，之后同类操作不再询问。</div>';
+    return;
+  }
+  rules.forEach(r => {
+    const row = document.createElement("div");
+    row.className = "bc-rule";
+    const txt = document.createElement("span");
+    txt.className = "bc-rule-desc";
+    txt.textContent = r.desc || r.tool;
+    row.appendChild(txt);
+    const del = document.createElement("b");
+    del.textContent = "✕";
+    del.title = "删除这条记忆";
+    del.addEventListener("click", async () => {
+      try {
+        await POST("/api/builder/rules/delete", { id: r.id });
+        _bcLoadSettings();
+      } catch (e) { toast(e.message, true); }
+    });
+    row.appendChild(del);
+    box.appendChild(row);
+  });
 }
 
 function _bcPermHint() {
@@ -1206,7 +1238,17 @@ function _bcRenderApprovals(list) {
   box.classList.remove("hidden");
   const head = document.createElement("div");
   head.className = "bc-ap-head";
-  head.textContent = "待确认操作 " + list.length + " 项 —— 批准后才会执行";
+  const headTxt = document.createElement("span");
+  headTxt.textContent = "待确认操作 " + list.length + " 项 —— 批准后才会执行";
+  head.appendChild(headTxt);
+  if (list.length > 1) {
+    const all = document.createElement("button");
+    all.className = "btn ghost sm";
+    all.textContent = "全部批准";
+    all.style.marginLeft = "8px";
+    all.addEventListener("click", () => _bcApproveAll(all));
+    head.appendChild(all);
+  }
   box.appendChild(head);
   list.forEach(it => {
     const card = document.createElement("div");
@@ -1237,39 +1279,72 @@ function _bcRenderApprovals(list) {
     }
     const acts = document.createElement("div");
     acts.className = "row-actions";
+    const scope = document.createElement("select");
+    scope.className = "select";
+    scope.style.maxWidth = "190px";
+    const isWrite = it.tool === "write_file";
+    const dir = isWrite ? (it.args.path || "").replace(/\/[^/]*$/, "") : "";
+    const opts = [["once", "仅本次"], ["file", isWrite ? "记住此文件" : "记住这个"]];
+    if (isWrite && dir) opts.push(["dir", "记住此目录"]);
+    opts.push(["all", "记住全部同类"]);
+    opts.forEach(o => {
+      const el = document.createElement("option");
+      el.value = o[0]; el.textContent = o[1];
+      scope.appendChild(el);
+    });
+    // 完全访问档位默认「记住此文件」，以减少重复询问
+    scope.value = (bchat.mode === "full" && opts.length > 1) ? "file" : "once";
     const ok = document.createElement("button");
     ok.className = "btn primary sm"; ok.textContent = "批准执行";
     const no = document.createElement("button");
     no.className = "btn ghost sm"; no.textContent = "拒绝";
     const st = document.createElement("span");
     st.className = "hint";
-    ok.addEventListener("click", () => _bcDecide(it.id, true, st, ok, no));
-    no.addEventListener("click", () => _bcDecide(it.id, false, st, ok, no));
-    acts.append(ok, no, st);
+    ok.addEventListener("click", () => _bcDecide(it.id, true, st, ok, no, scope.value));
+    no.addEventListener("click", () => _bcDecide(it.id, false, st, ok, no, "once"));
+    acts.append(scope, ok, no, st);
     card.appendChild(acts);
     box.appendChild(card);
   });
 }
 
-async function _bcDecide(id, approve, st, btnA, btnB) {
+async function _bcDecide(id, approve, st, btnA, btnB, scope) {
   btnA.disabled = true; btnB.disabled = true;
   st.textContent = approve ? "执行中…" : "处理中…";
   try {
-    const r = await POST(approve ? "/api/builder/approval/approve" : "/api/builder/approval/reject", { id });
+    const body = approve
+      ? { id, remember: !!(scope && scope !== "once"), scope: scope || "once" }
+      : { id };
+    const r = await POST(approve ? "/api/builder/approval/approve" : "/api/builder/approval/reject", body);
     if (!r.ok) throw new Error(r.error || "处理失败");
-    st.textContent = approve ? "已执行" : "已拒绝";
-    toast(approve ? "已批准并执行" : "已拒绝该操作");
+    st.textContent = r.rule && r.rule.desc ? ("已执行，并记住：" + r.rule.desc) : (approve ? "已执行" : "已拒绝");
+    toast(r.rule && r.rule.desc ? ("已批准执行，后续同类操作不再询问") : (approve ? "已批准并执行" : "已拒绝该操作"));
     if (approve && r.result && r.result.path) {
       _bcLoadDir(bchat.dir);
       _bcOpenFile(r.result.path);
     }
     _bcRefreshApprovals();
     _bcRefreshHistory();
+    if (r.rule) _bcLoadSettings();
   } catch (e) {
     st.textContent = e.message;
     toast(e.message, true);
     btnA.disabled = false; btnB.disabled = false;
   }
+}
+
+async function _bcApproveAll(btn) {
+  btn.disabled = true;
+  const prev = btn.textContent;
+  btn.textContent = "执行中…";
+  try {
+    const r = await POST("/api/builder/approval/approve_all", {});
+    toast("已批准 " + r.approved + " / " + r.total + " 项");
+    _bcRefreshApprovals();
+    _bcRefreshHistory();
+    _bcLoadDir(bchat.dir);
+  } catch (e) { toast(e.message, true); }
+  finally { btn.textContent = prev; btn.disabled = false; }
 }
 
 async function _bcFillModels() {
@@ -1418,14 +1493,16 @@ function _bcToolCard(step) {
   const chat = $("#bcChat");
   const res0 = step.result || {};
   const isPending = !!res0.pending;
+  const auto = res0.auto_approved;
   const card = document.createElement("details");
   card.className = "bc-tool" + (isPending ? " pending" : (step.ok === false ? " bad" : ""));
   const sum = document.createElement("summary");
   const icon = isPending ? "⏳" : (step.ok === false ? "✗" : (step.ok === null ? "•" : "✓"));
+  const tail = isPending
+    ? "待用户确认：" + (res0.reason || "")
+    : (auto ? "已记住的批准，自动执行：" + auto : _bcArgsBrief(step.args));
   sum.innerHTML = '<span class="bc-tool-name">' + icon + " " + (step.tool || "tool") + "</span>"
-    + '<span class="bc-tool-args">'
-    + (isPending ? "待用户确认：" + (res0.reason || "") : _bcArgsBrief(step.args))
-    + "</span>";
+    + '<span class="bc-tool-args">' + tail + "</span>";
   card.appendChild(sum);
   const box = document.createElement("div");
   box.className = "bc-tool-body";
@@ -1823,8 +1900,18 @@ function initBuilderUI() {
     confirm_sensitive: $("#bcConfirmSensitive").checked,
     confirm_install: $("#bcConfirmInstall").checked,
     auto_backup: $("#bcAutoBackup").checked,
+    remember_approvals: $("#bcRemember").checked,
     max_steps: parseInt($("#bcMaxSteps").value || "14", 10),
   }, $("#bcSettingsMsg")));
+  $("#bcRemember").addEventListener("change", () => _bcSaveSettings(
+    { remember_approvals: $("#bcRemember").checked }, $("#bcSettingsMsg")));
+  $("#bcRulesClear").addEventListener("click", async () => {
+    try {
+      await POST("/api/builder/rules/clear", {});
+      toast("已清空批准记忆");
+      _bcLoadSettings();
+    } catch (e) { toast(e.message, true); }
+  });
   $$("#page-builder .bc-tab").forEach(b => b.addEventListener("click", () => _bcTab(b.dataset.tab)));
   $("#bcFileDiff").addEventListener("click", _bcDiffFile);
   $("#bcFileSave").addEventListener("click", _bcSaveFile);

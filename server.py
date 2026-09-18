@@ -243,6 +243,8 @@ def make_handler(bridge):
                     return self._json(builder_api.get_settings_sync())
                 if path == "/api/builder/approvals":
                     return self._json(builder_api.list_approvals_sync())
+                if path == "/api/builder/rules":
+                    return self._json(builder_api.list_rules_sync())
                 if path == "/api/builder/session":
                     return self._json({"ok": True, "state": builder_api.load_chat_session(
                         (q.get("name") or [""])[0])})
@@ -338,11 +340,21 @@ def make_handler(bridge):
                     return self._json(builder_api.set_settings_sync(body))
                 if path == "/api/builder/approval/approve":
                     return self._json(builder_api.approve_approval_http_sync(
-                        bridge, body.get("id", "") or ""))
+                        bridge, body.get("id", "") or "",
+                        remember=bool(body.get("remember")),
+                        scope=body.get("scope") or "once"))
+                if path == "/api/builder/approval/approve_all":
+                    return self._json(builder_api.approve_all_http_sync(
+                        bridge, remember=bool(body.get("remember")),
+                        scope=body.get("scope") or "once"))
                 if path == "/api/builder/approval/reject":
                     return self._json(builder_api.reject_approval_sync(body.get("id", "") or ""))
                 if path == "/api/builder/approval/clear":
                     return self._json(builder_api.clear_approvals_sync())
+                if path == "/api/builder/rules/delete":
+                    return self._json(builder_api.delete_rule_sync(body.get("id", "") or ""))
+                if path == "/api/builder/rules/clear":
+                    return self._json(builder_api.clear_rules_sync())
                 # ----- 构建助手：智能体 / 插件 生成与落盘 -----
                 if path == "/api/builder/agent/generate":
                     return self._json(builder_api.generate_agent_sync(

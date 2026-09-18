@@ -262,6 +262,14 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
   font-size: 12.5px; color: var(--text); padding: 3px 0; cursor: pointer;
 }
 .bc-check input { margin-top: 3px; }
+.bc-rules {
+  border: 1px solid var(--line); border-radius: 8px; background: var(--bg2);
+  padding: 6px 8px; max-height: 150px; overflow: auto;
+}
+.bc-rule { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }
+.bc-rule-desc { flex: 1; color: var(--text); word-break: break-all; }
+.bc-rule b { cursor: pointer; color: var(--muted); font-weight: 400; }
+.bc-rule b:hover { color: var(--err); }
 
 /* 历史列表（左栏「历史」页签复用） */
 .history-list { flex: 1; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 10px; }
