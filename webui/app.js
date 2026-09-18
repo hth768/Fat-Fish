@@ -1156,8 +1156,8 @@ async function _bcLoadSettings() {
     sel.innerHTML = "";
     (d.modes || []).forEach(m => {
       const o = document.createElement("option");
-      o.value = m.id;
-      o.textContent = m.id;
+      o.value = m.id;                       // 值仍是英文 id（后端据此判定）
+      o.textContent = m.label || m.id;      // 界面显示中文名
       o.dataset.desc = m.desc || "";
       sel.appendChild(o);
     });
@@ -1883,10 +1883,17 @@ function initBuilderUI() {
   $("#bcRefreshTree").addEventListener("click", () => _bcLoadDir(bchat.dir));
   $("#bcUp").addEventListener("click", _bcUp);
   $("#bcRefreshHist").addEventListener("click", _bcRefreshHistory);
-  // 设置面板
-  $("#bcPerm").addEventListener("change", _bcPermHint);
-  $("#bcPerm").addEventListener("change", () => _bcSaveSettings(
-    { permission_mode: $("#bcPerm").value }, $("#bcSettingsMsg")));
+  // 对话框下方：访问权限（切换即保存）
+  $("#bcPerm").addEventListener("change", async () => {
+    const opt = $("#bcPerm").selectedOptions[0];
+    const label = opt ? opt.textContent : $("#bcPerm").value;
+    try {
+      const r = await POST("/api/builder/settings/save", { permission_mode: $("#bcPerm").value });
+      if (!r.ok) throw new Error(r.error || "保存失败");
+      await _bcLoadSettings();
+      toast("访问权限已切换为：" + label);
+    } catch (e) { toast(e.message, true); }
+  });
   $("#bcWsApply").addEventListener("click", () => _bcSaveSettings(
     { workspace: $("#bcWs").value.trim() }, $("#bcWsHint")));
   $("#bcWsReset").addEventListener("click", () => {

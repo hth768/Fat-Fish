@@ -208,6 +208,20 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 }
 .bc-draft-head { font-size: 12.5px; font-weight: 600; margin-bottom: 8px; color: var(--accent2); }
 
+/* 对话框下方的选项行：模型 / 思考 / 访问权限 / 工作区 */
+.bc-opts {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line);
+}
+.bc-opt { display: inline-flex; align-items: center; gap: 6px; }
+.bc-opt .bc-opt-k { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.bc-opt .select { min-width: 108px; }
+.bc-opt-custom { max-width: 170px; }
+.bc-opt-ws { flex: 1 1 320px; min-width: 260px; }
+.bc-opt-ws .input { flex: 1; min-width: 120px; font-size: 12px; }
+.bc-opt-hints { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.bc-opt-hints .hint { font-size: 11.5px; }
+
 /* 输入区 */
 .bc-composer { border-top: 1px solid var(--line); padding: 10px 12px; }
 .bc-ctx-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }

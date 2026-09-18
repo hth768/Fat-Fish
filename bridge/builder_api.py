@@ -1202,6 +1202,14 @@ RULES_PATH = os.path.join(DATA_DIR, "builder_rules.json")     # 已记住的批�
 
 PERM_MODES = ("plan", "default", "acceptEdits", "full", "bypassPermissions")
 
+_MODE_LABEL = {
+    "plan": "只读规划",
+    "default": "每次确认",
+    "acceptEdits": "自动应用",
+    "full": "完全访问",
+    "bypassPermissions": "完全放行",
+}
+
 _MODE_DESC = {
     "plan": "只读规划：可读文件与检索，任何写入都被拒绝（只给方案，不动代码）",
     "default": "默认：所有写入 / 落盘都进「待确认」，你批准后才执行",
@@ -1292,7 +1300,8 @@ def get_settings() -> dict:
     root = workspace_root()
     return {"ok": True, "settings": s, "workspace": root,
             "app_dir": os.path.abspath(APP_DIR), "is_custom": is_custom_workspace(),
-            "modes": [{"id": k, "desc": _MODE_DESC[k]} for k in PERM_MODES],
+            "modes": [{"id": k, "label": _MODE_LABEL.get(k, k), "desc": _MODE_DESC[k]}
+                      for k in PERM_MODES],
             "deny": list(_WORKSPACE_DENY),
             "rules": _load_rules(), "rule_count": len(_load_rules()),
             "pending": len(_load_approvals())}

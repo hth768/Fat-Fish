@@ -337,13 +337,6 @@
           <select id="bcSession" class="select" style="min-width:150px" title="历史会话"></select>
           <button class="btn ghost sm" id="bcNewSession">＋ 新会话</button>
           <button class="btn ghost sm" id="bcDelSession">删除会话</button>
-          <select id="bcModel" class="select" style="min-width:120px" title="模型"></select>
-          <input id="bcCustomModel" class="input hidden" placeholder="自定义模型名" style="max-width:150px">
-          <select id="bcThink" class="select" title="思考强度">
-            <option value="low">快速</option>
-            <option value="medium">标准</option>
-            <option value="high">深度</option>
-          </select>
         </div>
       </header>
 
@@ -352,7 +345,7 @@
           <div class="bc-tabs">
             <button class="bc-tab active" data-tab="files">工作区</button>
             <button class="bc-tab" data-tab="history">历史</button>
-            <button class="bc-tab" data-tab="settings">设置</button>
+            <button class="bc-tab" data-tab="settings">高级</button>
           </div>
           <div id="bcPaneFiles" class="bc-pane">
             <div class="bc-bar">
@@ -372,19 +365,7 @@
 
           <div id="bcPaneSettings" class="bc-pane hidden">
             <div class="bc-settings">
-              <div class="cfg-label">工作区位置</div>
-              <input id="bcWs" class="input" placeholder="留空 = 应用目录，例如 E:\\my_project">
-              <div class="row-actions" style="margin-top:6px">
-                <button class="btn ghost sm" id="bcWsApply">应用此目录</button>
-                <button class="btn ghost sm" id="bcWsReset">恢复应用目录</button>
-              </div>
-              <div class="hint wrap" id="bcWsHint"></div>
-
-              <div class="cfg-label" style="margin-top:12px">访问与操作权限</div>
-              <select id="bcPerm" class="select"></select>
-              <div class="hint wrap" id="bcPermHint"></div>
-
-              <div class="cfg-label" style="margin-top:12px">高危操作确认</div>
+              <div class="cfg-label">高危操作确认</div>
               <label class="bc-check"><input type="checkbox" id="bcConfirmOverwrite"><span>覆盖已有文件需确认</span></label>
               <label class="bc-check"><input type="checkbox" id="bcConfirmSensitive"><span>修改核心代码需确认（bridge/ libs/ webui/ 顶层脚本）</span></label>
               <label class="bc-check"><input type="checkbox" id="bcConfirmInstall"><span>智能体 / 插件落盘需确认</span></label>
@@ -423,6 +404,37 @@
                 <span class="cfg-label">参考历史成功案例</span>
               </label>
               <span class="hint" id="bcStatus"></span>
+            </div>
+
+            <!-- 模型 / 思考 / 访问权限 / 工作区：统一放在对话框下方 -->
+            <div class="bc-opts">
+              <label class="bc-opt">
+                <span class="bc-opt-k">模型</span>
+                <select id="bcModel" class="select"></select>
+              </label>
+              <input id="bcCustomModel" class="input hidden bc-opt-custom" placeholder="自定义模型名">
+              <label class="bc-opt">
+                <span class="bc-opt-k">思考</span>
+                <select id="bcThink" class="select">
+                  <option value="low">快速</option>
+                  <option value="medium">标准</option>
+                  <option value="high">深度</option>
+                </select>
+              </label>
+              <label class="bc-opt">
+                <span class="bc-opt-k">访问权限</span>
+                <select id="bcPerm" class="select"></select>
+              </label>
+              <div class="bc-opt bc-opt-ws">
+                <span class="bc-opt-k">工作区</span>
+                <input id="bcWs" class="input" placeholder="留空 = 应用目录，例如 E:\my_project">
+                <button class="btn ghost sm" id="bcWsApply">应用</button>
+                <button class="btn ghost sm" id="bcWsReset">恢复默认</button>
+              </div>
+            </div>
+            <div class="bc-opt-hints">
+              <span class="hint wrap" id="bcPermHint"></span>
+              <span class="hint wrap" id="bcWsHint"></span>
             </div>
           </div>
         </div>
