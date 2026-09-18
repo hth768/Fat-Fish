@@ -186,6 +186,31 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
   border-radius: 10px; padding: 8px 12px; display: inline-block; max-width: 100%;
 }
 .bc-msg.user .bc-msg-role { text-align: right; }
+.bc-think {
+  border: 1px solid var(--line); border-left: 3px solid var(--muted);
+  border-radius: 8px; background: var(--bg2); margin: 8px 0; font-size: 12.5px;
+}
+.bc-think.live { border-left-color: var(--accent); }
+.bc-think > summary {
+  cursor: pointer; padding: 6px 10px; list-style: none;
+  display: flex; align-items: center; gap: 8px;
+}
+.bc-think > summary::-webkit-details-marker { display: none; }
+.bc-think > summary::before {
+  content: "▸"; color: var(--muted); font-size: 10px; transition: transform .15s ease;
+}
+.bc-think[open] > summary::before { transform: rotate(90deg); }
+.bc-think-label { color: var(--muted); font-weight: 600; }
+.bc-think.live .bc-think-label { color: var(--accent2); }
+.bc-think-meta { color: var(--muted); font-size: 11px; opacity: .85; }
+.bc-think-body {
+  border-top: 1px dashed var(--line); margin: 0; padding: 8px 10px;
+  max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  color: var(--muted); font-size: 11.5px; line-height: 1.6;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.bc-think-tip { margin: 6px 0 2px; font-size: 11.5px; }
+
 .bc-tool {
   border: 1px solid var(--line); border-left: 3px solid var(--accent);
   border-radius: 8px; background: var(--bg2); margin: 8px 0; font-size: 12.5px;

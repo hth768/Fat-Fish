@@ -1467,6 +1467,48 @@ function _bcMsgEl(role, text) {
 
 function _bcUserMsg(text) { _bcMsgEl("user", text); }
 
+// ---- 思维链卡片：思考中展开、结束后折叠，点箭头展开 ----
+function _bcThinkCard(text, opts) {
+  const o = opts || {};
+  const chat = $("#bcChat");
+  const card = document.createElement("details");
+  card.className = "bc-think" + (o.live ? " live" : "");
+  if (o.live) card.open = true;          // 思考中：展开显示
+  const sum = document.createElement("summary");
+  const label = document.createElement("span");
+  label.className = "bc-think-label";
+  const meta = document.createElement("span");
+  meta.className = "bc-think-meta";
+  const body = document.createElement("pre");
+  body.className = "bc-think-body";
+  sum.appendChild(label);
+  sum.appendChild(meta);
+  card.appendChild(sum);
+  card.appendChild(body);
+  chat.appendChild(card);
+  const api = {
+    el: card,
+    setLive(t) { label.textContent = "💭 思考中…"; meta.textContent = t || ""; },
+    setText(t) {
+      body.textContent = t || "";
+      const n = (t || "").length;
+      card.classList.remove("live");
+      card.open = false;                 // 本轮思考结束 → 自动折叠
+      label.textContent = "💭 思考过程";
+      meta.textContent = n + " 字 · 点此展开";
+    },
+    finish(count) {
+      card.classList.remove("live");
+      card.open = false;
+      const t = body.textContent || "";
+      label.textContent = "💭 思考过程";
+      meta.textContent = (count ? count + " 轮 · " : "") + t.length + " 字 · 点此展开";
+    },
+  };
+  if (!o.live) api.setText(text);
+  return api;
+}
+
 function _bcRenderMessages(msgs) {
   const chat = $("#bcChat");
   chat.innerHTML = "";
@@ -1475,6 +1517,7 @@ function _bcRenderMessages(msgs) {
     const role = m.role;
     if (role === "user") { _bcMsgEl("user", m.content || ""); shown++; }
     else if (role === "assistant") {
+      if (m._reasoning) { _bcThinkCard(m._reasoning, {}); shown++; }
       if (m.content) { _bcMsgEl("assistant", m.content); shown++; }
       (m.tool_calls || []).forEach(tc => {
         let args = {};
@@ -1558,7 +1601,9 @@ async function _bcSend() {
 
   input.value = "";
   _bcUserMsg(msg);
-  const wait = _bcMsgEl("assistant", "思考中…");
+  // 思考中的占位（展开状态），结束时被真实思维链替换并自动折叠
+  const think = _bcThinkCard("", { live: true });
+  think.setLive("0s");
   bchat.sending = true;
   $("#bcSend").disabled = true;
   $("#bcStop").style.display = "inline-block";
@@ -1566,7 +1611,7 @@ async function _bcSend() {
   bchat.timer = setInterval(() => {
     const s = Math.round((Date.now() - t0) / 1000);
     $("#bcStatus").textContent = "进行中 " + s + "s …";
-    wait.querySelector(".bc-msg-text").textContent = "思考中…（" + s + "s）";
+    think.setLive(s + "s（" + (msel.think === "low" ? "快速" : msel.think === "high" ? "深度" : "标准") + "）");
   }, 1000);
   try {
     const r = await POST("/api/builder/chat", {
@@ -1574,20 +1619,37 @@ async function _bcSend() {
       model: msel.model, think: msel.think, provider: msel.provider,
       context_paths: bchat.ctx, use_history: $("#bcUseHistory").checked,
     });
-    wait.remove();
-    (r.steps || []).forEach(_bcToolCard);
+    // 用真实内容替换占位：有思维链就展示（折叠），没有则给出提示
+    const thinks = (r.thinkings || []).filter(t => t && t.text);
+    if (thinks.length) {
+      think.setText(thinks.map(t => t.text).join("\n\n———\n\n"));
+      think.finish(thinks.length);
+    } else {
+      think.el.remove();
+      const tip = document.createElement("div");
+      tip.className = "hint wrap bc-think-tip";
+      tip.textContent = "本轮未返回思考内容：当前模型/供应商未开启思维链。"
+        + "可在下方把「思考」切到标准或深度，或改用支持推理的模型（如 deepseek-reasoner）后重试。";
+      $("#bcChat").appendChild(tip);
+    }
+    // 按顺序渲染本轮块：思维链（已渲染）→ 工具卡片
+    (r.blocks && r.blocks.length ? r.blocks : (r.steps || [])).forEach(b => {
+      if (b && b.type === "think") return;      // 思维链已合并渲染
+      _bcToolCard(b);
+    });
     if (r.reply) _bcMsgEl("assistant", r.reply);
     if (!r.ok) throw new Error(r.error || "对话失败");
     bchat.session = r.session || bchat.session;
     bchat.drafts = r.drafts || bchat.drafts;
     Object.values(bchat.drafts).forEach(d => d && _bcRenderDraft(d));
     $("#bcStatus").textContent = "完成（" + Math.round((Date.now() - t0) / 1000) + "s，"
-      + (r.steps || []).length + " 个工具调用）";
+      + (r.steps || []).length + " 个工具调用"
+      + (thinks.length ? "，思考 " + thinks.length + " 段" : "") + "）";
     _bcLoadSessions();
     _bcRefreshHistory();
     _bcRefreshApprovals();
   } catch (e) {
-    wait.remove();
+    think.el.remove();
     _bcMsgEl("assistant", "出错了：" + e.message);
     toast(e.message, true);
     $("#bcStatus").textContent = "失败";

@@ -2401,20 +2401,39 @@ def new_chat_session(title: str = "") -> dict:
 
 
 # ---------------- 主循环 ----------------
-async def _chat_with_tools(llm, convo: list, model=None, think=False, provider=None) -> dict:
+REASONING_MAX = 12000          # 单段思维链最多保留字符（防会话文件膨胀）
+
+
+def _strip_meta(messages: list) -> list:
+    """返回去掉本地元数据（_reasoning 等下划线键）的消息副本，用于发给 API。"""
+    out = []
+    for m in messages or []:
+        if isinstance(m, dict) and any(k.startswith("_") for k in m):
+            out.append({k: v for k, v in m.items() if not k.startswith("_")})
+        else:
+            out.append(m)
+    return out
+
+
+async def _chat_with_tools(llm, convo: list, model=None, think=False, provider=None,
+                           keep_reasoning: bool = True) -> dict:
     """带工具调用的对话。
 
     多数部署只配了 chat / reasoning / vision 能力路由（没有单独的 tools 路由），
     而工具调用本身仍是该供应商的 chat 接口能力，故 tools 路由不可用时回退到 chat。
+    keep_reasoning=True 时把模型返回的思维链内容带回（存于 _reasoning，回传前需剔除）。
     """
+    clean = _strip_meta(convo)
     try:
-        return await llm.chat(convo, capability="tools", tools=builder_tools(),
-                              model=model, think=think, provider=provider, timeout=300)
+        return await llm.chat(clean, capability="tools", tools=builder_tools(),
+                              model=model, think=think, provider=provider, timeout=300,
+                              keep_reasoning=keep_reasoning)
     except Exception as e:
         msg = str(e)
         if "tools" in msg or "无可用供应商" in msg or "不支持能力" in msg:
-            return await llm.chat(convo, capability="chat", tools=builder_tools(),
-                                  model=model, think=think, provider=provider, timeout=300)
+            return await llm.chat(clean, capability="chat", tools=builder_tools(),
+                                  model=model, think=think, provider=provider, timeout=300,
+                                  keep_reasoning=keep_reasoning)
         raise
 
 
@@ -2477,8 +2496,12 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
 
     convo = [system_msg] + list(history)
     convo.append({"role": "user", "content": message})
-    steps = []
+    steps = []                 # 工具调用记录（兼容旧前端 / 计数用）
+    blocks = []                # 有序展示块：think（思维链）/ tool（工具调用）
+    reasonings = {}            # convo 下标 -> 思维链文本（结束时写回历史）
+    thinkings = []             # 本次对话收集到的思维链 [{round, text}]
     reply = ""
+    base_idx = len(convo) - 1      # convo 里本轮「用户消息」所在下标（append 后 len 指向下一条）
     try:
         from ai_provider import get_llm
         llm = get_llm()
@@ -2489,7 +2512,15 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
                 assistant = {"role": "assistant", "content": assistant}
             if assistant.get("content"):
                 reply = assistant["content"]
+            rc = (assistant.get("_reasoning") or "").strip()
+            assistant.pop("_reasoning", None)   # 元数据不参与对话回传
+            pos = len(convo)
             convo.append(assistant)
+            if rc:
+                rc = rc[:REASONING_MAX]
+                reasonings[pos] = rc
+                thinkings.append({"round": i + 1, "text": rc})
+                blocks.append({"type": "think", "round": i + 1, "text": rc})
             tcs = assistant.get("tool_calls") or []
             if not tcs:
                 break
@@ -2508,27 +2539,35 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
                 note = state.pop("_auto_rule", None)
                 if note and isinstance(res, dict) and res.get("ok"):
                     res["auto_approved"] = note      # 命中「已记住的批准」自动执行
-                steps.append({"tool": tname, "args": targs, "ok": bool(res.get("ok")),
-                              "result": _trim_tool_result(res)})
+                step = {"tool": tname, "args": targs, "ok": bool(res.get("ok")),
+                        "result": _trim_tool_result(res), "round": i + 1}
+                steps.append(step)
+                blocks.append(dict(step, type="tool"))
                 convo.append({"role": "tool", "tool_call_id": tc.get("id") or tname,
                               "content": json.dumps(res, ensure_ascii=False)[:CHAT_TOOL_RESULT_MAX]})
                 if not reply and isinstance(res, dict) and res.get("error"):
                     reply = "执行 %s 时出错：%s" % (tname, res.get("error"))
     except Exception as e:
         return {"ok": False, "error": "对话失败: %r" % e, "session": sid, "steps": steps,
-                "drafts": state.get("drafts") or {}}
+                "blocks": blocks, "drafts": state.get("drafts") or {}}
 
     # 只把「原始用户消息 + 助手/工具消息」写入历史（不落上下文文件正文，避免会话文件膨胀）
-    turn = convo[len(history) + 1:]
+    turn = convo[base_idx:]
     if turn:
         turn[0] = {"role": "user", "content": message}
+    for j, m in enumerate(turn):
+        rc = reasonings.get(base_idx + j)
+        if rc and isinstance(m, dict) and m.get("role") == "assistant":
+            m["_reasoning"] = rc        # 思维链随历史持久化，供展开查看（发 API 前会被剔除）
     history.extend(turn)
     state.pop("_llm", None)
     save_chat_session(state)
     _record_history("chat", "chat", message[:200], bool(reply), None,
                     rounds=len(steps) or 1, model=model, provider=provider, key=sid)
     return {"ok": True, "session": sid, "reply": reply or "（完成）",
-            "steps": steps, "drafts": state.get("drafts") or {},
+            "steps": steps, "blocks": blocks, "thinkings": thinkings,
+            "has_reasoning": bool(thinkings), "think": think,
+            "drafts": state.get("drafts") or {},
             "messages": history, "title": state.get("title", "")}
 
 

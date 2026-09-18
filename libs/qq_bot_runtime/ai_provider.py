@@ -265,7 +265,8 @@ class UnifiedLLM:
     # ---- 单次调用 ----
     async def _call_once(self, name, prov, messages, capability, model,
                          think, tools, images, timeout,
-                         role: Optional[str] = None) -> object:
+                         role: Optional[str] = None,
+                         keep_reasoning: bool = False) -> object:
         # api_style: "openai"（默认，/chat/completions）或 "anthropic"（/v1/messages）
         api_style = (prov.get("api_style") or "openai").lower()
         if images:
@@ -275,7 +276,8 @@ class UnifiedLLM:
                 messages = self._inject_images(messages, images)
         if api_style == "anthropic":
             return await self._call_anthropic(name, prov, messages, capability,
-                                              model, think, tools, timeout, role)
+                                              model, think, tools, timeout, role,
+                                              keep_reasoning=keep_reasoning)
 
         payload = self._build_payload(prov, messages, capability, model,
                                       think, tools, role)
@@ -315,7 +317,11 @@ class UnifiedLLM:
                 msg["content"] = ""
             if not msg.get("tool_calls"):
                 msg.pop("tool_calls", None)
-            msg.pop("reasoning_content", None)
+            rc = msg.pop("reasoning_content", None)
+            # keep_reasoning=True 时（构建助手展示思维链）把思考内容存到 _reasoning：
+            # 该键是本地元数据，调用方回传对话历史前必须剔除，不能发给 API。
+            if keep_reasoning and rc:
+                msg["_reasoning"] = rc
             return msg
         return msg["content"]
 
@@ -382,7 +388,8 @@ class UnifiedLLM:
         return payload
 
     async def _call_anthropic(self, name, prov, messages, capability, model,
-                              think, tools, timeout, role=None) -> object:
+                              think, tools, timeout, role=None,
+                              keep_reasoning: bool = False) -> object:
         payload = self._build_anthropic_payload(prov, messages, capability,
                                                 model, think, tools, role)
         headers = {
@@ -424,7 +431,13 @@ class UnifiedLLM:
                             "arguments": json.dumps(b.get("input", {}), ensure_ascii=False),
                         },
                     })
-            return {"role": "assistant", "content": text or "", "tool_calls": tool_calls}
+            out = {"role": "assistant", "content": text or "", "tool_calls": tool_calls}
+            if keep_reasoning:
+                th = "".join(b.get("thinking", "") for b in blocks
+                             if b.get("type") in ("thinking", "redacted_thinking"))
+                if th:
+                    out["_reasoning"] = th
+            return out
         return text
 
     # ---- 对外主入口（含故障转移）----
@@ -432,7 +445,8 @@ class UnifiedLLM:
                    model: Optional[str] = None, think: bool = False,
                    tools: Optional[list] = None, images: Optional[List[bytes]] = None,
                    timeout: int = 300, role: Optional[str] = None,
-                   provider: Optional[str] = None) -> object:
+                   provider: Optional[str] = None,
+                   keep_reasoning: bool = False) -> object:
         # 角色路由（对齐 N.E.K.O 的模型粒度配置：摘要/情感/记忆/判断各用不同模型）。
         # role 在 capability 之上再细化：可覆盖 capability 与 model，缺省则回退到参数。
         cap, mdl = capability, model
@@ -469,6 +483,7 @@ class UnifiedLLM:
                 return await self._call_once(
                     name, self.providers[name], messages, cap,
                     mdl, think, tools, images, timeout, role,
+                    keep_reasoning=keep_reasoning,
                 )
             except Exception as e:
                 if st is not None:
