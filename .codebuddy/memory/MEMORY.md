@@ -92,16 +92,18 @@
   - `think` 支持 "low/medium/high" 三档（`_think_level`）；low = 不触发 think_body，最快。
 - 前端 JS 约定：状态对象 `bchat`，函数前缀 `_bc*`（旧的 `builder`/`_bld*`/`_ws*` 已全删），导航入口仍是 `loadBuilder()`，事件绑定集中在 `initBuilderUI()`。改 UI 后可用 `node --check webui/app.js` 校验语法。
 
-## 构建助手权限模型（WorkBuddy 式，提交 e4cca55）——改构建助手必读
-- 设置文件 `data/builder_settings.json`（`load_settings`/`set_settings`/`get_settings`），字段：`workspace`、`permission_mode`、`confirm_overwrite`、`confirm_sensitive`、`confirm_install`、`auto_backup`、`max_steps`、`deny_extra`。
+## 构建助手权限模型（WorkBuddy 式，提交 e4cca55 + 0815762）——改构建助手必读
+- 设置文件 `data/builder_settings.json`（`load_settings`/`set_settings`/`get_settings`），字段：`workspace`、`permission_mode`、`confirm_overwrite`、`confirm_sensitive`、`confirm_install`、`auto_backup`、`remember_approvals`、`max_steps`、`deny_extra`。
 - **工作区根**：唯一入口 `workspace_root()`；是否自定义看 `is_custom_workspace()`。所有文件 API（`_resolve_rooted`/`list_workspace_sync`/`_search_workspace`/`list_context_files`/`read_context_file`）都必须基于它，**新增文件能力时不要直接用 `APP_DIR`**，否则自定义工作区失效。
   - 应用目录模式：仍限 `_WORKSPACE_ROOTS` 白名单根；自定义工作区：整树放行，但仍受 `_WORKSPACE_DENY` + `deny_extra` + realpath 越界校验。
-- **权限模式**：`plan` / `default` / `acceptEdits` / `bypassPermissions`。闸门函数 `_gate_operation(tool, args, state)`，在 `_exec_tool` 开头调用；只有 `WRITE_TOOLS`（write_file/save_agent/save_plugin）受管。
-- **高危确认**：`classify_operation` 定级 → `high` 或 default 模式 → `_queue_approval` 存 `data/builder_approvals.json`；返回给模型 `{"pending": True, "approval_id", "message": "不要重复提交"}`。**真正执行只发生在 `approve_approval_sync`**（用户点批准）；批准/拒绝结果由 `_note_session` 以 `[系统通知]` user 消息写回会话，模型下一轮可见。
-- 模型侧：工具 `get_builder_settings` 可自查约束；`run_chat` 注入 `#### 当前运行环境`；步数上限取 `settings["max_steps"]`（`run_chat(max_steps=None)` 时）。
-- 路由：GET `/api/builder/{settings,approvals}`；POST `/api/builder/settings/save`、`/api/builder/approval/{approve,reject,clear}`。
-- 前端：左栏第三页签「设置」（`bcWs*`/`bcPerm`/`bcConfirm*`/`bcAutoBackup`/`bcMaxSteps`）；输入区上方 `#bcApprovals` 待确认区；工具卡片 `⏳ 待确认`（`.bc-tool.pending`）。
-- **测试注意**：测高危/权限流程时先用 `POST /api/builder/settings/save` 调模式，测完务必把设置恢复默认（mode=default、workspace=""）并清理 `builder_approvals.json` / 测试会话与文件。
+- **权限模式（5 档）**：`plan`（只读拒绝写入）/ `default`（全部写操作询问）/ `acceptEdits`（高危询问）/ **`full` 完全访问（只对核心代码与落盘询问，普通覆盖自动）** / `bypassPermissions`（全放行）。闸门函数 `_gate_operation(tool, args, state)`，在 `_exec_tool` 开头调用；只有 `WRITE_TOOLS`（write_file/save_agent/save_plugin）受管。
+- **`classify_operation` 双字段**：`level`（low/high，acceptEdits 用）+ `kind`（create/overwrite/sensitive/install，**full 档位用 kind in (sensitive, install) 判定是否询问**）。改判定逻辑时两个字段都要维护。
+- **批准记忆（减少询问）**：`data/builder_rules.json`，`RULE_SCOPES = (file, dir, all)`；`_add_rule` 生成、`_match_rule` 命中即跳过询问并在 `run_chat` 给结果打 `auto_approved` 标记。write_file 的 `dir` 规则 value 以 `/` 结尾、用 `rel.startswith(v)` 匹配；save_plugin/save_agent 按 name 匹配（无 name 时退化为 `*`）。开关 `remember_approvals`（默认开）关闭后记忆不生效。
+- **高危确认**：`high` 或 default 模式 → `_queue_approval` 存 `data/builder_approvals.json`；返回给模型 `{"pending": True, "approval_id", "message": "不要重复提交"}`。**真正执行只发生在 `approve_approval_sync(bridge, aid, remember, scope)`**（用户点批准，可顺带记住）；`approve_all_sync` 一键批准全部。批准/拒绝结果由 `_note_session` 以 `[系统通知]` user 消息写回会话，模型下一轮可见。
+- 模型侧：工具 `get_builder_settings` 可自查约束（含 remembered_rules）；`run_chat` 注入 `#### 当前运行环境`（含已记住规则）；步数上限取 `settings["max_steps"]`（`run_chat(max_steps=None)` 时）。
+- 路由：GET `/api/builder/{settings,approvals,rules}`；POST `/api/builder/settings/save`、`/api/builder/approval/{approve,approve_all,reject,clear}`、`/api/builder/rules/{delete,clear}`。
+- 前端：左栏第三页签「设置」（`bcWs*`/`bcPerm`/`bcConfirm*`/`bcAutoBackup`/`bcRemember`/`bcMaxSteps`/`bcRules`）；输入区上方 `#bcApprovals` 待确认区（含范围下拉与「全部批准」）；工具卡片 `⏳ 待确认`（`.bc-tool.pending`）。完全访问档位下审批卡片记住范围默认选「记住此文件」（前端按 `bchat.mode==="full"`）。
+- **测试注意（血泪教训）**：① 测写流程先用 `POST /api/builder/settings/save` 调模式，测完恢复默认（mode=default、workspace=""）并清理 `builder_{approvals,rules}.json` / 测试会话与文件。② **写操作测试的目标路径必须是「不存在的临时文件」**（如 `bridge/_tmp_probe_1.py`——满足 `_sensitive_path` 判定又不破坏真实源码），并在脚本开头断言 `not os.path.isfile(target)`；曾因把 `bridge/builder_api.py` 当测试目标、`approve_approval_sync` 真执行了写入而覆盖掉真实源码（靠 `data/builder_bak/` 的自动备份一分钟内还原）。
 
 ## git 提交规范（PowerShell 中文坑）
 - 环境：Windows + PowerShell 5.1，git 默认 `i18n.commitEncoding=utf-8`。PowerShell 以 **GBK** 代码页传中文参数给 git → 中文 commit message 会**乱码存储**（chcp 65001 后仍乱码即说明已存乱码）。
