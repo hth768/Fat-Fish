@@ -566,6 +566,11 @@ class QQPlugin(PlatformPlugin):
         path = config.WS_PATH
         self._server = await websockets.serve(self._handler, host, port, max_size=16 * 1024 * 1024)
         print(f"[QQ-PLUGIN] WebSocket 服务已启动: ws://{host}:{port}{path}（等待 NapCat 连接）")
+        wl = set(str(g) for g in getattr(config, "QQ_GROUP_WHITELIST", []) or [])
+        if wl:
+            print(f"[QQ-PLUGIN] 群监听白名单已启用（仅处理这些群）: {', '.join(sorted(wl))}")
+        else:
+            print("[QQ-PLUGIN] 群监听白名单未启用：所有群均处理（QQ_GROUP_WHITELIST 为空）")
         await super().start()
 
     async def stop(self):
@@ -619,6 +624,10 @@ class QQPlugin(PlatformPlugin):
                 # 消息事件 -> 组装并分发
                 if data.get("post_type") == "message":
                     if data.get("message_type") == "group":
+                        gid = str(data.get("group_id") or "")
+                        wl = set(str(g) for g in getattr(config, "QQ_GROUP_WHITELIST", []) or [])
+                        if wl and gid not in wl:
+                            continue  # 群不在监听白名单内：忽略，不组装/不分发/不回复
                         task = asyncio.create_task(self._process(data, aggregate=False, pending=pending))
                     elif data.get("message_type") == "private":
                         task = asyncio.create_task(self._process(data, aggregate=True, pending=pending))
