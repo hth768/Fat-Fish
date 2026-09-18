@@ -10,7 +10,7 @@
 - **`E:\feiyu_app` 复用 `e:\qq_bot` 引擎**，靠环境变量 `FEIYU_QQ_BOT=E:\qq_bot`。解析优先级：`FEIYU_QQ_BOT` → `f:/feiyu_app/runtime/qq_bot` → `e:\qq_bot` → `E:/feiyu_app/libs/qq_bot_runtime`。**不带该变量直接启动会退出**。
 - 重启部署实例：① `Get-CimInstance Win32_Process` 找监听 8900 的 PID（命令行含 `feiyu_app\app.py`，父子共两个）→ `Stop-Process -Force`；② `Start-Process cmd.exe -ArgumentList '/c','set FEIYU_QQ_BOT=E:\qq_bot&& E:\qq_bot\venv\Scripts\python.exe E:\feiyu_app\app.py --with-core'`（detached，**勿用 `-NoNewWindow`** 会阻塞工具）。会短暂关闭用户窗口，新实例自动重开。
 - 同步规则：
-  - App 层 → `E:/feiyu_app`：`bridge/*`、`webui/*`、`server.py`、`app.py`、`settings_store.py`、`plugins/groups.json`、`README.md`、`OVERVIEW.md`、`PLUGINS.md`。**先 `Get-FileHash` 逐文件比对**定位真正落后的。改 `webui/` 后必须重启实例（WebView2 缓存）。
+  - App 层 → `E:/feiyu_app`：`bridge/*`、`webui/*`、`server.py`、`app.py`、`settings_store.py`、`plugins/groups.json`、`README.md`、`OVERVIEW.md`、`PLUGINS.md`、`tests/*`。**先 `Get-FileHash` 逐文件比对**定位真正落后的。改 `webui/` 后必须重启实例（WebView2 缓存）。
   - 引擎层 → `e:\qq_bot`：**必须连带复制全部依赖模块**（逐个核对顶层 import，`Test-Path` 检查），否则"App 能启动、来消息就崩"（曾因缺 `agent_ctx.py` 中招）。
 - 模型注册表约定（两版一致）：`config.py` 的 `AI_PROVIDERS={}`、`AI_CAPABILITY_ROUTING` 置空；真实 Key 在同目录 `ai_providers.json`（覆盖层，`ai_provider.py` 读取，热重载）。**切勿把真实 Key 写进 `config.py` 或提交**；`GLM_API_KEY` 等顶层变量（语音用）保留。
 - 端点：`/api/appearance/icon`、`/api/appearance/icon/reset` 是 **POST**（GET 会 404）；`/api/memory/export` 是 GET；`/api/builder/*` 只读查询注册在 `do_GET`（query 传参），`do_POST` 只放写操作。
@@ -89,3 +89,12 @@
 
 ## 9. git 提交规范（PowerShell 中文坑）
 - PowerShell 以 GBK 传参给 git → 中文 commit message 存成乱码。**用 UTF-8 message 文件 + `git commit -F <file>`**（amend 同）。已乱码修正：`git -c i18n.commitEncoding=gbk commit --amend -F <file>`。`-m` 中文含括号等会解析错误，一律 `-F`。验证 `chcp 65001 > $null; git --no-pager log -1 --format=%B`。曾遇 GitHub 443 超时，重试可成功。
+
+## 10. 测试与工程质量现状（提交 ab383da）
+- **两层测试**：引擎 `libs/qq_bot_runtime/tests/`（约 90 项，`python .../tests/run.py`，需完整依赖环境）+ App `tests/`（43 项，`tests\run_tests.bat` 或 `python -m unittest discover -s tests -v`，纯标准库无需 pytest）。**改 bridge/ 后跑后者**，它覆盖：工具契约（21 个 × schema 形状/required）、权限闸门 5 档、批准记忆范围、路径安全、上下文白名单、manifest 校验、sidecar 就绪。
+- 测试自身把 settings/approvals/rules/chat 落到 `tempfile`（`_IsolatedDataMixin`），**不污染仓库 `data/`**；新增测试请沿用该 mixin。
+- **代码体检数据（2026-09-18）**：真正裸 `except:` = **0**；`except Exception:` = **692**（bridge 159 / engine 500）；其中**静默吞掉（`…: pass/continue`）= 259**（builder_api 34、mc_bot_brain 23、memory_api 17）。这是"异常静默降级难排障"的实质，**未批量改**（多数是刻意降级路径，风险不可控）—— 要收紧时优先挑「吞掉后完全无痕迹」的改成日志。
+- **体积真相**：工作副本 ~30GB（`dist/` 16.5GB + `libs/` 13.8GB，其中 `libs/qq_bot_runtime` 8.2GB），但 **git 只跟踪 1522 文件 / 59.2MB**；重的是工作副本与分发产物，`dist/` 已 gitignore。捆绑 Python 是 standalone 的**设计选择**，不要"优化"掉。
+- **LICENSE 仍缺**（`LICENSE*/COPYING` 无，README 未提）—— 属法律决定，需用户选（MIT / Apache-2.0 / 保留所有权利 / 其它）后再加。
+- **上下文文件白名单的两个坑**（提交 ab383da 修复）：① `CONTEXT_SKIP_DIRS` 必须排除 `hf_cache`/`models`/`site-packages`，否则成千缓存 JSON 挤占 `MAX_CONTEXT_FILES` 名额把真源码挤出去；② 单文件上限 `MAX_CONTEXT_FILE_BYTES` 要 ≥ 最大的源码文件（现 160KB，覆盖 126KB 的 `builder_api.py`），否则会被**静默排除**（曾导致"构建助手读不到自己"）。
+- 文档里的安全边界：README「安全边界与合规」节（HTTP 仅 127.0.0.1 单实例 / 密钥与数据仅本机 / 高权限能力说明 / 第三方平台 ToS 与风控提示 / 无担保）。
