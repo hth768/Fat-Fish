@@ -92,6 +92,17 @@
   - `think` 支持 "low/medium/high" 三档（`_think_level`）；low = 不触发 think_body，最快。
 - 前端 JS 约定：状态对象 `bchat`，函数前缀 `_bc*`（旧的 `builder`/`_bld*`/`_ws*` 已全删），导航入口仍是 `loadBuilder()`，事件绑定集中在 `initBuilderUI()`。改 UI 后可用 `node --check webui/app.js` 校验语法。
 
+## 构建助手权限模型（WorkBuddy 式，提交 e4cca55）——改构建助手必读
+- 设置文件 `data/builder_settings.json`（`load_settings`/`set_settings`/`get_settings`），字段：`workspace`、`permission_mode`、`confirm_overwrite`、`confirm_sensitive`、`confirm_install`、`auto_backup`、`max_steps`、`deny_extra`。
+- **工作区根**：唯一入口 `workspace_root()`；是否自定义看 `is_custom_workspace()`。所有文件 API（`_resolve_rooted`/`list_workspace_sync`/`_search_workspace`/`list_context_files`/`read_context_file`）都必须基于它，**新增文件能力时不要直接用 `APP_DIR`**，否则自定义工作区失效。
+  - 应用目录模式：仍限 `_WORKSPACE_ROOTS` 白名单根；自定义工作区：整树放行，但仍受 `_WORKSPACE_DENY` + `deny_extra` + realpath 越界校验。
+- **权限模式**：`plan` / `default` / `acceptEdits` / `bypassPermissions`。闸门函数 `_gate_operation(tool, args, state)`，在 `_exec_tool` 开头调用；只有 `WRITE_TOOLS`（write_file/save_agent/save_plugin）受管。
+- **高危确认**：`classify_operation` 定级 → `high` 或 default 模式 → `_queue_approval` 存 `data/builder_approvals.json`；返回给模型 `{"pending": True, "approval_id", "message": "不要重复提交"}`。**真正执行只发生在 `approve_approval_sync`**（用户点批准）；批准/拒绝结果由 `_note_session` 以 `[系统通知]` user 消息写回会话，模型下一轮可见。
+- 模型侧：工具 `get_builder_settings` 可自查约束；`run_chat` 注入 `#### 当前运行环境`；步数上限取 `settings["max_steps"]`（`run_chat(max_steps=None)` 时）。
+- 路由：GET `/api/builder/{settings,approvals}`；POST `/api/builder/settings/save`、`/api/builder/approval/{approve,reject,clear}`。
+- 前端：左栏第三页签「设置」（`bcWs*`/`bcPerm`/`bcConfirm*`/`bcAutoBackup`/`bcMaxSteps`）；输入区上方 `#bcApprovals` 待确认区；工具卡片 `⏳ 待确认`（`.bc-tool.pending`）。
+- **测试注意**：测高危/权限流程时先用 `POST /api/builder/settings/save` 调模式，测完务必把设置恢复默认（mode=default、workspace=""）并清理 `builder_approvals.json` / 测试会话与文件。
+
 ## git 提交规范（PowerShell 中文坑）
 - 环境：Windows + PowerShell 5.1，git 默认 `i18n.commitEncoding=utf-8`。PowerShell 以 **GBK** 代码页传中文参数给 git → 中文 commit message 会**乱码存储**（chcp 65001 后仍乱码即说明已存乱码）。
 - 正确方法：用工具（非命令行中文）写 UTF-8 的 message 文件，再 `git commit -F <file>`；amend 同样 `git commit --amend -F <file>`。
