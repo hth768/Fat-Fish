@@ -145,8 +145,13 @@ CONTEXT_ALLOW_FILES = ("README.md", "OVERVIEW.md", "PLUGINS.md", "PLUGIN_PROTOCO
 # 否则 normcase 后的 "plugins.md" 永远匹配不到 "PLUGINS.md"。
 _CONTEXT_ALLOW_FILES_LC = {f.lower() for f in CONTEXT_ALLOW_FILES}
 CONTEXT_SKIP_DIRS = {"__pycache__", "node_modules", ".git", "data", "runtime",
-                     "Lib", "Scripts", "venv", "venv_vox", "dist"}
-MAX_CONTEXT_FILE_BYTES = 48000
+                     "Lib", "Scripts", "venv", "venv_vox", "dist",
+                     # 模型缓存 / 依赖目录：里面成千上万个 JSON 会挤占列表名额
+                     # （曾把 bridge/ 的真源码挤出 MAX_CONTEXT_FILES 截断之外）
+                     "hf_cache", "models", "site-packages", "logs", "音色试听"}
+# 单个文件作为上下文的上限。要能覆盖构建助手本体（bridge/builder_api.py 约 117KB），
+# 否则「想让它参考自己的实现」时会因超限被静默排除。
+MAX_CONTEXT_FILE_BYTES = 160000
 MAX_CONTEXT_FILES = 150
 
 
@@ -2026,8 +2031,26 @@ def _import_web_tools():
         return None
 
 
+_URL_RE = re.compile(r"https?://[^\s<>\"'）)】\]]+", re.I)
+
+
+def _urls_in_text(text: str) -> list:
+    """从纯文本里提取 URL（内置正则，不依赖引擎的 web_tools）。"""
+    out = []
+    for u in _URL_RE.findall(text or ""):
+        u = u.rstrip(".,;:!?，。；：！？")
+        if u and u not in out:
+            out.append(u)
+    return out
+
+
 def _extract_sources(data: dict, text: str, limit: int = 6) -> list:
-    """从 Responses API 响应里提取来源链接：annotations → citations/sources → 正文里的 URL。"""
+    """从搜索结果里提取来源链接：annotations → citations/sources → 正文里的 URL。
+
+    正文兜底优先用引擎的 web_tools.extract_urls（更懂 B 站/微信等链接形态），
+    但**必须自带正则兜底** —— 否则 web_tools 不可用（缺依赖、纯 App 环境）时
+    来源链接会静默变成空列表，模型只能"凭空引用"。
+    """
     urls = []
     try:
         for item in (data.get("output") or []):
@@ -2043,11 +2066,16 @@ def _extract_sources(data: dict, text: str, limit: int = 6) -> list:
             if isinstance(u, str) and u and u not in urls:
                 urls.append(u)
     if not urls:
+        got = []
         wt = _import_web_tools()
         if wt and hasattr(wt, "extract_urls"):
-            for u in wt.extract_urls(text or ""):
-                if u not in urls:
-                    urls.append(u)
+            try:
+                got = list(wt.extract_urls(text or ""))
+            except Exception:
+                got = []
+        for u in (got or _urls_in_text(text)):
+            if u and u not in urls:
+                urls.append(u)
     return urls[:max(1, int(limit or 6))]
 
 

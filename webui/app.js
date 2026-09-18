@@ -1358,7 +1358,11 @@ async function _bcFillModels() {
     sel.innerHTML = '<option value="">系统默认模型</option>';
     (d.models || []).forEach(m => {
       const o = document.createElement("option");
-      o.value = m.name; o.textContent = m.name + " · " + m.model;
+      o.value = m.name;
+      // 供应商名与模型名相同时不重复显示（如 deepseek · deepseek-flash → deepseek-flash）
+      o.textContent = (m.model && m.model !== m.name)
+        ? (m.name + " · " + m.model) : (m.model || m.name);
+      o.title = o.textContent;
       sel.appendChild(o);
     });
     const custom = document.createElement("option");
