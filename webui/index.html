@@ -372,6 +372,15 @@
               <label class="bc-check"><input type="checkbox" id="bcAutoBackup"><span>写入前自动备份到 data/builder_bak/</span></label>
               <label class="bc-check"><input type="checkbox" id="bcRemember"><span>记住已批准的操作（同类操作不再重复询问）</span></label>
 
+              <div class="cfg-label" style="margin-top:12px">联网功能</div>
+              <label class="bc-check"><input type="checkbox" id="bcWeb"><span>允许联网（搜索 / 抓取网页 / 下载文件）</span></label>
+              <div class="bc-inline">
+                <label class="bc-check" style="flex:1"><span>单次抓取上限（字符）</span>
+                  <input id="bcWebChars" class="input" type="number" min="1000" max="200000" step="1000"></label>
+                <label class="bc-check" style="flex:1"><span>批量最多页数</span>
+                  <input id="bcWebPages" class="input" type="number" min="1" max="10"></label>
+              </div>
+
               <div class="cfg-label" style="margin-top:12px">单轮最多工具步数</div>
               <input id="bcMaxSteps" class="input" type="number" min="1" max="40">
 

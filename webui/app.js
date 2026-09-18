@@ -1168,6 +1168,9 @@ async function _bcLoadSettings() {
     $("#bcConfirmInstall").checked = s.confirm_install !== false;
     $("#bcAutoBackup").checked = s.auto_backup !== false;
     $("#bcRemember").checked = s.remember_approvals !== false;
+    $("#bcWeb").checked = s.web_enabled !== false;
+    $("#bcWebChars").value = s.web_max_chars || 20000;
+    $("#bcWebPages").value = s.web_max_pages || 5;
     $("#bcMaxSteps").value = s.max_steps || 14;
     $("#bcSettingsMsg").textContent = "";
     bchat.mode = s.permission_mode || "default";
@@ -1908,10 +1911,15 @@ function initBuilderUI() {
     confirm_install: $("#bcConfirmInstall").checked,
     auto_backup: $("#bcAutoBackup").checked,
     remember_approvals: $("#bcRemember").checked,
+    web_enabled: $("#bcWeb").checked,
+    web_max_chars: parseInt($("#bcWebChars").value || "20000", 10),
+    web_max_pages: parseInt($("#bcWebPages").value || "5", 10),
     max_steps: parseInt($("#bcMaxSteps").value || "14", 10),
   }, $("#bcSettingsMsg")));
   $("#bcRemember").addEventListener("change", () => _bcSaveSettings(
     { remember_approvals: $("#bcRemember").checked }, $("#bcSettingsMsg")));
+  $("#bcWeb").addEventListener("change", () => _bcSaveSettings(
+    { web_enabled: $("#bcWeb").checked }, $("#bcSettingsMsg")));
   $("#bcRulesClear").addEventListener("click", async () => {
     try {
       await POST("/api/builder/rules/clear", {});
