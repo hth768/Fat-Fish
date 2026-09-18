@@ -92,14 +92,17 @@
   - `think` 支持 "low/medium/high" 三档（`_think_level`）；low = 不触发 think_body，最快。
 - 前端 JS 约定：状态对象 `bchat`，函数前缀 `_bc*`（旧的 `builder`/`_bld*`/`_ws*` 已全删），导航入口仍是 `loadBuilder()`，事件绑定集中在 `initBuilderUI()`。改 UI 后可用 `node --check webui/app.js` 校验语法。
 
-## 思维链展示（提交 a855966）——含引擎改动
-- 引擎 `ai_provider.py`：`chat()` / `_call_once()` / `_call_anthropic()` 新增 **`keep_reasoning: bool = False`**。默认 False 时行为与旧版一致（OpenAI 兼容路径原本直接 `pop("reasoning_content")` 丢弃）；True 时把 `reasoning_content`（或 Anthropic 的 `thinking`/`redacted_thinking` 块）存进 `msg["_reasoning"]`。
+## 思维链展示 + 流式输出（提交 a855966 + f3389d9）——含引擎改动
+- 引擎 `ai_provider.py`：`chat()` / `_call_once()` / `_call_anthropic()` 新增 **`keep_reasoning: bool = False`**（把 `reasoning_content` / Anthropic `thinking` 块存进 `msg["_reasoning"]`，默认丢弃）与 **`stream` / `on_delta`**（新增 `_call_openai_stream()` 解析 `/chat/completions` SSE，逐 delta 回调 `on_delta("think"|"content", text)`，聚合 tool_calls 增量与 usage，返回结构与非流式一致）。**Anthropic 路径不支持流式**，自动降级。
   - `_reasoning` 是**本地元数据键**：回传历史给 API 前必须剔除 → 构建助手用 `_strip_meta()` 过滤所有 `_` 开头的键。**新增下划线键时记得同步 `_strip_meta` 语义。**
-  - **改了这个文件必须同步 `e:\qq_bot\ai_provider.py`**（引擎副本），否则部署直接 `TypeError: chat() got an unexpected keyword argument 'keep_reasoning'`。
-- `run_chat` 新增 **`blocks`**（有序：`{type:"think"|"tool", round, ...}`）+ `thinkings` + `has_reasoning`；思维链随会话历史持久化在 assistant 消息的 `_reasoning`（单段上限 `REASONING_MAX=12000`）。
-  - **写回历史的 off-by-one 陷阱**：`base_idx` 必须用 `len(convo) - 1`（append 用户消息后的 len 指向下一条），否则会漏掉本轮第一条 assistant（带 tool_calls 的那条），会话结构坏成 `[user, tool, assistant]`。
-- 前端 `_bcThinkCard(text, {live})`：思考中 `open=true` + 秒级计时；结束 `setText()` 填入内容并 `open=false` 自动折叠为「💭 思考过程 · N 字 · 点此展开」，`▸` 靠 `.bc-think[open] > summary::before { rotate(90deg) }` 转向。发送时按 `r.blocks` 顺序渲染；历史回放渲染 `m._reasoning`。
-- **实测**：部署的 `deepseek-flash` 默认返回 `reasoning_content`（deepseek-reasoner / deepseek-v4-flash 同样返回，deepseek-chat 不返回）；`think` 档位对 DeepSeek 无影响（未配 `think_param`/`think_body`）。**过于简单的问题模型可能不产出 reasoning**（属模型行为）。API 是 `stream: False`，故「思考中」只能做展开占位 + 计时，真流式需改引擎 SSE。
+  - **改了这个文件必须同步 `e:\qq_bot\ai_provider.py`**（引擎副本），否则部署报 `TypeError: chat() got an unexpected keyword argument ...`。
+- `run_chat` 新增 **`blocks`**（有序 `{type:"think"|"tool", round}`）+ `thinkings` + `has_reasoning`；思维链随历史持久化在 assistant 消息的 `_reasoning`（上限 `REASONING_MAX=12000`）。流式时 `run_chat(..., stream=True, emit=cb)` 推 `delta` / `think_end` / `tool_start` / `tool_end` / `done` / `notice` / `error`。
+  - **写回历史的 off-by-one 陷阱**：`base_idx` 必须用 `len(convo) - 1`（append 用户消息后的 len 指向下一条），否则会漏掉本轮第一条 assistant（带 tool_calls 的那条）。
+- 流式端点：`POST /api/builder/chat/stream`，`server.py` 里**手写 chunked 帧**（`b"%x\r\n"+payload+b"\r\n"`，结束 `b"0\r\n\r\n"`）；因 `protocol_version="HTTP/1.1"`，不写 chunked 浏览器会缓冲。此处不复用 GET 的 `_serve_sse`（那是给 EventSource 用的）。
+- 前端：`_bcThinkCard(text,{live})` 支持 `append()` 流式追加，结束 `setText()` 自动折叠为「💭 思考过程 · N 字 · 点此展开」（`▸` 由 `.bc-think[open] > summary::before { rotate(90deg) }` 转向）；`_bcChatStream()` 用 fetch + `getReader()` 按 `\n\n` 切帧解析；已渲染增量后中断则抛 `err.__partial` 不再降级（防重复渲染）。开关 `#bcStream`（localStorage `bc_stream`）在输入区。
+- **侧边栏可收回**：`#bcSideHide`（左栏页签尾部）/ `#bcSideShow`（浮动，收起时显示）+ `#page-builder.bc-side-collapsed` + `localStorage['bc_side_collapsed']`。收回只隐藏左栏，中栏 `.bc-main` 占满，**输入区在 `.bc-main` 内底部 → 输入框仍贴底**。
+- **实测**：`deepseek-flash` 默认返回 `reasoning_content`（reasoner/v4-flash 同；`deepseek-chat` 不返回）；`think` 档位对其无影响；过于简单的问题可能不产出 reasoning（模型行为）。流式实测：首个 content 增量 0.67s 到达；带工具场景 120 个 think 增量帧 + `think_end` + `tool_start/end` + 第二轮 think，顺序正确。
+- 环境备注：**`agent-browser` 未安装**（命令不存在），本机无法做自动化浏览器截图；视觉验证需先 `npm install -g agent-browser && agent-browser install`。
 
 ## 构建助手权限模型（WorkBuddy 式，提交 e4cca55 + 0815762）——改构建助手必读
 - 设置文件 `data/builder_settings.json`（`load_settings`/`set_settings`/`get_settings`），字段：`workspace`、`permission_mode`、`confirm_overwrite`、`confirm_sensitive`、`confirm_install`、`auto_backup`、`remember_approvals`、`max_steps`、`deny_extra`。
