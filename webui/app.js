@@ -1713,10 +1713,9 @@ async function _bcSend() {
       think.el.remove();
       const tip = document.createElement("div");
       tip.className = "hint wrap bc-think-tip";
-      tip.textContent = streamed
-        ? "本轮未返回思考内容：该模型未输出思维链（流式仅在有思考时显示）。"
-        : "本轮未返回思考内容：当前模型/供应商未开启思维链。可在下方把「思考」切到标准或深度，"
-          + "或改用支持推理的模型（如 deepseek-reasoner）后重试。";
+      tip.textContent = "本轮未返回思考内容：可能是本轮问题较简单、模型未产生推理，"
+        + "或该模型/供应商不支持思维链。可在下方把「思考」切到标准或深度，"
+        + "或改用支持推理的模型（如 deepseek-reasoner）后重试。";
       $("#bcChat").appendChild(tip);
     }
     if (streamed) {
