@@ -12,6 +12,8 @@ import os
 import subprocess
 import sys
 import time
+
+from quiet import attention
 from quiet import degrade
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,8 +37,8 @@ def _diag(msg: str):
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "window.log"), "a", encoding="utf-8") as f:
             f.write(line + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        attention("app_window._diag", e, "诊断日志写盘失败（排障线索将丢失）")
 
 
 class _AppearanceApi:

@@ -232,7 +232,8 @@ class TestAuditTool(unittest.TestCase):
                 f.write(code)
             r = A.convert_file(p, dry_run=True, buckets=("A",))
             self.assertEqual(r["changed"], 1)
-            self.assertEqual(open(p, encoding="utf-8").read(), code, "dry-run 不得落盘")
+            with open(p, encoding="utf-8") as f:
+                self.assertEqual(f.read(), code, "dry-run 不得落盘")
 
 
 if __name__ == "__main__":

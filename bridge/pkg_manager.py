@@ -18,6 +18,8 @@ import json
 import os
 import sys
 
+from quiet import degrade
+
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE_DIR = os.path.join(APP_DIR, "plugins")
 
@@ -535,8 +537,9 @@ class PackageManager:
         for sc in list(self._sidecars.values()):
             try:
                 sc.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("pkg_manager.stop_all_sidecars", e,
+                        "停止 sidecar 失败（%s）" % getattr(sc, "name", "?"))
         self._sidecars.clear()
 
     def list_all(self) -> dict:

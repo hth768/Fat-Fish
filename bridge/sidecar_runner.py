@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 
+from quiet import attention, degrade
+
 # qq_bot 根目录：app.py 启动时已把 cwd 切到 f:/qq_bot（相对路径数据文件同位）。
 # 这里运行时取 cwd，脚本存在性检查与子进程 cwd 都基于它。
 def _qq_bot_dir() -> str:
@@ -117,8 +119,8 @@ class SidecarProcess:
             if self._log_fp is not None:
                 self._log_fp.flush()
                 self._log_fp.close()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("sidecar_runner._close_log", e, "关日志句柄失败")
         self._log_fp = None
 
     def stop(self) -> dict:
@@ -141,8 +143,9 @@ class SidecarProcess:
                                    capture_output=True,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     p.wait(timeout=5)
-                except Exception:
-                    pass
+                except Exception as e:
+                    attention("sidecar_runner.stop.taskkill", e,
+                              "进程终止失败（sidecar=%s pid=%s 可能残留）" % (self.name, pid))
             print(f"[SIDECAR] {self.name} 已停止 (pid={pid})")
             self._close_log()
             return {"ok": True}
@@ -150,8 +153,9 @@ class SidecarProcess:
             # 最后兜底：即使句柄异常也尝试 taskkill
             try:
                 subprocess.run(["taskkill", "/pid", str(pid), "/f", "/t"], capture_output=True)
-            except Exception:
-                pass
+            except Exception as e2:
+                attention("sidecar_runner.stop.fallback", e2,
+                          "兜底 taskkill 失败（sidecar=%s pid=%s）" % (self.name, pid))
             return {"ok": False, "error": repr(e)}
 
     def restart(self) -> dict:

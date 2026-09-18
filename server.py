@@ -8,6 +8,8 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from quiet import attention, degrade
+
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 WEBUI_DIR = os.path.join(APP_DIR, "webui")
 if APP_DIR not in sys.path:
@@ -56,8 +58,8 @@ def make_handler(bridge):
             self.end_headers()
             try:
                 self.wfile.write(data)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("server._json", e, "响应写入失败（客户端可能已断开）")
 
         def _body(self):
             try:
@@ -87,8 +89,8 @@ def make_handler(bridge):
             self.end_headers()
             try:
                 self.wfile.write(data)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("server._serve_static", e, "静态资源写入失败（客户端可能已断开）")
 
         def _serve_raw(self, data: bytes, ctype: str, code: int = 200):
             self.send_response(code)
@@ -99,8 +101,8 @@ def make_handler(bridge):
             self.end_headers()
             try:
                 self.wfile.write(data)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("server._serve_raw", e, "原始响应写入失败（客户端可能已断开）")
 
         def _serve_file(self, q):
             """受控文件服务：只允许 qq_bot 与本应用目录内的文件。"""
@@ -142,16 +144,16 @@ def make_handler(bridge):
                     except Exception:
                         self.wfile.write(b": ping\n\n")
                         self.wfile.flush()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("server._serve_sse", e, "SSE 事件流断开（客户端可能已离开）")
 
         def _sse_write(self, ev):
             try:
                 data = json.dumps(ev, ensure_ascii=False)
                 self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
                 self.wfile.flush()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("server._sse_write", e, "SSE 写入失败")
 
         # ---------------- 构建助手：流式对话（POST 上行的 SSE） ----------------
         def _builder_chat_stream(self, body):
@@ -198,8 +200,8 @@ def make_handler(bridge):
             try:
                 self.wfile.write(b"0\r\n\r\n")      # chunked 结束帧
                 self.wfile.flush()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("server._builder_chat_stream", e, "chunked 结束帧写入失败")
 
         # ---------------- GET 路由 ----------------
         def do_GET(self):

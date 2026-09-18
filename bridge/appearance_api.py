@@ -11,7 +11,7 @@ import re
 import base64
 import io
 import struct
-from quiet import degrade
+from quiet import attention, degrade
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(APP_DIR, "data")
@@ -105,6 +105,9 @@ def _read() -> dict:
             out["bg"] = d["bg"]
     except Exception as e:
         degrade("bridge/appearance_api.py:105 _read", e, "降级：with open(DATA_FILE, 'r', encoding='utf-8') as f")
+    # 用户「重置背景」时 bg 会被写成 ""，但物理文件还在磁盘上：
+    # 此处不能用「文件在就把 bg 补回 local」，否则重置后仍显示旧图（重置失效）。
+    # 以 bg 字段为准：bg="" 即视为没有背景，不回看磁盘文件。
     return out
 
 
@@ -118,8 +121,9 @@ def _rm_bg() -> None:
     try:
         if os.path.exists(BG_PATH):
             os.remove(BG_PATH)
-    except OSError:
-        pass
+    except OSError as e:
+        attention("bridge/appearance_api.py _rm_bg", e,
+                  "删除背景文件失败（重置未完全生效，文件可能残留）")
 
 
 def _bg_content_type(raw: bytes) -> str:

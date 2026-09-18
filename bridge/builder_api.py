@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime
-from quiet import degrade
+from quiet import attention, degrade
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGINS_DIR = os.path.join(APP_DIR, "plugins")
@@ -351,8 +351,8 @@ def append_history(rec: dict):
         with open(HISTORY_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         _trim_history()
-    except Exception:
-        pass
+    except Exception as e:
+        attention("builder_api.append_history", e, "构建历史写盘失败")
 
 
 def _trim_history():
@@ -365,8 +365,8 @@ def _trim_history():
             return
         with open(HISTORY_PATH, "w", encoding="utf-8") as f:
             f.writelines(lines[-MAX_HISTORY_LINES:])
-    except Exception:
-        pass
+    except Exception as e:
+        attention("builder_api._trim_history", e, "构建历史裁剪失败")
 
 
 def get_history(limit: int = 60) -> dict:
@@ -1202,8 +1202,8 @@ def _make_backup(abs_path: str, rel: str) -> str | None:
         for old in siblings[20:]:
             try:
                 os.remove(old)
-            except OSError:
-                pass
+            except OSError as e:
+                degrade("builder_api._make_backup", e, "删旧备份失败")
     return target if os.path.isfile(target) else None
 
 
@@ -1348,8 +1348,8 @@ def load_settings() -> dict:
                 d = json.load(f)
             if isinstance(d, dict):
                 s.update({k: v for k, v in d.items() if k in DEFAULT_SETTINGS})
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("builder_api.load_settings", e, "设置文件损坏，回退默认")
     if s.get("permission_mode") not in PERM_MODES:
         s["permission_mode"] = "default"
     try:
@@ -1369,8 +1369,8 @@ def _write_settings(s: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(s, f, ensure_ascii=False, indent=2)
         os.replace(tmp, SETTINGS_PATH)
-    except Exception:
-        pass
+    except Exception as e:
+        attention("builder_api._write_settings", e, "设置写盘失败（改动未生效）")
 
 
 def workspace_root() -> str:
@@ -1495,8 +1495,8 @@ def _save_rules(items: list) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(items[-200:], f, ensure_ascii=False, indent=2)
         os.replace(tmp, RULES_PATH)
-    except Exception:
-        pass
+    except Exception as e:
+        attention("builder_api._save_rules", e, "批准记忆写盘失败（未生效）")
 
 
 def list_rules() -> dict:
@@ -1610,8 +1610,8 @@ def _save_approvals(items: list) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(items[-50:], f, ensure_ascii=False, indent=2)
         os.replace(tmp, APPROVALS_PATH)
-    except Exception:
-        pass
+    except Exception as e:
+        attention("builder_api._save_approvals", e, "待确认队列写盘失败（未生效）")
 
 
 def classify_operation(tool: str, args: dict, settings: dict = None) -> dict:
@@ -2473,8 +2473,8 @@ def save_chat_session(state: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(out, f, ensure_ascii=False, indent=2)
         os.replace(tmp, _chat_path(sid))
-    except Exception:
-        pass
+    except Exception as e:
+        attention("builder_api.save_chat_session", e, "会话落盘失败（本轮对话未保存）")
 
 
 def load_chat_session(sid: str) -> dict:
@@ -2648,8 +2648,8 @@ async def run_chat(bridge, session_id: str = "", message: str = "", model: str =
                 def on_delta(kind, text, _r=rnd):
                     try:
                         emit({"type": "delta", "kind": kind, "round": _r, "text": text})
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        degrade("builder_api.run_chat.on_delta", e, "流式增量转发失败")
             assistant = await _chat_with_tools(llm, convo, model=model, think=think,
                                                provider=provider, stream=can_stream,
                                                on_delta=on_delta)

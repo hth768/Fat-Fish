@@ -118,6 +118,10 @@ def main():
 
     settings_store = bootstrap()
 
+    # qq_bot 运行时路径已在 bootstrap() 里加入 sys.path，此刻才能 import 引擎模块。
+    # （模块级 import 会在路径设置之前执行 → ModuleNotFoundError）
+    from quiet import degrade
+
     from bridge.loop import LoopThread
     from bridge.core_bridge import CoreBridge
     from bridge import plugins_api, app_window
@@ -210,16 +214,16 @@ def main():
         print("[APP] 正在停止...")
         try:
             pkg.stop_all_sidecars()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("app.main.shutdown.stop_all_sidecars", e, "停止全部 sidecar 失败")
         try:
             bridge.stop(wait=True)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("app.main.shutdown.bridge_stop", e, "停止核心桥失败")
         try:
             lt.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("app.main.shutdown.lt_stop", e, "停止事件循环失败")
     sys.exit(exit_code)
 
 

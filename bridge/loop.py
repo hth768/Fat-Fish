@@ -3,6 +3,8 @@
 import asyncio
 import threading
 
+from quiet import degrade
+
 
 class LoopThread:
     """后台跑一个常驻 asyncio 事件循环，供 AgentCore / ChatService 使用。"""
@@ -29,8 +31,8 @@ class LoopThread:
         finally:
             try:
                 self.loop.close()
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("loop.LoopThread._run", e, "关闭事件循环失败")
 
     def run_coro(self, coro, timeout: float = 300):
         """在循环线程里执行协程并等结果（HTTP 线程调用）。"""
@@ -49,7 +51,7 @@ class LoopThread:
             return
         try:
             self.loop.call_soon_threadsafe(self.loop.stop)
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("loop.LoopThread.stop", e, "通知事件循环停止失败")
         if self._thread:
             self._thread.join(timeout=5)
