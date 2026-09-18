@@ -51,18 +51,32 @@ plugins/<package_name>/            # 目录名 = 包名（snake_case，唯一）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
+| `schema_version` | int | **manifest 协议版本，当前 `2`**；缺失按 `1` 处理（仅告警）；高于本机支持值会拒绝装载 |
 | `description` | string | 一句话说明 |
 | `author` | string | 作者 |
 | `switch` | string | 对应的 `config.py` 开关名（如 `ENABLE_QQ_PLUGIN`），装载时自动置 `True` |
 | `requires` | array<string> | 依赖的**引擎内建**能力/模块名 |
-| `pkg_requires` | array<string> | 依赖的**其它插件包名**（装载前校验存在） |
+| `pkg_requires` | array<string> | 依赖的**其它插件包名**（装载前校验存在且已启用，缺失则拒绝装载并提示） |
+| `plugin` | string | 在 `core.plugins` / `core.brains` 里的注册键，默认等于 `name` |
 | `group` | string | 归属依赖组（见 `plugins/groups.json`：`core/voice/qq/bilibili/mc/desktop/services`） |
 | `entry` | string | 包装器文件名，默认 `plugin.py` |
 | `sidecar` | object | `{ "script": "相对路径", "host": "127.0.0.1", "port": int }`，仅 `kind=sidecar` 需要 |
-| `optional_requires` | array<string> | 可选依赖；缺失时降级而非报错 |
+| `optional_requires` | array<string> | 可选依赖；缺失只在装载结果里告警（`warnings`），不阻塞 |
+| `builtin` | bool | `true` = 主体内置能力，不可装载/卸载 |
+| `default_on` | bool | 无用户设置时的默认启用状态 |
 | `target` | string | 资源包挂载目标运行时目录（如 `mc_bot`、`models`、`venv_vox`），配合资源包使用 |
+| `config_schema` | array<object> | 扩展设置表单声明（见第 9 节） |
 
-**校验**：包管理器 `load_all()` 会校验 `kind` 合法、`name` 与目录一致；非法/损坏包会被跳过并告警。
+**校验（装载前静态校验，不执行插件代码）**：
+`pkg_manager.validate_manifest()` 检查必填字段、`kind` 合法性、`name` 与目录一致、
+依赖字段类型、`sidecar.script`、`config_schema[].key`、`schema_version` 兼容性，返回**人话错误**：
+
+- **error**（阻止装载）：如 `name（x）与目录名（y）不一致`、`kind 非法：foo`、
+  `侧车包缺少 sidecar.script`、`schema_version=9 高于本机支持的 2`；
+- **warning**（放行但提示）：缺 `title`/`version`/`schema_version`、包装器未提供 `create_*`（装载时才校验）。
+
+manifest 无效的包不会「凭空消失」：会在插件列表里以 `kind: "invalid"` 出现并附 `manifest_errors`，
+便于排障。
 
 ---
 
@@ -120,8 +134,16 @@ def create_brain(core) -> "AgentBrain":
 
 - `manifest.sidecar = {"script": "run.py", "host": "127.0.0.1", "port": 8765}`；
 - 无需 `plugin.py` 包装器。包管理器按 `script`（相对 qq_bot 根目录）用当前解释器 spawn 子进程，
-  负责健康检查与终止（`bridge/sidecar_runner.py` 的 `SidecarProcess`）；
+  负责就绪等待、健康检查与终止（`bridge/sidecar_runner.py` 的 `SidecarProcess`）；
 - 子进程通过本地 RPC（HTTP + asyncio，见 `service_host.py`）与核心通信。
+
+**日志与就绪**（`SidecarProcess`）：
+
+- 子进程的 `stdout`/`stderr` 落盘到 `<qq_bot>/logs/sidecar_<name>.log`（合并流），
+  不再丢弃——之前崩溃时无任何线索；
+- 启动后调用 `wait_ready(timeout=15)` 轮询探测 `host:port` 是否可连接（`port=0` 视为无需探测），
+  避免「进程起来了但服务还没在听」导致的首个请求失败；进程中途退出会记录 `returncode`；
+- `status()` 额外返回 `log`（日志路径）与 `exit_code`；`tail_log(n)` 可取日志尾部用于界面排障。
 
 ### 3.5 `kind: "local"`（本地包）
 自包含实现，不包装 qq_bot 模块，纯资源/脚本型插件。无需 `create_*` 函数。
@@ -156,6 +178,36 @@ def create_brain(core) -> "AgentBrain":
 - `bus.on(event_type, async_handler)` 订阅，`bus.emit(event_type, data)` 发布；
 - 大脑统一事件名 = `"brain.event"`，`data = {"source", "kind", "text", "ts"}`，`kind ∈ help|notice|state`；
 - 平台/功能插件应订阅 `brain.event` 以呈现大脑求助/播报。
+
+### 4.5 向 App 界面推事件（官方通道 `core.app_bridge`）
+
+插件要让**桌面 App 的界面**显示东西（消息、图片、语音、状态），走官方通道：
+
+```python
+def _greet(self):
+    bridge = getattr(self.core, "app_bridge", None)   # App 运行时才有；纯引擎运行时为 None
+    if bridge is None:
+        return                                        # 在 QQ/控制台环境里静默跳过即可
+    bridge.push(session, {"type": "message", "role": "assistant", "text": "你好～"})
+```
+
+- **注入方式**：App 启动构建核心时 `CoreBridge` 会把自身挂到 `core.app_bridge`，插件无需 import 应用层模块、也不必 hack `sys.modules`。
+- **session**：传 `None` = 全局广播（所有订阅者都收到）；传会话 id（如 `"web"`）= 只推给该会话。
+- **线程安全**：`push()` 内部加锁 + `queue.Queue`，可在任意线程 / 协程 / 定时任务里调用。
+- **常用事件 type**：
+
+| type | 关键字段 | 效果 |
+|---|---|---|
+| `message` | `role`(`user`/`assistant`)、`text`、可选 `to`/`to_group` | 聊天流里插一条消息气泡 |
+| `image` | `path` | 渲染本地图片（表情包等） |
+| `audio` | `path` | 渲染/播放音频 |
+| `tts` | `text` | 前端自行合成语音播报 |
+| `status` | `state`（如 `thinking`/`idle`） | 更新界面状态指示 |
+| `error` | `text` | 界面红色提示 |
+
+> 事件会自动带上 `id`（自增，前端去重）与 `ts`。参考实现见 `plugins/greeting_demo/plugin.py`。
+> 反例（**不要**这样写）：`from feiyu_app.bridge.ref import get_bridge` —— 应用层没有对外暴露的
+> bridge 单例，这类写法永远拿不到桥，插件会静默失效。
 
 ---
 

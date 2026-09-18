@@ -137,6 +137,13 @@ def _available_context() -> dict:
 # 文件上下文（让构建助手能读取项目源码，产出更贴合现有代码的产物）
 # ----------------------------------------------------------------------
 CONTEXT_ALLOW_DIRS = ["libs/qq_bot_runtime", "bridge", "webui", "plugins"]
+# 根目录文档：让构建助手能读到协议/说明文档（否则它只能读源码「猜」协议，
+# 曾出现过「README 不在允许根内，协议部分未读到」的自我说明）。
+CONTEXT_ALLOW_FILES = ("README.md", "OVERVIEW.md", "PLUGINS.md", "PLUGIN_PROTOCOL.md",
+                       "requirements.txt")
+# 注意：Windows 下 os.path.normcase 会把路径**小写化**，比对文件名必须忽略大小写，
+# 否则 normcase 后的 "plugins.md" 永远匹配不到 "PLUGINS.md"。
+_CONTEXT_ALLOW_FILES_LC = {f.lower() for f in CONTEXT_ALLOW_FILES}
 CONTEXT_SKIP_DIRS = {"__pycache__", "node_modules", ".git", "data", "runtime",
                      "Lib", "Scripts", "venv", "venv_vox", "dist"}
 MAX_CONTEXT_FILE_BYTES = 48000
@@ -153,6 +160,8 @@ def _is_allowed_context_path(abspath: str) -> bool:
         return False
     if is_custom_workspace():
         return True
+    if rel.lower() in _CONTEXT_ALLOW_FILES_LC:
+        return True
     return any(rel == d or rel.startswith(d + "/") for d in CONTEXT_ALLOW_DIRS)
 
 
@@ -162,6 +171,7 @@ def list_context_files() -> dict:
     root = workspace_root()
     custom = is_custom_workspace()
     bases = [root] if custom else [os.path.join(root, d) for d in CONTEXT_ALLOW_DIRS]
+    seen = set()
     try:
         for base in bases:
             if not os.path.isdir(base):
@@ -181,7 +191,20 @@ def list_context_files() -> dict:
                         rel = os.path.relpath(fp, root).replace(os.sep, "/")
                         if any(p in _WORKSPACE_DENY for p in rel.split("/")):
                             continue
+                        if rel in seen:
+                            continue
+                        seen.add(rel)
                         out.append({"path": rel, "size": sz})
+        # 根目录文档（README / PLUGINS 等）：协议与说明，便于产出贴合文档约定
+        for fn in CONTEXT_ALLOW_FILES:
+            fp = os.path.join(root, fn)
+            if not os.path.isfile(fp) or fn in seen:
+                continue
+            try:
+                out.append({"path": fn, "size": os.path.getsize(fp)})
+                seen.add(fn)
+            except OSError:
+                continue
     except Exception:
         pass
     out.sort(key=lambda x: x["path"])

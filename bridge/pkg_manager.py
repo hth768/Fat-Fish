@@ -21,6 +21,12 @@ import sys
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE_DIR = os.path.join(APP_DIR, "plugins")
 
+# manifest 协议版本：新增/改变字段语义时 +1。
+# 缺失按 1 处理（兼容老包），仅告警不阻塞装载；高于当前版本则拒绝（避免按旧规则理解新包）。
+MANIFEST_SCHEMA_VERSION = 2
+VALID_KINDS = ("platform", "feature", "brain", "sidecar", "local")
+_KIND_NEEDS_CREATE = ("platform", "feature", "brain", "local")   # local 也走 create_plugin
+
 try:
     from .sidecar_runner import SidecarProcess
 except ImportError:
@@ -62,15 +68,103 @@ def _manifest_path(pkg_dir: str) -> str:
     return os.path.join(pkg_dir, "manifest.json")
 
 
-def read_manifest(pkg_dir: str) -> dict:
+def validate_manifest(meta: dict, pkg_dir: str = "") -> tuple:
+    """静态校验 manifest（不执行插件代码），返回 (errors, warnings) 两个「人话」列表。
+
+    覆盖：必填字段 / kind 合法 / 包名与目录一致 / 依赖字段类型 / sidecar 必需字段 /
+    config_schema 结构 / schema_version 兼容性。装载前校验，避免「字段写错被静默忽略」。
+    """
+    errors, warns = [], []
+    if not isinstance(meta, dict):
+        return ["manifest.json 顶层必须是 JSON 对象"], []
+    name = str(meta.get("name") or "").strip()
+    if not name:
+        errors.append("缺少必填字段 name")
+    elif pkg_dir:
+        dirname = os.path.basename(os.path.normpath(pkg_dir))
+        if dirname != name:
+            errors.append(f"name（{name}）与目录名（{dirname}）不一致")
+    if not str(meta.get("title") or "").strip():
+        warns.append("建议补充 title（展示名）")
+    if not str(meta.get("version") or "").strip():
+        warns.append("建议补充 version（semver，如 1.0.0）")
+
+    kind = str(meta.get("kind") or "").strip().lower()
+    if not kind:
+        errors.append("缺少必填字段 kind")
+    elif kind not in VALID_KINDS:
+        errors.append(f"kind 非法：{kind}（应为 {'/'.join(VALID_KINDS)} 之一）")
+
+    sv = meta.get("schema_version")
+    if sv is None:
+        warns.append(f"建议补 schema_version（当前协议版本 {MANIFEST_SCHEMA_VERSION}）；"
+                     "缺失按 1 处理")
+    else:
+        try:
+            sv_i = int(sv)
+            if sv_i > MANIFEST_SCHEMA_VERSION:
+                errors.append(f"schema_version={sv_i} 高于本机支持的 {MANIFEST_SCHEMA_VERSION}，"
+                              "请升级 App 或改用兼容写法")
+        except Exception:
+            errors.append(f"schema_version 必须是整数，实得：{sv!r}")
+
+    for key in ("requires", "optional_requires", "pkg_requires"):
+        v = meta.get(key)
+        if v is None:
+            continue
+        if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
+            errors.append(f"{key} 必须是字符串数组，实得：{type(v).__name__}")
+
+    if kind == "sidecar":
+        sc = meta.get("sidecar")
+        if not isinstance(sc, dict):
+            errors.append("kind=sidecar 必须提供 sidecar 对象（script/host/port）")
+        elif not str(sc.get("script") or "").strip():
+            errors.append("sidecar.script 必填（相对 qq_bot 根目录的启动脚本）")
+    elif kind in _KIND_NEEDS_CREATE:
+        entry = str(meta.get("entry") or "plugin.py")
+        if pkg_dir and not os.path.isfile(os.path.join(pkg_dir, entry)):
+            errors.append(f"kind={kind} 需要包装器 {entry}（缺失）")
+        # 注：create_plugin / create_brain 是否存在留到装载时校验（需执行代码才能确定），
+        # 这里不再告警，否则每个正常包都会收到一条无用的提示。
+
+    schema = meta.get("config_schema")
+    if schema is not None:
+        if not isinstance(schema, list):
+            errors.append("config_schema 必须是数组")
+        else:
+            for i, f in enumerate(schema):
+                if not isinstance(f, dict) or not str(f.get("key") or "").strip():
+                    errors.append(f"config_schema[{i}] 缺少 key")
+    return errors, warns
+
+
+def load_manifest(pkg_dir: str) -> tuple:
+    """读取 + 校验 manifest，返回 (meta, errors, warnings)。
+
+    读取失败时 meta 为 None 并给出原因（不再静默返回 None 让插件「凭空消失」）。
+    """
+    path = _manifest_path(pkg_dir)
+    if not os.path.isfile(path):
+        return None, [f"缺少 manifest.json（{path}）"], []
     try:
-        with open(_manifest_path(pkg_dir), "r", encoding="utf-8") as f:
-            m = json.load(f)
-        if isinstance(m, dict) and m.get("name"):
-            return m
-    except Exception:
-        pass
-    return None
+        with open(path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except json.JSONDecodeError as e:
+        return None, [f"manifest.json 不是合法 JSON：{e}"], []
+    except Exception as e:
+        return None, [f"manifest.json 读取失败：{e!r}"], []
+    errors, warns = validate_manifest(meta, pkg_dir)
+    return meta, errors, warns
+
+
+def read_manifest(pkg_dir: str) -> dict:
+    """兼容旧调用：只取 meta（校验结果请用 load_manifest）。"""
+    meta, errors, _warns = load_manifest(pkg_dir)
+    if errors:
+        print(f"[PKG][WARN] {os.path.basename(os.path.normpath(pkg_dir))} manifest 有问题: "
+              + "；".join(errors))
+    return meta
 
 
 def scan_packages() -> list:
@@ -83,10 +177,23 @@ def scan_packages() -> list:
         pkg_dir = os.path.join(PACKAGE_DIR, fn)
         if not os.path.isdir(pkg_dir) or fn.startswith(("_", ".")):
             continue
-        meta = read_manifest(pkg_dir)
-        if not meta:
+        meta, errors, warns = load_manifest(pkg_dir)
+        if meta is None or errors:
+            # 不再静默跳过：坏 JSON / 缺字段 / 校验不过的包，以「问题包」形式列出便于排障。
+            # （name 可能缺失或与目录名不一致，统一用目录名做键，避免 KeyError）
+            out.append({
+                "name": fn, "title": fn, "kind": "invalid", "version": "",
+                "description": "manifest 有问题，无法装载", "switch": "",
+                "plugin_key": fn, "requires": [], "optional_requires": [],
+                "pkg_requires": [], "sidecar": None, "builtin": False,
+                "dir": pkg_dir.replace("\\", "/"), "enabled": False,
+                "manifest_errors": errors or ["manifest 无效"], "manifest_warnings": warns,
+            })
+            print(f"[PKG][WARN] {fn} manifest 无效: " + "；".join(errors or ["manifest 无效"]))
             continue
         name = meta["name"]
+        if warns:
+            print(f"[PKG][WARN] {name} manifest 提醒: " + "；".join(warns))
         out.append({
             "name": name,
             "title": meta.get("title", name),
@@ -97,10 +204,12 @@ def scan_packages() -> list:
             "plugin_key": meta.get("plugin", name),      # 在 core.plugins/brains 里的键
             "requires": list(meta.get("requires") or []),
             "optional_requires": list(meta.get("optional_requires") or []),
+            "pkg_requires": list(meta.get("pkg_requires") or []),   # 依赖的其它插件包
             "sidecar": meta.get("sidecar"),               # sidecar 包: {script,host,port}
             "builtin": bool(meta.get("builtin")),         # True=主体内置，不可卸载
             "dir": pkg_dir.replace("\\", "/"),
             "enabled": bool(enabled.get(name, meta.get("default_on", False))),
+            "manifest_errors": errors, "manifest_warnings": warns,
         })
     return out
 
@@ -112,12 +221,31 @@ def get_package(name: str):
     return None
 
 
+def _mod_name(name: str) -> str:
+    return f"feiyu_pkg_{name}"
+
+
+def purge_wrapper_modules(name: str) -> list:
+    """清掉包装器在 sys.modules 里的残留（含其子模块），保证可重装 / 热重载干净。
+
+    卸载与重装前都要调用：否则同名重装会沿用旧模块对象（旧状态、旧闭包），
+    表现为「改了 plugin.py 但行为没变」。
+    """
+    prefix = _mod_name(name)
+    removed = [k for k in list(sys.modules) if k == prefix or k.startswith(prefix + ".")]
+    for k in removed:
+        sys.modules.pop(k, None)
+    return removed
+
+
 def _load_wrapper(pkg_dir: str, name: str):
     """执行包装器 plugin.py（惰性：只有装载时才 import qq_bot 重模块）。"""
     path = os.path.join(pkg_dir, "plugin.py")
     if not os.path.isfile(path):
         raise FileNotFoundError(f"包装器缺失: {path}")
-    spec = importlib.util.spec_from_file_location(f"feiyu_pkg_{name}", path)
+    # 重装/热重载：先清掉上一次的模块残留，避免复用旧模块对象
+    purge_wrapper_modules(name)
+    spec = importlib.util.spec_from_file_location(_mod_name(name), path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
@@ -137,6 +265,7 @@ class PackageManager:
 
     # ---- 依赖 ----
     def missing_deps(self, meta: dict) -> list:
+        """硬依赖缺失项：requires（引擎内建能力）+ pkg_requires（其它插件包）。"""
         enabled = _enabled_map()
         missing = []
         for dep in (meta.get("requires") or []):
@@ -145,7 +274,26 @@ class PackageManager:
                 missing.append(f"{dep}(不存在)")
             elif not enabled.get(dep, dep_pkg.get("default_on", False)):
                 missing.append(dep)
+        # pkg_requires：PLUGINS.md 协议里声明过的字段，之前未实现（文档与实现漂移）
+        for dep in (meta.get("pkg_requires") or []):
+            dep_pkg = get_package(dep)
+            if dep_pkg is None:
+                missing.append(f"{dep}(插件包不存在)")
+            elif not enabled.get(dep, dep_pkg.get("default_on", False)):
+                missing.append(f"{dep}(插件包未启用)")
         return missing
+
+    def soft_deps(self, meta: dict) -> list:
+        """软依赖（optional_requires）：缺失只告警，不阻塞装载。"""
+        enabled = _enabled_map()
+        out = []
+        for dep in (meta.get("optional_requires") or []):
+            dep_pkg = get_package(dep)
+            if dep_pkg is None:
+                out.append(f"{dep}(不存在)")
+            elif not enabled.get(dep, dep_pkg.get("default_on", False)):
+                out.append(f"{dep}(未启用)")
+        return out
 
     # ---- 装载 ----
     def load(self, name: str) -> dict:
@@ -154,6 +302,10 @@ class PackageManager:
             return {"ok": False, "error": f"插件包不存在: {name}"}
         if meta["builtin"]:
             return {"ok": False, "error": f"{name} 是主体内置能力，不可作为插件装载"}
+        merr = meta.get("manifest_errors") or []
+        if merr:
+            return {"ok": False,
+                    "error": "manifest 校验未通过（请先修正）：" + "；".join(merr)}
         if meta["kind"] == "sidecar":
             return self._load_sidecar(meta)
 
@@ -181,8 +333,16 @@ class PackageManager:
             except Exception:
                 pass
             _set_enabled(name, True)
-            return {"ok": True, "applied": True, "hint": "已装载" }
+            out = {"ok": True, "applied": True, "hint": "已装载"}
+            soft = self.soft_deps(meta)
+            if soft:
+                out["warnings"] = [f"可选依赖缺失（不影响装载）: {', '.join(soft)}"]
+                print(f"[PKG][WARN] {name} 可选依赖缺失: {', '.join(soft)}")
+            return out
         except Exception as e:
+            # 装载失败要清掉半装载的模块残留，避免下次重装复用坏状态
+            purge_wrapper_modules(name)
+            self._loaded.pop(name, None)
             return {"ok": False, "error": f"装载失败: {e!r}"}
 
     def _load_sidecar(self, meta: dict) -> dict:
@@ -193,6 +353,8 @@ class PackageManager:
                             port=sc_cfg.get("port", 0))
         r = sc.start()
         if r.get("ok"):
+            # 端口就绪等待：避免「进程起来了但服务还没在听」，调用方立刻请求会失败
+            r["ready"] = sc.wait_ready()
             _set_switch(meta["switch"], True) if meta.get("switch") else None
             _set_enabled(meta["name"], True)
             self._sidecars[meta["name"]] = sc
@@ -231,10 +393,18 @@ class PackageManager:
                 _set_switch(meta["switch"], False)
         except Exception as e:
             _set_enabled(name, False)
+            self._loaded.pop(name, None)
+            purge_wrapper_modules(name)
             return {"ok": True, "applied": False, "error": f"卸载时异常(已记为停用): {e!r}"}
         _set_enabled(name, False)
         self._loaded.pop(name, None)
-        return {"ok": True, "applied": True}
+        # 清掉 sys.modules 里的包装器模块（含子模块）：否则同名重装会沿用旧模块对象，
+        # 表现为「改了 plugin.py 但行为没变」。
+        removed = purge_wrapper_modules(name)
+        out = {"ok": True, "applied": True}
+        if removed:
+            out["purged_modules"] = removed
+        return out
 
     # ---- 核心构建期：预注册已启用的插件/大脑包（core.start 之前调用）----
     def attach_to(self, core) -> list:

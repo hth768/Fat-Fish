@@ -58,6 +58,16 @@ class CoreBridge:
         import plugin_registry as reg
         from agent_core import get_core
         core = get_core()
+        # 官方 UI 事件通道：把本桥接挂到 core 上，插件（含第三方插件包）可以
+        #   bridge = getattr(core, "app_bridge", None)
+        #   if bridge: bridge.push(session, {"type": "message", "role": "assistant", "text": ...})
+        # 在 App 里插件没有其它官方途径访问 UI（Plugin.__init__ 只拿到 core），
+        # 挂在 core 上避免插件各自 hack sys.modules / 私接内部对象。
+        # push 是线程安全的（内部加锁 + queue），可在任意线程/协程调用。
+        try:
+            core.app_bridge = self
+        except Exception as e:
+            print(f"[APP][WARN] 注入 app_bridge 失败: {e!r}")
         saved = {}
         for s in reg.by_kind("feature"):
             if s.switch:

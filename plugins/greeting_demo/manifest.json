@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "name": "greeting_demo",
+  "title": "定时问候（示例包）",
+  "kind": "local",
+  "version": "1.0.0",
+  "description": "自包含的本地插件示例：每 10 分钟往 App 事件流推一条问候。演示两件事：① 插件逻辑全在本包 plugin.py 内、不 import 任何 qq_bot 模块；② 通过官方通道 core.app_bridge 向界面推事件。",
+  "switch": "",
+  "plugin": "greeting_demo",
+  "config_schema": [
+    {
+      "key": "interval_seconds",
+      "label": "问候间隔（秒）",
+      "type": "int",
+      "min": 10,
+      "max": 86400,
+      "default": 600,
+      "desc": "默认 600 秒（10 分钟）"
+    },
+    {
+      "key": "text",
+      "label": "问候语模板",
+      "type": "str",
+      "default": "（示例插件）第 {n} 次问候：主人还记得喝水吗～",
+      "desc": "可用 {n} 占位当前次数"
+    }
+  ]
+}
