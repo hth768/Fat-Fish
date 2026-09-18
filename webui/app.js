@@ -1111,7 +1111,7 @@ $("#btnResetTitle").addEventListener("click", () => {
 });
 
 /* ---------------- 构建助手（内置 Agent：生成智能体/插件的产物） ---------------- */
-const builder = { mode: "agent", last: null };
+const builder = { mode: "agent", last: null, contextPaths: [], improve: null };
 
 function _bldModelSel() {
   const val = $("#bldModel").value;
@@ -1158,6 +1158,8 @@ async function loadBuilder() {
   const savedThink = localStorage.getItem("bld_think");
   if (savedThink) $("#bldThink").value = savedThink;
   _bldToggleCustomModel();
+  _bldRefreshFiles();
+  _bldRefreshHistory();
 }
 
 function _bldModeSwitch(mode) {
@@ -1170,6 +1172,8 @@ function _bldModeSwitch(mode) {
     ? "例如：「一个定时提醒插件，按 config_schema 让用户填提醒间隔（分钟）和提醒语」"
     : "例如：「一个毒舌但心软的猫娘客服，负责回答产品问题，绑定我的 QQ 私聊」";
   $("#bldInput").placeholder = isP ? "描述你要的插件功能…" : "描述你要的智能体…";
+  builder.improve = null;
+  $("#bldGen").textContent = "生成";
 }
 
 function _bldShowResult(data) {
@@ -1190,17 +1194,29 @@ async function _bldGenerate() {
   const req = $("#bldInput").value.trim();
   if (!req) return toast("先描述一下需求", true);
   const btn = $("#bldGen");
-  btn.disabled = true; btn.textContent = "生成中…（LLM 约 10-30s）";
+  btn.disabled = true;
+  btn.textContent = builder.improve ? "改进中…（LLM 约 10-30s）" : "生成中…（LLM 约 10-30s）";
   $("#bldStatus").textContent = "";
+  const ctxPaths = builder.contextPaths.slice();
+  const useHistory = $("#bldUseHistory").checked;
   try {
     const msel = _bldModelSel();
     localStorage.setItem("bld_model", msel.provider || msel.model);
     localStorage.setItem("bld_think", msel.think);
     let r;
-    if (builder.mode === "agent") {
-      r = await POST("/api/builder/agent/generate", { requirement: req, model: msel.model, think: msel.think, provider: msel.provider });
+    if (builder.improve) {
+      const body = { instruction: req, model: msel.model, think: msel.think, provider: msel.provider, context_paths: ctxPaths, use_history: useHistory };
+      if (builder.improve.mode === "agent") {
+        body.id = builder.improve.key;
+        r = await POST("/api/builder/agent/improve", body);
+      } else {
+        body.name = builder.improve.key;
+        r = await POST("/api/builder/plugin/improve", body);
+      }
+    } else if (builder.mode === "agent") {
+      r = await POST("/api/builder/agent/generate", { requirement: req, model: msel.model, think: msel.think, provider: msel.provider, context_paths: ctxPaths, use_history: useHistory });
     } else {
-      r = await POST("/api/builder/plugin/generate", { requirement: req, kind: $("#bldKind").value, model: msel.model, think: msel.think, provider: msel.provider });
+      r = await POST("/api/builder/plugin/generate", { requirement: req, kind: $("#bldKind").value, model: msel.model, think: msel.think, provider: msel.provider, context_paths: ctxPaths, use_history: useHistory });
     }
     if (!r.ok) throw new Error(r.error || "生成失败");
     builder.last = r.data;
@@ -1209,12 +1225,21 @@ async function _bldGenerate() {
     $("#bldValidate").textContent = rounds > 1
       ? "✓ 已通过系统干加载校验（" + rounds + " 轮自校正后通过）"
       : "✓ 已通过系统干加载校验（编译→导入→实例化→契约检查）";
-    toast("已生成，可编辑后保存");
+    if (builder.improve) {
+      toast("已生成改进版，可编辑后保存覆盖");
+      builder.improve = null;
+      $("#bldGen").textContent = "生成";
+    } else {
+      toast("已生成，可编辑后保存");
+    }
+    _bldRefreshHistory();
   } catch (e) {
     toast(e.message, true);
     $("#bldStatus").textContent = e.message;
   } finally {
-    btn.disabled = false; btn.textContent = "生成";
+    btn.disabled = false;
+    if (builder.improve) btn.textContent = "改进生成";
+    else btn.textContent = "生成";
   }
 }
 
@@ -1259,6 +1284,145 @@ async function _bldCopy() {
   catch { toast("复制失败，请手动选择", true); }
 }
 
+// ---- 参考文件：让构建助手读取项目源码 ----
+async function _bldRefreshFiles() {
+  const stat = $("#bldFilesStat");
+  stat.textContent = "加载中…";
+  try {
+    const r = await GET("/api/builder/files");
+    if (!r.ok) throw new Error(r.error || "列表获取失败");
+    _bldRenderFiles(r.files || []);
+    stat.textContent = "共 " + (r.files || []).length + " 个可参考文件，已选 " + builder.contextPaths.length + " 个";
+  } catch (e) {
+    stat.textContent = "加载失败: " + e.message;
+  }
+}
+
+function _bldRenderFiles(files) {
+  const box = $("#bldFiles");
+  box.innerHTML = "";
+  const sel = new Set(builder.contextPaths);
+  files.forEach(f => {
+    const label = document.createElement("label");
+    label.className = "ctx-file";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = sel.has(f.path);
+    cb.dataset.path = f.path;
+    label.appendChild(cb);
+    const span = document.createElement("span");
+    span.className = "ctx-path";
+    span.textContent = f.path;
+    label.appendChild(span);
+    const sz = document.createElement("span");
+    sz.className = "ctx-size";
+    sz.textContent = _fmtSize(f.size);
+    label.appendChild(sz);
+    box.appendChild(label);
+  });
+  box.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener("change", () => {
+      const p = cb.dataset.path;
+      if (cb.checked) { if (builder.contextPaths.indexOf(p) < 0) builder.contextPaths.push(p); }
+      else builder.contextPaths = builder.contextPaths.filter(x => x !== p);
+      $("#bldFilesStat").textContent = "已选 " + builder.contextPaths.length + " 个";
+    });
+  });
+}
+
+// ---- 构建历史：持久化文件，可改进已有产物 ----
+async function _bldRefreshHistory() {
+  const stat = $("#bldHistoryStat");
+  stat.textContent = "加载中…";
+  try {
+    const r = await GET("/api/builder/history");
+    if (!r.ok) throw new Error(r.error || "历史获取失败");
+    _bldRenderHistory(r.history || []);
+    stat.textContent = "共 " + (r.history || []).length + " 条";
+  } catch (e) {
+    stat.textContent = "加载失败: " + e.message;
+  }
+}
+
+function _bldRenderHistory(list) {
+  const box = $("#bldHistory");
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = '<div class="hint wrap">暂无构建历史。生成或保存产物后会自动记录到 data/builder_history.jsonl。</div>';
+    return;
+  }
+  list.forEach((rec, idx) => {
+    const item = document.createElement("div");
+    item.className = "hist-item";
+    const meta = document.createElement("div");
+    meta.className = "hist-meta";
+    const modeBadge = rec.mode === "plugin" ? "插件" : "智能体";
+    const status = rec.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>';
+    meta.innerHTML = '<span class="hist-mode">' + modeBadge + "</span>" + status +
+      ' <span class="hint">' + _fmtTime(rec.time) + " · " + (rec.event || "") + " · " + (rec.rounds || 1) + " 轮</span>";
+    item.appendChild(meta);
+    const req = document.createElement("div");
+    req.className = "hist-req";
+    req.textContent = rec.requirement || "(无需求描述)";
+    item.appendChild(req);
+    if (rec.key) {
+      const actions = document.createElement("div");
+      actions.className = "row-actions";
+      const btnImprove = document.createElement("button");
+      btnImprove.className = "btn ghost sm";
+      btnImprove.textContent = "改进";
+      btnImprove.dataset.action = "improve";
+      btnImprove.dataset.idx = idx;
+      actions.appendChild(btnImprove);
+      const btnLoad = document.createElement("button");
+      btnLoad.className = "btn ghost sm";
+      btnLoad.textContent = "载入";
+      btnLoad.dataset.action = "load";
+      btnLoad.dataset.idx = idx;
+      actions.appendChild(btnLoad);
+      item.appendChild(actions);
+    }
+    box.appendChild(item);
+  });
+  box.querySelectorAll("button[data-action]").forEach(b => {
+    b.addEventListener("click", () => {
+      const rec = list[parseInt(b.dataset.idx, 10)];
+      if (!rec) return;
+      if (b.dataset.action === "improve") _bldStartImprove(rec);
+      else _bldLoadFromHistory(rec);
+    });
+  });
+}
+
+function _bldLoadFromHistory(rec) {
+  if (!rec.artifact) return toast("该记录无可载入的产物", true);
+  _bldModeSwitch(rec.mode);
+  _bldShowResult(rec.artifact);
+  toast("已载入历史产物（" + rec.mode + "）");
+}
+
+function _bldStartImprove(rec) {
+  if (!rec.key) return toast("该记录无可改进的产物", true);
+  builder.improve = { mode: rec.mode, key: rec.key, requirement: rec.requirement };
+  _bldModeSwitch(rec.mode);
+  $("#bldInput").value = "改进：" + (rec.requirement || rec.key);
+  $("#bldGen").textContent = "改进生成";
+  toast("已进入改进模式，填写改进要求后点「改进生成」");
+}
+
+function _fmtTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const p = n => (n < 10 ? "0" : "") + n;
+  return (d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+
+function _fmtSize(b) {
+  if (b < 1024) return b + "B";
+  if (b < 1048576) return (b / 1024).toFixed(1) + "KB";
+  return (b / 1048576).toFixed(1) + "MB";
+}
+
 /* ---------------- 启动 ---------------- */
 window.addEventListener("DOMContentLoaded", async () => {
   connectSSE();
@@ -1284,6 +1448,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#bldGen").addEventListener("click", _bldGenerate);
   $("#bldSave").addEventListener("click", _bldSave);
   $("#bldCopy").addEventListener("click", _bldCopy);
+  $("#bldRefreshFiles").addEventListener("click", _bldRefreshFiles);
+  $("#bldRefreshHistory").addEventListener("click", _bldRefreshHistory);
   _bldModeSwitch("agent");
 
   // ===== 记忆：导入 / 导出 =====

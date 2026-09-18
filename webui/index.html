@@ -383,6 +383,20 @@
       </div>
 
       <div class="panel">
+        <div class="panel-title">参考文件（让构建助手读取项目源码，产出更贴合）</div>
+        <div class="hint wrap" style="margin-bottom:8px">勾选需要作为上下文的文件，生成 / 改进时会读入其内容。文件越贴合需求，产物越契合现有代码风格与契约。</div>
+        <div class="row-actions">
+          <button class="btn ghost" id="bldRefreshFiles">刷新文件列表</button>
+          <span class="hint" id="bldFilesStat"></span>
+        </div>
+        <div id="bldFiles" class="ctx-files"></div>
+        <label class="cfg-field" style="margin-top:8px;display:inline-flex">
+          <input type="checkbox" id="bldUseHistory" checked>
+          <span class="cfg-label">参考历史成功案例作为改进范例</span>
+        </label>
+      </div>
+
+      <div class="panel">
         <div class="panel-title">智能体接入</div>
         <div class="hint wrap" style="margin-bottom:10px">除一句话生成外，也可导入本地智能体配置（agent.json），或接入外部 API 智能体（OpenAI 兼容端点）。</div>
         <div class="row-actions">
@@ -432,6 +446,15 @@
           <button class="btn ghost" id="bldCopy">复制</button>
           <span class="hint" id="bldSaveMsg"></span>
         </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title">构建历史（持久化文件，可改进已有产物）</div>
+        <div class="row-actions">
+          <button class="btn ghost" id="bldRefreshHistory">刷新历史</button>
+          <span class="hint" id="bldHistoryStat"></span>
+        </div>
+        <div id="bldHistory" class="history-list"></div>
       </div>
     </section>
   </main>

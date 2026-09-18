@@ -132,6 +132,191 @@ def _available_context() -> dict:
 
 
 # ----------------------------------------------------------------------
+# 文件上下文（让构建助手能读取项目源码，产出更贴合现有代码的产物）
+# ----------------------------------------------------------------------
+CONTEXT_ALLOW_DIRS = ["libs/qq_bot_runtime", "bridge", "webui", "plugins"]
+CONTEXT_SKIP_DIRS = {"__pycache__", "node_modules", ".git", "data", "runtime",
+                     "Lib", "Scripts", "venv", "venv_vox", "dist"}
+MAX_CONTEXT_FILE_BYTES = 48000
+MAX_CONTEXT_FILES = 150
+
+
+def _is_allowed_context_path(abspath: str) -> bool:
+    ap = os.path.normcase(os.path.abspath(abspath))
+    root = os.path.normcase(os.path.abspath(APP_DIR))
+    if ap != root and not ap.startswith(root + os.sep):
+        return False
+    rel = os.path.relpath(ap, root).replace(os.sep, "/")
+    return any(rel == d or rel.startswith(d + "/") for d in CONTEXT_ALLOW_DIRS)
+
+
+def list_context_files() -> dict:
+    """列出可作为上下文读取的项目源码文件（安全白名单 + 大小限制）。"""
+    out = []
+    try:
+        for d in CONTEXT_ALLOW_DIRS:
+            base = os.path.join(APP_DIR, d)
+            if not os.path.isdir(base):
+                continue
+            for dirpath, dirnames, filenames in os.walk(base):
+                dirnames[:] = [n for n in dirnames if n not in CONTEXT_SKIP_DIRS]
+                for fn in filenames:
+                    if fn.endswith((".py", ".json")) and not fn.endswith(".tmp"):
+                        fp = os.path.join(dirpath, fn)
+                        try:
+                            sz = os.path.getsize(fp)
+                        except OSError:
+                            continue
+                        if sz > MAX_CONTEXT_FILE_BYTES:
+                            continue
+                        rel = os.path.relpath(fp, APP_DIR).replace(os.sep, "/")
+                        out.append({"path": rel, "size": sz})
+    except Exception:
+        pass
+    out.sort(key=lambda x: x["path"])
+    return {"ok": True, "files": out[:MAX_CONTEXT_FILES]}
+
+
+def read_context_file(rel: str) -> dict:
+    """读取单个上下文文件内容（带越权 / 大小保护）。"""
+    if not rel or not isinstance(rel, str):
+        return {"ok": False, "error": "路径为空"}
+    fp = os.path.normpath(os.path.join(APP_DIR, rel))
+    if not _is_allowed_context_path(fp):
+        return {"ok": False, "error": "路径不在允许范围内: %s" % rel}
+    if not os.path.isfile(fp):
+        return {"ok": False, "error": "文件不存在: %s" % rel}
+    try:
+        with open(fp, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(MAX_CONTEXT_FILE_BYTES)
+    except Exception as e:
+        return {"ok": False, "error": "读取失败: %r" % e}
+    return {"ok": True, "path": rel, "content": content, "size": os.path.getsize(fp)}
+
+
+def _context_block(rels) -> str:
+    """把选中的文件拼成提示词上下文块。"""
+    if not rels:
+        return ""
+    parts = []
+    for rel in rels:
+        if not isinstance(rel, str) or not rel.strip():
+            continue
+        r = read_context_file(rel.strip())
+        if r.get("ok"):
+            parts.append("### 参考文件：%s\n```\n%s\n```" % (r["path"], r.get("content", "")))
+    if not parts:
+        return ""
+    return ("\n\n#### 项目上下文（供参考，产出请贴合现有代码风格 / 契约）\n"
+            + "\n\n".join(parts) + "\n")
+
+
+# ----------------------------------------------------------------------
+# 构建历史（持久化为文件，支持「改进」复用历史成功案例）
+# ----------------------------------------------------------------------
+DATA_DIR = os.path.join(APP_DIR, "data")
+HISTORY_PATH = os.path.join(DATA_DIR, "builder_history.jsonl")
+MAX_HISTORY_LINES = 500
+
+
+def _record_history(event, mode, requirement, ok, artifact, rounds=1,
+                    model=None, provider=None, key=None, error=None):
+    """写入一条构建历史（追加到 jsonl 文件）。"""
+    rec = {
+        "event": event, "mode": mode, "requirement": requirement, "ok": ok,
+        "rounds": rounds, "model": model, "provider": provider, "key": key,
+    }
+    if artifact is not None:
+        try:
+            s = json.dumps(artifact, ensure_ascii=False)
+            if len(s) > 6000:
+                s = s[:6000] + " …(已截断)"
+            rec["artifact"] = json.loads(s)
+        except Exception:
+            rec["artifact"] = None
+    if error:
+        rec["error"] = str(error)[:500]
+    append_history(rec)
+
+
+def append_history(rec: dict):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        rec = dict(rec)
+        rec.setdefault("time", int(time.time()))
+        with open(HISTORY_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        _trim_history()
+    except Exception:
+        pass
+
+
+def _trim_history():
+    try:
+        if not os.path.isfile(HISTORY_PATH):
+            return
+        with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        if len(lines) <= MAX_HISTORY_LINES:
+            return
+        with open(HISTORY_PATH, "w", encoding="utf-8") as f:
+            f.writelines(lines[-MAX_HISTORY_LINES:])
+    except Exception:
+        pass
+
+
+def get_history(limit: int = 60) -> dict:
+    out = []
+    try:
+        if os.path.isfile(HISTORY_PATH):
+            with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        out.append(json.loads(line))
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+    out.reverse()
+    return {"ok": True, "history": out[:limit]}
+
+
+def _history_block(mode: str, exclude_key: str = None) -> str:
+    """取最近 2 条同类型成功案例作为 few-shot 改进范例。"""
+    try:
+        hist = get_history(limit=200)["history"]
+    except Exception:
+        return ""
+    ex = []
+    for rec in hist:
+        if rec.get("mode") != mode or not rec.get("ok"):
+            continue
+        if exclude_key and rec.get("key") == exclude_key:
+            continue
+        art = rec.get("artifact")
+        if not art:
+            continue
+        ex.append((rec.get("requirement", ""), art))
+        if len(ex) >= 2:
+            break
+    if not ex:
+        return ""
+    lines = ["\n#### 历史成功案例（可作为风格 / 契约参考，产出请优于它们）"]
+    for req, art in ex:
+        try:
+            art_s = json.dumps(art, ensure_ascii=False) if not isinstance(art, str) else art
+        except Exception:
+            art_s = str(art)
+        if len(art_s) > 3500:
+            art_s = art_s[:3500] + " …(已截断)"
+        lines.append("- 需求：%s\n  产物：%s" % (req, art_s))
+    return "\n".join(lines) + "\n"
+
+
+# ----------------------------------------------------------------------
 # LLM 调用
 # ----------------------------------------------------------------------
 async def _llm_json(system: str, user: str, model: str = None, think: bool = False,
@@ -367,18 +552,22 @@ def _dry_load_plugin(code: str, kind: str, name: str):
 # 生成（异步）
 # ----------------------------------------------------------------------
 async def generate_agent(requirement: str, max_rounds: int = 2, model: str = None,
-                      think: bool = False, provider: str = None) -> dict:
+                      think: bool = False, provider: str = None,
+                      context_paths: list = None, use_history: bool = False) -> dict:
     ctx = _available_context()
+    extra = _context_block(context_paths)
+    if use_history:
+        extra += _history_block("agent")
     base_user = (
-        "可用大脑: %s\n可用插件: %s\n\n需求: %s"
-        % (ctx["brains"], [p["name"] for p in ctx["plugins"]], requirement)
+        "可用大脑: %s\n可用插件: %s\n\n需求: %s%s"
+        % (ctx["brains"], [p["name"] for p in ctx["plugins"]], requirement, extra)
     )
     last_err = ""
     last_raw = None
     for i in range(max_rounds):
         user = base_user if i == 0 else (
-            "上一版 JSON 未能通过校验，错误：%s\n请修正后重新输出完整 JSON。需求不变：%s"
-            % (last_err, requirement)
+            "上一版 JSON 未能通过校验，错误：%s\n请修正后重新输出完整 JSON。需求不变：%s%s"
+            % (last_err, requirement, extra)
         )
         try:
             data = await _llm_json(AGENT_SYSTEM, user, model=model, think=think, provider=provider)
@@ -389,26 +578,34 @@ async def generate_agent(requirement: str, max_rounds: int = 2, model: str = Non
         if err:
             last_err = err
             continue
+        _record_history("generate", "agent", requirement, True, norm,
+                        rounds=i + 1, model=model, provider=provider)
         return {"ok": True, "mode": "agent", "data": norm, "rounds": i + 1}
+    _record_history("generate", "agent", requirement, False, None,
+                    rounds=max_rounds, model=model, provider=provider, error=last_err)
     return {"ok": False, "error": "多次修正仍未通过校验（最后错误：%s）" % last_err, "raw": last_raw}
 
 
 async def generate_plugin(requirement: str, kind: str = "", max_rounds: int = 3,
-                       model: str = None, think: bool = False, provider: str = None) -> dict:
+                       model: str = None, think: bool = False, provider: str = None,
+                       context_paths: list = None, use_history: bool = False) -> dict:
     kind = (kind or "").strip().lower()
     system = PLUGIN_SYSTEM
     if kind:
         system += "\n本次要求 kind 必须为: %s" % kind
+    extra = _context_block(context_paths)
+    if use_history:
+        extra += _history_block("plugin")
     last_err = ""
     last_raw = None
     for i in range(max_rounds):
         if i == 0:
-            user = "需求: %s" % requirement
+            user = "需求: %s%s" % (requirement, extra)
         else:
             user = (
                 "你上一版代码没能通过系统校验，错误信息如下：\n%s\n\n"
                 "请修正后重新输出**完整**的 JSON（结构不变），务必解决上面的错误。\n"
-                "需求不变：%s" % (last_err, requirement)
+                "需求不变：%s%s" % (last_err, requirement, extra)
             )
         try:
             data = await _llm_json(system, user, model=model, think=think, provider=provider)
@@ -427,8 +624,112 @@ async def generate_plugin(requirement: str, kind: str = "", max_rounds: int = 3,
         if dl:
             last_err = dl
             continue
+        _record_history("generate", "plugin", requirement, True, norm,
+                        rounds=i + 1, model=model, provider=provider)
         return {"ok": True, "mode": "plugin", "data": norm, "rounds": i + 1}
+    _record_history("generate", "plugin", requirement, False, None,
+                    rounds=max_rounds, model=model, provider=provider, error=last_err)
     return {"ok": False, "error": "经过 %d 次修正仍未通过校验（最后错误：%s）" % (max_rounds, last_err), "raw": last_raw}
+
+
+async def improve_agent(agent_id: str, instruction: str, model: str = None,
+                      think: bool = False, provider: str = None,
+                      context_paths: list = None, use_history: bool = False) -> dict:
+    """读取磁盘上已有的智能体，按指令改进后输出新版（不立即落盘）。"""
+    from agent_manager import load_agent as am_load
+    cur = am_load(agent_id)
+    if not cur:
+        return {"ok": False, "error": "找不到智能体: %s" % agent_id}
+    extra = _context_block(context_paths)
+    if use_history:
+        extra += _history_block("agent", exclude_key=agent_id)
+    cur_s = json.dumps(cur, ensure_ascii=False, indent=2)
+    user = (
+        "以下是已有的智能体定义（agent.json）：\n```json\n%s\n```\n\n"
+        "改进要求：%s\n\n"
+        "请基于已有定义进行改进，输出**完整**的新版 JSON（结构同上，不要保留明显缺陷）。%s"
+        % (cur_s, instruction or "整体优化", extra)
+    )
+    last_err = ""
+    last_raw = None
+    for i in range(2):
+        u = user if i == 0 else (
+            "上一版未通过校验，错误：%s\n请修正后重新输出完整 JSON。\n%s" % (last_err, user)
+        )
+        try:
+            data = await _llm_json(AGENT_SYSTEM, u, model=model, think=think, provider=provider)
+        except Exception as e:
+            return {"ok": False, "error": "改进失败: %r" % e}
+        last_raw = data
+        norm, err = _normalize_agent(data)
+        if err:
+            last_err = err
+            continue
+        _record_history("improve", "agent", instruction, True, norm,
+                        rounds=i + 1, model=model, provider=provider, key=agent_id)
+        return {"ok": True, "mode": "agent", "data": norm, "improved_from": agent_id, "rounds": i + 1}
+    _record_history("improve", "agent", instruction, False, None, rounds=2,
+                    model=model, provider=provider, key=agent_id, error=last_err)
+    return {"ok": False, "error": "改进后仍未通过校验（最后错误：%s）" % last_err, "raw": last_raw}
+
+
+async def improve_plugin(name: str, instruction: str, model: str = None,
+                       think: bool = False, provider: str = None,
+                       context_paths: list = None, use_history: bool = False) -> dict:
+    """读取磁盘上已有的插件包，按指令改进后输出新版（不立即落盘）。"""
+    pdir = os.path.join(PLUGINS_DIR, name)
+    mpath = os.path.join(pdir, "manifest.json")
+    cpath = os.path.join(pdir, "plugin.py")
+    if not (os.path.isfile(mpath) and os.path.isfile(cpath)):
+        return {"ok": False, "error": "找不到插件包: %s" % name}
+    try:
+        with open(mpath, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+        with open(cpath, "r", encoding="utf-8") as f:
+            code = f.read()
+    except Exception as e:
+        return {"ok": False, "error": "读取插件失败: %r" % e}
+    kind = (manifest.get("kind") or "").strip().lower()
+    system = PLUGIN_SYSTEM
+    if kind:
+        system += "\n本次要求 kind 必须为: %s" % kind
+    extra = _context_block(context_paths)
+    if use_history:
+        extra += _history_block("plugin", exclude_key=name)
+    user = (
+        "以下是已有的插件包：\nmanifest.json:\n```json\n%s\n```\n\nplugin.py:\n```python\n%s\n```\n\n"
+        "改进要求：%s\n\n请输出**完整**的新版 JSON（结构同生成插件，含 manifest 与 code），"
+        "保持插件契约不变，只做改进。%s"
+        % (json.dumps(manifest, ensure_ascii=False, indent=2), code, instruction or "整体优化", extra)
+    )
+    last_err = ""
+    last_raw = None
+    for i in range(3):
+        u = user if i == 0 else (
+            "上一版未通过校验，错误：%s\n请修正后重新输出完整 JSON。\n%s" % (last_err, user)
+        )
+        try:
+            data = await _llm_json(system, u, model=model, think=think, provider=provider)
+        except Exception as e:
+            return {"ok": False, "error": "改进失败: %r" % e}
+        last_raw = data
+        norm, err = _normalize_plugin(data)
+        if err:
+            last_err = "规范化错误: %s" % err
+            continue
+        if kind and norm["kind"] != kind:
+            last_err = "kind 不符：要求 %s，实得 %s" % (kind, norm["kind"])
+            continue
+        dl = _dry_load_plugin(norm["code"], norm["kind"], norm["name"])
+        if dl:
+            last_err = dl
+            continue
+        _record_history("improve", "plugin", instruction, True, norm,
+                        rounds=i + 1, model=model, provider=provider, key=name)
+        return {"ok": True, "mode": "plugin", "data": norm, "improved_from": name, "rounds": i + 1}
+    _record_history("improve", "plugin", instruction, False, None, rounds=3,
+                    model=model, provider=provider, key=name, error=last_err)
+    return {"ok": False, "error": "改进后仍未通过校验（最后错误：%s）" % last_err, "raw": last_raw}
 
 
 # ----------------------------------------------------------------------
@@ -560,26 +861,67 @@ async def save_plugin(bridge, name: str, manifest: dict, code: str) -> dict:
 # 同步包装（供 server.py 在 BaseHTTPRequestHandler 中调用）
 # ----------------------------------------------------------------------
 def generate_agent_sync(bridge, requirement: str, model: str = None, think: bool = False,
-                         provider: str = None) -> dict:
+                         provider: str = None, context_paths: list = None,
+                         use_history: bool = False) -> dict:
     return bridge.lt.run_coro(
-        generate_agent(requirement, max_rounds=2, model=model, think=think, provider=provider),
+        generate_agent(requirement, max_rounds=2, model=model, think=think, provider=provider,
+                       context_paths=context_paths, use_history=use_history),
         timeout=120)
 
 
 def generate_plugin_sync(bridge, requirement: str, kind: str = "", model: str = None,
-                         think: bool = False, provider: str = None) -> dict:
+                         think: bool = False, provider: str = None, context_paths: list = None,
+                         use_history: bool = False) -> dict:
     return bridge.lt.run_coro(
-        generate_plugin(requirement, kind, max_rounds=3, model=model, think=think, provider=provider),
+        generate_plugin(requirement, kind, max_rounds=3, model=model, think=think, provider=provider,
+                        context_paths=context_paths, use_history=use_history),
+        timeout=300)
+
+
+def list_context_files_sync() -> dict:
+    return list_context_files()
+
+
+def read_context_file_sync(rel: str) -> dict:
+    return read_context_file(rel)
+
+
+def get_history_sync(limit: int = 60) -> dict:
+    return get_history(limit)
+
+
+def improve_agent_sync(bridge, agent_id: str, instruction: str, model: str = None,
+                       think: bool = False, provider: str = None, context_paths: list = None,
+                       use_history: bool = False) -> dict:
+    return bridge.lt.run_coro(
+        improve_agent(agent_id, instruction, model=model, think=think, provider=provider,
+                      context_paths=context_paths, use_history=use_history),
+        timeout=180)
+
+
+def improve_plugin_sync(bridge, name: str, instruction: str, model: str = None,
+                        think: bool = False, provider: str = None, context_paths: list = None,
+                        use_history: bool = False) -> dict:
+    return bridge.lt.run_coro(
+        improve_plugin(name, instruction, model=model, think=think, provider=provider,
+                       context_paths=context_paths, use_history=use_history),
         timeout=300)
 
 
 def save_agent_sync(bridge, data: dict) -> dict:
-    return bridge.lt.run_coro(save_agent(bridge, data or {}), timeout=60)
+    r = bridge.lt.run_coro(save_agent(bridge, data or {}), timeout=60)
+    if r.get("ok"):
+        _record_history("save", "agent", data.get("name") or r.get("id"),
+                        True, None, rounds=1, key=r.get("id"))
+    return r
 
 
 def save_plugin_sync(bridge, payload: dict) -> dict:
     payload = payload or {}
-    return bridge.lt.run_coro(
+    r = bridge.lt.run_coro(
         save_plugin(bridge, payload.get("name", ""), payload.get("manifest") or {}, payload.get("code") or ""),
         timeout=60,
     )
+    if r.get("ok"):
+        _record_history("save", "plugin", r.get("name"), True, None, rounds=1, key=r.get("name"))
+    return r

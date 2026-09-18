@@ -125,6 +125,30 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 8px; }
 .form-grid label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; }
 
+/* ---------- 构建助手：参考文件 & 历史 ---------- */
+.ctx-files {
+  margin-top: 10px; max-height: 240px; overflow: auto;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); padding: 6px;
+}
+.ctx-file {
+  display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+  border-radius: 6px; cursor: pointer; font-size: 12px;
+}
+.ctx-file:hover { background: var(--panel2); }
+.ctx-file .ctx-path {
+  flex: 1; color: var(--text);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace; word-break: break-all;
+}
+.ctx-file .ctx-size { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.history-list { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.hist-item { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel2); }
+.hist-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.hist-mode { font-weight: 600; color: var(--accent2); }
+.hist-meta .ok { color: var(--ok); font-weight: 700; }
+.hist-meta .bad { color: var(--err); font-weight: 700; }
+.hist-req { margin: 6px 0 2px; font-size: 13px; color: var(--text); word-break: break-word; }
+.btn.sm { padding: 4px 12px; font-size: 12px; border-radius: 8px; }
+
 /* ---------- 模型供应商 / 注册表 ---------- */
 .prov-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
 .prov-card {

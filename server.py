@@ -311,16 +311,42 @@ def make_handler(bridge):
                     except ValueError as e:
                         return self._json({"error": str(e)}, 400)
                 # ----- 构建助手：智能体 / 插件 生成与落盘 -----
+                if path == "/api/builder/files":
+                    return self._json(builder_api.list_context_files_sync())
+                if path == "/api/builder/file/read":
+                    return self._json(builder_api.read_context_file_sync(body.get("path", "")))
+                if path == "/api/builder/history":
+                    return self._json(builder_api.get_history_sync(int(body.get("limit", 60))))
                 if path == "/api/builder/agent/generate":
                     return self._json(builder_api.generate_agent_sync(
                         bridge, body.get("requirement", ""),
                         body.get("model") or None, body.get("think") or "low",
-                        body.get("provider") or None))
+                        body.get("provider") or None,
+                        body.get("context_paths") or None,
+                        body.get("use_history", True)))
                 if path == "/api/builder/plugin/generate":
                     return self._json(builder_api.generate_plugin_sync(
                         bridge, body.get("requirement", ""), body.get("kind", "") or "",
                         body.get("model") or None, body.get("think") or "low",
-                        body.get("provider") or None))
+                        body.get("provider") or None,
+                        body.get("context_paths") or None,
+                        body.get("use_history", True)))
+                if path == "/api/builder/agent/improve":
+                    return self._json(builder_api.improve_agent_sync(
+                        bridge, body.get("id", ""),
+                        body.get("instruction", "") or "",
+                        body.get("model") or None, body.get("think") or "low",
+                        body.get("provider") or None,
+                        body.get("context_paths") or None,
+                        body.get("use_history", True)))
+                if path == "/api/builder/plugin/improve":
+                    return self._json(builder_api.improve_plugin_sync(
+                        bridge, body.get("name", ""),
+                        body.get("instruction", "") or "",
+                        body.get("model") or None, body.get("think") or "low",
+                        body.get("provider") or None,
+                        body.get("context_paths") or None,
+                        body.get("use_history", True)))
                 if path == "/api/builder/agent/save":
                     return self._json(builder_api.save_agent_sync(bridge, body.get("data") or {}))
                 if path == "/api/builder/agent/import":
