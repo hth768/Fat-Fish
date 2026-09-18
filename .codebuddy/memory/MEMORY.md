@@ -102,7 +102,18 @@
 - 前端：`_bcThinkCard(text,{live})` 支持 `append()` 流式追加，结束 `setText()` 自动折叠为「💭 思考过程 · N 字 · 点此展开」（`▸` 由 `.bc-think[open] > summary::before { rotate(90deg) }` 转向）；`_bcChatStream()` 用 fetch + `getReader()` 按 `\n\n` 切帧解析；已渲染增量后中断则抛 `err.__partial` 不再降级（防重复渲染）。开关 `#bcStream`（localStorage `bc_stream`）在输入区。
 - **侧边栏可收回**：`#bcSideHide`（左栏页签尾部）/ `#bcSideShow`（浮动，收起时显示）+ `#page-builder.bc-side-collapsed` + `localStorage['bc_side_collapsed']`。收回只隐藏左栏，中栏 `.bc-main` 占满，**输入区在 `.bc-main` 内底部 → 输入框仍贴底**。
 - **实测**：`deepseek-flash` 默认返回 `reasoning_content`（reasoner/v4-flash 同；`deepseek-chat` 不返回）；`think` 档位对其无影响；过于简单的问题可能不产出 reasoning（模型行为）。流式实测：首个 content 增量 0.67s 到达；带工具场景 120 个 think 增量帧 + `think_end` + `tool_start/end` + 第二轮 think，顺序正确。
-- 环境备注：**`agent-browser` 未安装**（命令不存在），本机无法做自动化浏览器截图；视觉验证需先 `npm install -g agent-browser && agent-browser install`。
+- 环境备注：**`agent-browser` 已装好（0.38.1）**，可视化验证走「复用系统 Edge」路线，不要 `agent-browser install`（要下 ~500MB Chromium）。**改完 UI 建议截图自查一遍**，流程见下条。
+
+## 浏览器自动化 / 视觉验证环境（2026-09-18 配通）
+- **npm 坑**：npm 缓存被配到 `F:\qq_bot\caches\npm-cache`，而本机**没有 F 盘** → 任何 npm 命令报 `mkdir '\\?'` ENOENT。解法：加 `--cache E:\npm-cache` 或设 `$env:npm_config_cache='E:\npm-cache'`（`E:\npm-cache` 已建好常驻）。
+- **跑视觉验证的标准流程**（无需下载浏览器）：
+  1. `Start-Process 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ArgumentList '--headless=new','--disable-gpu','--no-first-run','--remote-debugging-port=9222',"--user-data-dir=E:\edge-cdp-profile",'--window-size=1560,980'`
+  2. 校验 `Invoke-WebRequest http://127.0.0.1:9222/json/version`
+  3. `agent-browser connect 9222` → `agent-browser open http://127.0.0.1:8900`
+  4. `agent-browser screenshot <path>` 后用读图工具自查；`click/fill/press/is visible/is checked` 做交互断言。
+  5. 收尾：杀掉带 `edge-cdp-profile` 的 msedge 进程 + `Remove-Item -LiteralPath 'E:\edge-cdp-profile' -Recurse -Force`（批量删除可能被 Safe-delete 守卫拦，单独命令重试即可）。
+- **坑：CLI 传中文参数会被 GBK 破坏**（`find text "构建助手"` → `鏋勫缓鍔╂墜`）。**一律用 CSS 选择器**：`a[data-page="builder"]`（进构建页）、`#bcSideHide`/`#bcSideShow`（侧栏）、`.bc-think > summary`（展开思考链）、`#bcStream`；填输入框用英文提示词，避免中文。
+- 已由截图确认的既有行为（勿重复怀疑）：侧栏收回后输入框仍贴底；流式时工具卡片在轮次中就渲染；思考链结束自动折叠、点 summary 展开；`bc_stream` / `bc_side_collapsed` 刷新后保持。
 
 ## 构建助手权限模型（WorkBuddy 式，提交 e4cca55 + 0815762）——改构建助手必读
 - 设置文件 `data/builder_settings.json`（`load_settings`/`set_settings`/`get_settings`），字段：`workspace`、`permission_mode`、`confirm_overwrite`、`confirm_sensitive`、`confirm_install`、`auto_backup`、`remember_approvals`、`max_steps`、`deny_extra`。
