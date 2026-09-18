@@ -158,12 +158,53 @@ def load_manifest(pkg_dir: str) -> tuple:
     return meta, errors, warns
 
 
+# ---- manifest 校验提示的去重 -------------------------------------------------
+# scan_packages() 会被高频调用（状态轮询、插件页刷新、各处 get_package），逐次打印
+# 会把控制台刷满（曾出现同一批告警刷十几屏）。
+#   · 错误 / 其它提醒：按「包 + manifest mtime + 内容签名」只打一次，改了才再打；
+#   · schema_version 缺失：跨包聚合成一行，包集合变化时才重打。
+_warn_cache: dict = {}
+_schema_missing_logged: set = set()
+
+
+def _manifest_stamp(pkg_dir: str) -> float:
+    try:
+        return os.path.getmtime(_manifest_path(pkg_dir))
+    except OSError:
+        return 0.0
+
+
+def _log_manifest_issues(name: str, pkg_dir: str, errors: list, warns: list) -> None:
+    """打印 manifest 校验问题（带去重）。"""
+    if errors:
+        sig = ("E", _manifest_stamp(pkg_dir), tuple(errors))
+        if _warn_cache.get("err:" + name) != sig:
+            _warn_cache["err:" + name] = sig
+            print(f"[PKG][WARN] {name} manifest 无效: " + "；".join(errors))
+    soft = [w for w in warns if not w.startswith("建议补 schema_version")]
+    if soft:
+        sig = ("W", _manifest_stamp(pkg_dir), tuple(soft))
+        if _warn_cache.get("soft:" + name) != sig:
+            _warn_cache["soft:" + name] = sig
+            print(f"[PKG][WARN] {name} manifest 提醒: " + "；".join(soft))
+
+
+def _flush_schema_notice(names: list) -> None:
+    """schema_version 缺失跨包聚合提示（包集合变化时才重打）。"""
+    uniq = sorted(set(names))
+    if not uniq or set(uniq) == _schema_missing_logged:
+        return
+    _schema_missing_logged.clear()
+    _schema_missing_logged.update(uniq)
+    print(f"[PKG] {len(uniq)} 个插件包未声明 schema_version（按 1 处理，建议补 "
+          f"{MANIFEST_SCHEMA_VERSION}）：" + "、".join(uniq))
+
+
 def read_manifest(pkg_dir: str) -> dict:
     """兼容旧调用：只取 meta（校验结果请用 load_manifest）。"""
-    meta, errors, _warns = load_manifest(pkg_dir)
-    if errors:
-        print(f"[PKG][WARN] {os.path.basename(os.path.normpath(pkg_dir))} manifest 有问题: "
-              + "；".join(errors))
+    meta, errors, warns = load_manifest(pkg_dir)
+    if errors or warns:
+        _log_manifest_issues(os.path.basename(os.path.normpath(pkg_dir)), pkg_dir, errors, warns)
     return meta
 
 
@@ -173,6 +214,7 @@ def scan_packages() -> list:
     if not os.path.isdir(PACKAGE_DIR):
         return out
     enabled = _enabled_map()
+    schema_missing = []
     for fn in sorted(os.listdir(PACKAGE_DIR)):
         pkg_dir = os.path.join(PACKAGE_DIR, fn)
         if not os.path.isdir(pkg_dir) or fn.startswith(("_", ".")):
@@ -189,11 +231,13 @@ def scan_packages() -> list:
                 "dir": pkg_dir.replace("\\", "/"), "enabled": False,
                 "manifest_errors": errors or ["manifest 无效"], "manifest_warnings": warns,
             })
-            print(f"[PKG][WARN] {fn} manifest 无效: " + "；".join(errors or ["manifest 无效"]))
+            _log_manifest_issues(fn, pkg_dir, errors or ["manifest 无效"], warns)
             continue
         name = meta["name"]
         if warns:
-            print(f"[PKG][WARN] {name} manifest 提醒: " + "；".join(warns))
+            _log_manifest_issues(name, pkg_dir, [], warns)
+            if any(w.startswith("建议补 schema_version") for w in warns):
+                schema_missing.append(name)
         out.append({
             "name": name,
             "title": meta.get("title", name),
@@ -211,6 +255,7 @@ def scan_packages() -> list:
             "enabled": bool(enabled.get(name, meta.get("default_on", False))),
             "manifest_errors": errors, "manifest_warnings": warns,
         })
+    _flush_schema_notice(schema_missing)
     return out
 
 

@@ -28,6 +28,11 @@ _HEADERS = {
     "Origin": "https://live.bilibili.com",
 }
 
+# 提示去重：每个 BiliApi 实例都会领一次 buvid（进程内多实例），逐实例打印会刷屏，
+# 故这两条提示各自整个进程只打一次。
+_BUVID_NOTICE_DONE = False
+_BUVID_FAIL_NOTICE_DONE = False
+
 # wbi 签名混淆表（bilibili-API-collect，长期不变）
 _WBI_MIXIN_KEY_TAB = [
     46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
@@ -72,7 +77,7 @@ class BiliSession:
         return "; ".join(parts)
 
     async def ensure_buvid(self, http: httpx.AsyncClient):
-        """领一次匿名 buvid（进程内缓存）。失败不致命，cookie_header 有随机兜底。"""
+        """领一次匿名 buvid（实例内缓存）。失败不致命，cookie_header 有随机兜底。"""
         if self._fetched:
             return
         self._fetched = True
@@ -83,10 +88,16 @@ class BiliSession:
             d = r.json().get("data") or {}
             self.buvid3 = str(d.get("b_3") or "")
             self.buvid4 = str(d.get("b_4") or "")
-            if self.buvid3:
+            # 每个 BiliApi 实例都会领一次，逐实例打印会把控制台刷满 → 整个进程只提示一次
+            global _BUVID_NOTICE_DONE
+            if self.buvid3 and not _BUVID_NOTICE_DONE:
+                _BUVID_NOTICE_DONE = True
                 print("[BILI] 已获取匿名 buvid（风控 Cookie）")
         except Exception as e:
-            print(f"[BILI] 获取 buvid 失败（用随机兜底）: {e}")
+            global _BUVID_FAIL_NOTICE_DONE
+            if not _BUVID_FAIL_NOTICE_DONE:
+                _BUVID_FAIL_NOTICE_DONE = True
+                print(f"[BILI] 获取 buvid 失败（用随机兜底，后续不再重复提示）: {e}")
 
     async def wbi_keys(self, http: httpx.AsyncClient) -> tuple:
         """取 wbi 签名密钥（nav 匿名也能拿，key 每天轮换，进程内缓存 1 小时）。"""

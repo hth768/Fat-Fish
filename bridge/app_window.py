@@ -67,11 +67,20 @@ class _AppearanceApi:
             wins = getattr(wv, "windows", None) or []
             if not wins:
                 return {"supported": False, "error": "窗口未就绪"}
+            # pywebview 5+ 推荐 FileDialog.FOLDER；旧版只有 FOLDER_DIALOG（已废弃会告警）
+            kind = None
+            fd = getattr(wv, "FileDialog", None)
+            if fd is not None:
+                kind = getattr(fd, "FOLDER", None)
+            if kind is None:
+                kind = getattr(wv, "FOLDER_DIALOG", None)
+            if kind is None:
+                return {"supported": False, "error": "当前 pywebview 版本不支持目录对话框"}
             kwargs = {}
             init = str(initial or "").strip().strip('"')
             if init and os.path.isdir(init):
                 kwargs["directory"] = init
-            r = wins[0].create_file_dialog(wv.FOLDER_DIALOG, **kwargs)
+            r = wins[0].create_file_dialog(kind, **kwargs)
             if isinstance(r, (list, tuple)):
                 r = r[0] if r else None
             if not r:
