@@ -29,6 +29,7 @@
   - [构建助手（对话式 Agent）](#构建助手对话式-agent)
   - [外观](#外观)
   - [模型注册表（LLM 供应商）](#模型注册表llm-供应商)
+  - [多 Bot（多智能体切换）](#多-bot多智能体切换)
 - [插件协议（第三方接入规范）](#插件协议第三方接入规范)
 - [MC 功能（模组世界 + 原版世界）](#mc-功能模组世界--原版世界)
 - [安卓版](#安卓版)
@@ -96,7 +97,7 @@ qq_bot 运行时在 2026-09 重构为「**智能体核心 + 插件系统**」：
 | `service_host.py` | **sidecar 基础设施**：通用本地 RPC 骨架（HTTP + asyncio），不 import 业务模块 |
 | `monitor_server.py` / `monitor_client.py` | **监控 sidecar**：可观测性进程，聚合各 sidecar 健康度 |
 | `ai_provider.py` | **多供应商抽象**：`capability` → 有序供应商列表，调用时故障转移（chat/reasoning/vision/tools）；支持思考强度档位、Anthropic 兼容、配置覆盖层热重载 |
-| `agent_ctx.py` | **多智能体隔离**：基于 `contextvars` 维护「当前智能体」上下文，隔离各 agent 的记忆/身份，避免串台 |
+| `agent_ctx.py` | **多智能体隔离**：基于 `contextvars` 维护「当前智能体」上下文，隔离各 Bot 的记忆/身份/知识库/向量；`agent_storage_dir()` 决定落盘命名空间（默认 `feiyu` 回落引擎目录，其余落 `agents/<id>/memory`） |
 | `plugin_base.py` | 插件系统：`Plugin` / `PlatformPlugin` / `FeaturePlugin` / `PluginManager` |
 | `message_bus.py` | 消息契约：`InboundMessage` / `ReplyTarget` / `MessageSender` / 事件总线 |
 | `qq_plugin.py` | QQ 平台插件：NapCat WebSocket、OneBot 协议、SILK 语音解码、私聊聚合 |
@@ -295,6 +296,19 @@ python app.py --with-core
 - **构建助手实时切换**：构建助手 / 插件生成时通过 `provider` 参数实时指定供应商（不改全局路由），后端 `ai_provider.chat(provider=...)` 直通。
 - **删除 / 编辑**：`/api/providers/delete`（`delete_model`）、`/api/providers`（`save_model`）。
 - **思考强度**：构建助手内「模型」与「思考强度」为独立控件，思考强度分 **低 / 中 / 高** 三档，经 `_think_level` 归一化后下发 thinking 参数（high 档对 Anthropic 放大 think budget）。
+
+---
+
+## 多 Bot（多智能体切换）
+
+支持**运行时多 Bot**：仪表盘 / 记忆 / 总结 / 配置 四个页面顶部均有 `Bot` 下拉框与「管理 Bot」按钮，切换即切换该页面查看的数据集；多个 Bot 可同时运行，每个 Bot 的插件各自独立（`AgentCore` 自带 `PluginManager`）。
+
+- **动态管理**：「管理 Bot」弹窗可 新建 / 编辑 / 启动 / 停止 / 删除。新建时填 名称（即唯一 ID，建议英文）、人格设定、模型覆盖、插件列表（空=全部，逗号分隔）、是否随应用自启。注册表持久化于 `data/bots.json`（运行时生成，git 忽略），应用启动按 `autostart` 自动拉起。
+- **完全隔离**：每个 Bot 的用户画像、AI 人格、重要备忘、对话反思、知识库、向量记忆都落在各自命名空间——默认主 Bot `feiyu` 沿用引擎目录（**历史数据兼容、不迁移**），其余 Bot 落 `agents/<id>/memory/`。切换 Bot 即切换整套数据集，互不串台。
+- **模型覆盖**：Bot 可单独设置「模型覆盖」（不影响推理模型），作用于该 Bot 的日常对话；留空则沿用全局默认。
+- **后端**：`bridge/bot_manager.py`（`BotManager`）负责增删启停与生命周期，`agent_ctx.py` 用 `contextvars` 维护「当前智能体」上下文驱动隔离，`server.py` / `summary_api.py` 按 `bot_id` 路由每一次请求（记忆/总结/配置/导入/动作类接口均带 `bot_id`）。
+
+> 配置页内的「当前 Bot 专属配置」面板仅作用于所选 Bot（人格 / 模型 / 插件 / 自启）；下方「全局配置」与「AI 供应商」对所有 Bot 共享。
 
 ---
 
