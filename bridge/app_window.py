@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import time
+from quiet import degrade
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINDOW_TITLE = "肥鱼娘 · App 控制台"
@@ -50,8 +51,8 @@ class _AppearanceApi:
                     w.set_title(str(title)[:40])
                 except Exception:
                     pass
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("bridge/app_window.py:53 _AppearanceApi.set_title", e, "降级：for w in getattr(wv, 'windows', [])")
 
     def pick_folder(self, initial=None):
         """弹系统「选择文件夹」对话框（pywebview 模式才有）。

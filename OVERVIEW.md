@@ -14,6 +14,7 @@
 - **MC 功能**：模组世界（FeiyuAPI 模组）+ 原版世界（Mineflayer），两套独立身体/协议。
 - **安卓版** `feiyu-android/`：Kotlin + Compose 端侧精简移植，本地 TF-IDF 向量记忆。
 - **安全与测试**：HTTP 仅监听 `127.0.0.1` 单实例、密钥只在本机 `ai_providers.json`（不入库）、写入工作区外/黑名单一律拒绝、危险操作需人工批准；测试分两层 —— 引擎 `libs/qq_bot_runtime/tests/`（90 项）+ App `tests/`（43 项，`tests\run_tests.bat` 一键跑）。边界与第三方平台使用说明见 README「[安全边界与合规](./README.md#安全边界与合规)」。
+- **许可**：**MIT License**（[`LICENSE`](./LICENSE)）—— 可自由使用 / 修改 / 商用 / 再分发，保留版权与许可声明即可。第三方组件（NapCat、Mineflayer、各模型等）遵循各自许可。
 
 ## 运行
 

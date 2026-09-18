@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime
+from quiet import degrade
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGINS_DIR = os.path.join(APP_DIR, "plugins")
@@ -120,16 +121,16 @@ def _available_context() -> dict:
                 nm = p.get("name")
                 if nm:
                     out["plugins"].append({"name": nm, "kind": p.get("kind"), "title": p.get("title")})
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("bridge/builder_api.py:123 _available_context", e, "降级：for p in scan_packages()")
     try:
         import plugin_registry as reg
         for spec in reg.by_kind("brain"):
             k = getattr(spec, "key", None) or getattr(spec, "name", None)
             if k:
                 out["brains"].append(k)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:131 _available_context", e, "降级：import plugin_registry as reg")
     return out
 
 
@@ -189,7 +190,8 @@ def list_context_files() -> dict:
                         fp = os.path.join(dirpath, fn)
                         try:
                             sz = os.path.getsize(fp)
-                        except OSError:
+                        except OSError as e:
+                            degrade("bridge/builder_api.py:192 list_context_files", e, "降级：sz = os.path.getsize(fp)")
                             continue
                         if sz > MAX_CONTEXT_FILE_BYTES:
                             continue
@@ -208,10 +210,11 @@ def list_context_files() -> dict:
             try:
                 out.append({"path": fn, "size": os.path.getsize(fp)})
                 seen.add(fn)
-            except OSError:
+            except OSError as e:
+                degrade("bridge/builder_api.py:211 list_context_files", e, "降级：out.append({'path': fn, 'size': os.path.getsize(fp")
                 continue
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:213 list_context_files", e, "降级：for base in bases")
     out.sort(key=lambda x: x["path"])
     return {"ok": True, "files": out[:MAX_CONTEXT_FILES], "root": root, "is_custom": custom}
 
@@ -261,7 +264,8 @@ def list_disk_dirs(path: str = "") -> dict:
         for label, q in _QUICK_DIRS:
             try:
                 ap = os.path.abspath(os.path.expanduser(q))
-            except Exception:
+            except Exception as e:
+                degrade("bridge/builder_api.py:264 list_disk_dirs", e, "降级：ap = os.path.abspath(os.path.expanduser(q))")
                 continue
             if os.path.isdir(ap):
                 quick.append({"name": label, "path": ap})
@@ -376,10 +380,11 @@ def get_history(limit: int = 60) -> dict:
                         continue
                     try:
                         out.append(json.loads(line))
-                    except Exception:
+                    except Exception as e:
+                        degrade("bridge/builder_api.py:379 get_history", e, "降级：out.append(json.loads(line))")
                         continue
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:381 get_history", e, "降级：if os.path.isfile(HISTORY_PATH)")
     out.reverse()
     return {"ok": True, "history": out[:limit]}
 
@@ -644,8 +649,8 @@ def _dry_load_plugin(code: str, kind: str, name: str):
             try:
                 import shutil
                 shutil.rmtree(tmp, ignore_errors=True)
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bridge/builder_api.py:647 _dry_load_plugin", e, "降级：import shutil")
 
 
 # ----------------------------------------------------------------------
@@ -952,8 +957,8 @@ async def save_plugin(bridge, name: str, manifest: dict, code: str) -> dict:
     try:
         import plugins_api
         plugins_api.rescan(bridge)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:955 save_plugin", e, "降级：import plugins_api")
     return {"ok": True, "name": name, "dir": target}
 
 
@@ -1143,7 +1148,8 @@ def list_workspace_sync(rel_dir: str = "") -> dict:
                     "mtime": int(stat.st_mtime),
                 }
                 out.append(entry)
-            except OSError:
+            except OSError as e:
+                degrade("bridge/builder_api.py:1146 list_workspace_sync", e, "降级：stat = os.stat(full)")
                 continue
     except Exception as e:
         return {"ok": False, "error": f"读取失败: {e!r}"}
@@ -1375,8 +1381,8 @@ def workspace_root() -> str:
             ap = os.path.abspath(os.path.expanduser(ws))
             if os.path.isdir(ap):
                 return ap
-        except Exception:
-            pass
+        except Exception as e:
+            degrade("bridge/builder_api.py:1378 workspace_root", e, "降级：ap = os.path.abspath(os.path.expanduser(ws))")
     return os.path.abspath(APP_DIR)
 
 
@@ -1477,8 +1483,8 @@ def _load_rules() -> list:
                 d = json.load(f)
             if isinstance(d, list):
                 return [x for x in d if isinstance(x, dict)]
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:1480 _load_rules", e, "降级：if os.path.isfile(RULES_PATH)")
     return []
 
 
@@ -1592,8 +1598,8 @@ def _load_approvals() -> list:
                 d = json.load(f)
             if isinstance(d, list):
                 return [x for x in d if isinstance(x, dict)]
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:1595 _load_approvals", e, "降级：if os.path.isfile(APPROVALS_PATH)")
     return []
 
 
@@ -1947,8 +1953,8 @@ def _search_creds() -> tuple:
         import config as _cfg
         base = (getattr(_cfg, "DEEPSEEK_BASE_URL", "") or "").rstrip("/")
         key = getattr(_cfg, "DEEPSEEK_API_KEY", "") or ""
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:1950 _search_creds", e, "降级：import config as _cfg")
     if base and key:
         return (base, key, "deepseek-v4-flash")
     try:
@@ -1960,8 +1966,8 @@ def _search_creds() -> tuple:
             b = (p.get("base_url") or "").rstrip("/")
             if b:
                 return (b, p.get("api_key"), "deepseek-v4-flash")
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:1963 _search_creds", e, "降级：import ai_provider")
     return ("", "", "")
 
 
@@ -1972,8 +1978,8 @@ def _glm_creds() -> tuple:
         import config as _cfg
         base = (getattr(_cfg, "GLM_BASE_URL", "") or "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
         key = getattr(_cfg, "GLM_API_KEY", "") or ""
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:1975 _glm_creds", e, "降级：import config as _cfg")
     return (base, key)
 
 
@@ -2059,8 +2065,8 @@ def _extract_sources(data: dict, text: str, limit: int = 6) -> list:
                     u = ann.get("url") or (ann.get("url_citation") or {}).get("url")
                     if isinstance(u, str) and u and u not in urls:
                         urls.append(u)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/builder_api.py:2062 _extract_sources", e, "降级：for item in (data.get('output') or [])")
     for k in ("citations", "sources"):
         for u in (data.get(k) or []):
             if isinstance(u, str) and u and u not in urls:
@@ -2287,7 +2293,8 @@ def _search_workspace(query: str, limit: int = CHAT_SEARCH_MAX) -> dict:
                 try:
                     if os.path.getsize(fp) > _MAX_FILE_BYTES:
                         continue
-                except OSError:
+                except OSError as e:
+                    degrade("bridge/builder_api.py:2290 _search_workspace", e, "降级：if os.path.getsize(fp) > _MAX_FILE_BYTES")
                     continue
                 scanned += 1
                 try:
@@ -2299,7 +2306,8 @@ def _search_workspace(query: str, limit: int = CHAT_SEARCH_MAX) -> dict:
                                 if len(hits) >= limit:
                                     return {"ok": True, "query": q, "scanned": scanned,
                                             "truncated": True, "hits": hits}
-                except Exception:
+                except Exception as e:
+                    degrade("bridge/builder_api.py:2302 _search_workspace", e, "降级：with open(fp, 'r', encoding='utf-8', errors='repla")
                     continue
     return {"ok": True, "query": q, "scanned": scanned, "truncated": False, "hits": hits}
 
@@ -2489,7 +2497,8 @@ def list_chat_sessions() -> dict:
             try:
                 with open(os.path.join(CHAT_DIR, fn), "r", encoding="utf-8") as f:
                     d = json.load(f)
-            except Exception:
+            except Exception as e:
+                degrade("bridge/builder_api.py:2492 list_chat_sessions", e, "降级：with open(os.path.join(CHAT_DIR, fn), 'r', encodin")
                 continue
             out.append({"id": d.get("id") or fn[:-5], "title": d.get("title") or "",
                         "updated": d.get("updated") or 0,

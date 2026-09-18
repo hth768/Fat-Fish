@@ -20,8 +20,12 @@ import tempfile
 import unittest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, REPO)
-sys.path.insert(0, os.path.join(REPO, "bridge"))
+# 路径顺序按真实部署：引擎层（qq_bot 运行时）与 App 层都在 sys.path 上。
+# bridge/* 会 import 引擎模块（如 quiet / ai_provider），故必须加引擎目录。
+ENGINE = os.path.join(REPO, "libs", "qq_bot_runtime")
+for _p in (os.path.join(REPO, "bridge"), REPO, ENGINE):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import bridge.builder_api as ba          # noqa: E402
 import bridge.pkg_manager as pm          # noqa: E402

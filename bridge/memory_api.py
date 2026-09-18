@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from quiet import degrade
 
 _MEMORY_FILE = "memory_data.json"
 
@@ -40,26 +41,26 @@ def list_users() -> list:
             for fn in os.listdir(hdir):
                 if fn.endswith(".jsonl"):
                     add(os.path.splitext(fn)[0], "历史")
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:43 list_users", e, "降级：import long_term_memory")
     try:
         import important_notes
         for uid in (important_notes.load_notes() or {}):
             add(uid, "事项")
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:49 list_users", e, "降级：import important_notes")
     try:
         import persona_memory
         for uid in ((persona_memory._load_data() or {}).get("personas") or {}):
             add(uid, "人格")
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:55 list_users", e, "降级：import persona_memory")
     try:
         import reflection_memory
         for r in ((reflection_memory._load_data() or {}).get("reflections") or []):
             add(r.get("user_id"), "反思")
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:61 list_users", e, "降级：import reflection_memory")
 
     try:
         import config as qq_config
@@ -169,28 +170,28 @@ def memory_stats():
         hdir = ltm._history_dir()
         out["history_users"] = (len([f for f in os.listdir(hdir) if f.endswith(".jsonl")])
                                 if os.path.isdir(hdir) else 0)
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:172 memory_stats", e, "降级：import long_term_memory as ltm")
     try:
         import important_notes
         out["notes"] = sum(len(v or []) for v in (important_notes.load_notes() or {}).values())
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:177 memory_stats", e, "降级：import important_notes")
     try:
         import persona_memory
         out["persona"] = len((persona_memory._load_data() or {}).get("personas") or {})
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:182 memory_stats", e, "降级：import persona_memory")
     try:
         import reflection_memory
         out["reflection"] = len((reflection_memory._load_data() or {}).get("reflections") or [])
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:187 memory_stats", e, "降级：import reflection_memory")
     try:
         import knowledge_store
         out["knowledge"] = knowledge_store.count()
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:192 memory_stats", e, "降级：import knowledge_store")
     return out
 
 
@@ -283,13 +284,13 @@ def export_memory() -> dict:
     try:
         import long_term_memory as ltm
         out["profiles"] = ltm.load_profiles() or {}
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:286 export_memory", e, "降级：import long_term_memory as ltm")
     try:
         import important_notes
         out["notes"] = important_notes.load_notes() or {}
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:291 export_memory", e, "降级：import important_notes")
     try:
         import persona_memory
         d = persona_memory._load_data() or {}
@@ -297,8 +298,8 @@ def export_memory() -> dict:
             "personas": d.get("personas", {}),
             "global_style": d.get("global_style", ""),
         }
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:300 export_memory", e, "降级：import persona_memory")
     try:
         import reflection_memory
         d = reflection_memory._load_data() or {}
@@ -307,13 +308,13 @@ def export_memory() -> dict:
             "interaction_rules": d.get("interaction_rules", []),
             "stats": d.get("stats", {}),
         }
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:310 export_memory", e, "降级：import reflection_memory")
     try:
         import knowledge_store as ks
         out["knowledge"] = ks._load() or []
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/memory_api.py:315 export_memory", e, "降级：import knowledge_store as ks")
     try:
         import long_term_memory as ltm
         hdir = ltm._history_dir()
@@ -324,10 +325,10 @@ def export_memory() -> dict:
                     try:
                         with open(os.path.join(hdir, fn), "r", encoding="utf-8") as f:
                             out["history"][uid] = [json.loads(l) for l in f if l.strip()]
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+                    except Exception as e:
+                        degrade("bridge/memory_api.py:327 export_memory", e, "降级：with open(os.path.join(hdir, fn), 'r', encoding='u")
+    except Exception as e:
+        degrade("bridge/memory_api.py:329 export_memory", e, "降级：import long_term_memory as ltm")
     try:
         out["sessions"] = _read_json(os.path.join(os.getcwd(), _MEMORY_FILE), {}) or {}
     except Exception:

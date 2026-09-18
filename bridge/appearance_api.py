@@ -11,6 +11,7 @@ import re
 import base64
 import io
 import struct
+from quiet import degrade
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(APP_DIR, "data")
@@ -102,8 +103,8 @@ def _read() -> dict:
             out["title"] = d["title"].strip()[:40]
         if isinstance(d.get("bg"), str):
             out["bg"] = d["bg"]
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/appearance_api.py:105 _read", e, "降级：with open(DATA_FILE, 'r', encoding='utf-8') as f")
     return out
 
 
@@ -238,8 +239,8 @@ def _to_png(raw: bytes) -> bytes:
         buf = io.BytesIO()
         im.save(buf, "PNG")
         return buf.getvalue()
-    except Exception:
-        pass
+    except Exception as e:
+        degrade("bridge/appearance_api.py:241 _to_png", e, "降级：from PIL import Image")
     # 2) 独立版 venv 兜底（其 Python 自带 Pillow）
     for cand in (
         os.path.join(os.environ.get("FEIYU_QQ_BOT", ""), "..", "venv", "Scripts", "python.exe"),
@@ -259,8 +260,8 @@ def _to_png(raw: bytes) -> bytes:
                                    capture_output=True, timeout=30)
                 if p.returncode == 0 and p.stdout[:8] == b"\x89PNG\r\n\x1a\n":
                     return p.stdout
-            except Exception:
-                pass
+            except Exception as e:
+                degrade("bridge/appearance_api.py:262 _to_png", e, "降级：import subprocess")
     raise ValueError("无法解析该图片，请上传 PNG/JPG 等常见格式")
 
 

@@ -10,6 +10,7 @@ import subprocess
 import time
 import json
 import settings_store
+from quiet import degrade
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -263,10 +264,10 @@ def _dir_size(path: str) -> int:
             for fn in files:
                 try:
                     total += os.path.getsize(os.path.join(root, fn))
-                except OSError:
-                    pass
-    except OSError:
-        pass
+                except OSError as e:
+                    degrade("bridge/plugins_api.py:266 _dir_size", e, "降级：total += os.path.getsize(os.path.join(root, fn))")
+    except OSError as e:
+        degrade("bridge/plugins_api.py:268 _dir_size", e, "降级：for root, _dirs, files in os.walk(path)")
     return total
 
 
