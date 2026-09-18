@@ -15,6 +15,10 @@ import time
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINDOW_TITLE = "肥鱼娘 · App 控制台"
+# pywebview 模块对象（导入成功后由 try_app_window 填）：js_api 需要它访问 windows / 常量。
+# 注意：不能在 try_app_window 里 `import webview` 后就让 js_api 直接引用 —— 那是函数局部名，
+# js_api 里会 NameError 并被 except 静默吞掉（set_title 曾因此长期无效）。
+_webview = None
 WIDTH, HEIGHT = 1280, 860
 MIN_W, MIN_H = 960, 600
 ICON_PATH = os.path.join(APP_DIR, "webui", "icon.png")
@@ -35,16 +39,47 @@ def _diag(msg: str):
 
 
 class _AppearanceApi:
-    """暴露给前端（仅 pywebview 模式）的接口：实时修改窗口标题栏。"""
+    """暴露给前端（仅 pywebview 模式）的接口：改窗口标题、选目录。"""
     def set_title(self, title):
+        wv = _webview
+        if wv is None:
+            return
         try:
-            for w in getattr(webview, "windows", []):
+            for w in getattr(wv, "windows", []):
                 try:
                     w.set_title(str(title)[:40])
                 except Exception:
                     pass
         except Exception:
             pass
+
+    def pick_folder(self, initial=None):
+        """弹系统「选择文件夹」对话框（pywebview 模式才有）。
+
+        返回 {"supported": bool, "path": str|None, "error": str}：
+        - supported=False → 前端改用内置目录浏览器（Edge/浏览器模式没有此能力）；
+        - supported=True 且 path=None → 用户取消了对话框，前端不要再弹内置选择器。
+        """
+        wv = _webview
+        if wv is None:
+            return {"supported": False, "error": "非 pywebview 模式"}
+        try:
+            wins = getattr(wv, "windows", None) or []
+            if not wins:
+                return {"supported": False, "error": "窗口未就绪"}
+            kwargs = {}
+            init = str(initial or "").strip().strip('"')
+            if init and os.path.isdir(init):
+                kwargs["directory"] = init
+            r = wins[0].create_file_dialog(wv.FOLDER_DIALOG, **kwargs)
+            if isinstance(r, (list, tuple)):
+                r = r[0] if r else None
+            if not r:
+                return {"supported": True, "path": None}      # 用户取消
+            return {"supported": True, "path": os.path.abspath(str(r))}
+        except Exception as e:
+            _diag(f"pick_folder 失败: {e!r}")
+            return {"supported": False, "error": repr(e)}
 
 
 def _edge_candidates() -> list:
@@ -90,12 +125,15 @@ def try_app_window(url: str, title: str = WINDOW_TITLE) -> str | None:
     os.environ.setdefault("PYTHONNET_RUNTIME", "netfx")
 
     # 1) pywebview 优先
+    global _webview
     try:
         import webview  # pywebview
+        _webview = webview
         _diag("pywebview 可导入（netfx 模式）")
     except Exception as e:
         _diag(f"pywebview 不可导入: {e!r} -> 尝试 Edge App 窗口")
         webview = None
+        _webview = None
 
     if webview is not None:
         try:

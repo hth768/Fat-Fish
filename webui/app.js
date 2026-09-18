@@ -1222,7 +1222,8 @@ async function _bcSaveSettings(patch, msgEl) {
     if (!r.ok) throw new Error(r.error || "保存失败");
     el.textContent = "已保存（" + (r.changed || []).join("、") + "）";
     await _bcLoadSettings();
-    _bcLoadDir(bchat.dir);
+    // 工作区变了：旧相对路径在新工作区里可能不存在，文件树回到根
+    _bcLoadDir((r.changed || []).includes("workspace") ? "" : bchat.dir);
   } catch (e) { el.textContent = e.message; toast(e.message, true); }
 }
 
@@ -2062,6 +2063,29 @@ function initBuilderUI() {
   });
   $("#bcWsApply").addEventListener("click", () => _bcSaveSettings(
     { workspace: $("#bcWs").value.trim() }, $("#bcWsHint")));
+  // 从硬盘选择工作区目录
+  $("#bcWsBrowse").addEventListener("click", _bcBrowseWorkspace);
+  $("#pickClose").addEventListener("click", _bcPickClose);
+  $("#pickCancel").addEventListener("click", _bcPickClose);
+  $("#pickChoose").addEventListener("click", () => {
+    if (!pickState.path) return toast("请先进入一个目录", true);
+    _bcPickClose();
+    _bcApplyWorkspace(pickState.path);
+  });
+  $("#pickUp").addEventListener("click", () => {
+    if (!pickState.path) return;
+    const parts = pickState.path.replace(/[\\/]+$/, "").split(/[\\/]/);
+    parts.pop();
+    const parent = parts.join("\\");
+    _bcPickLoad(parent.match(/^[A-Za-z]:$/) ? parent + "\\" : (parent || ""));
+  });
+  $("#pickGo").addEventListener("click", () => _bcPickLoad($("#pickPath").value.trim()));
+  $("#pickPath").addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); _bcPickLoad($("#pickPath").value.trim()); }
+  });
+  $("#pickModal").addEventListener("click", e => {
+    if (e.target && e.target.id === "pickModal") _bcPickClose();   // 点遮罩关闭
+  });
   $("#bcWsReset").addEventListener("click", () => {
     $("#bcWs").value = "";
     _bcSaveSettings({ workspace: "" }, $("#bcWsHint"));
@@ -2113,7 +2137,109 @@ function initBuilderUI() {
   });
 }
 
-// 侧边栏收起：只隐藏左栏，中栏（对话 + 底端输入区）自动占满，输入框仍在底端
+// ---- 工作区目录选择：原生系统对话框优先，兜底内置目录浏览器 ----
+async function _bcApplyWorkspace(path) {
+  $("#bcWs").value = path || "";
+  try {
+    const r = await POST("/api/builder/settings/save", { workspace: path || "" });
+    if (!r.ok) throw new Error(r.error || "保存失败");
+    await _bcLoadSettings();
+    _bcLoadDir("");                     // 新工作区：文件树回到根
+    toast("工作区已切换到：" + (path || "应用目录"));
+  } catch (e) { toast(e.message, true); }
+}
+
+async function _bcBrowseWorkspace() {
+  const cur = ($("#bcWs").value || "").trim();
+  // 1) pywebview 模式：系统「选择文件夹」对话框
+  try {
+    const api = (window.pywebview && window.pywebview.api) || null;
+    if (api && typeof api.pick_folder === "function") {
+      const r = await api.pick_folder(cur || null);
+      if (r && r.supported) {
+        if (r.path) return _bcApplyWorkspace(r.path);
+        return;                          // 用户点了取消：不再弹内置选择器
+      }
+    }
+  } catch (e) { /* 落到内置选择器 */ }
+  // 2) 其它模式（Edge/浏览器）：内置目录浏览器
+  _bcPickOpen(cur);
+}
+
+let pickState = { path: "", lastOk: "" };
+
+function _bcPickOpen(start) {
+  $("#pickModal").classList.remove("hidden");
+  pickState.path = "";
+  pickState.lastOk = "";
+  const p = (start || "").trim();
+  _bcPickLoad(p && /[\\/]/.test(p) ? p : "");
+}
+
+function _bcPickClose() { $("#pickModal").classList.add("hidden"); }
+
+async function _bcPickLoad(path) {
+  const msg = $("#pickMsg");
+  msg.textContent = "加载中…";
+  try {
+    const d = await GET("/api/fs/dirs?path=" + encodeURIComponent(path || ""));
+    if (!d.ok) {
+      msg.textContent = (d.error || "读取失败") + (pickState.lastOk ? "（仍显示上一个目录）" : "");
+      if (!pickState.lastOk) { pickState.path = ""; _bcPickRender({ path: "", dirs: [], quick: [] }); }
+      return;
+    }
+    pickState.path = d.path || "";
+    pickState.lastOk = pickState.path;
+    _bcPickRender(d);
+    msg.textContent = pickState.path
+      ? ("当前浏览：" + pickState.path)
+      : "选择盘符或常用位置开始浏览";
+  } catch (e) { msg.textContent = "读取失败：" + e.message; }
+}
+
+function _bcPickRender(d) {
+  $("#pickPath").value = d.path || "";
+  const q = $("#pickQuick");
+  q.innerHTML = "";
+  (d.quick || []).forEach(item => {
+    const b = document.createElement("button");
+    b.className = "btn ghost sm";
+    b.textContent = item.name;
+    b.title = item.path;
+    b.addEventListener("click", () => _bcPickLoad(item.path));
+    q.appendChild(b);
+  });
+  const box = $("#pickList");
+  box.innerHTML = "";
+  const dirs = d.dirs || [];
+  if (!dirs.length) {
+    box.innerHTML = '<div class="hint wrap" style="padding:8px">'
+      + (d.path ? "该目录下没有子目录" : "没有可浏览的盘符") + "</div>";
+    return;
+  }
+  dirs.forEach(it => {
+    const row = document.createElement("div");
+    row.className = "pick-row" + (osSame(it.path, d.current_workspace) ? " cur" : "");
+    const nm = document.createElement("span");
+    nm.className = "pick-name";
+    nm.textContent = "📁 " + it.name;
+    row.appendChild(nm);
+    const go = document.createElement("span");
+    go.className = "pick-go";
+    go.textContent = osSame(it.path, d.current_workspace) ? "当前工作区 ✓" : "进入 ›";
+    row.appendChild(go);
+    row.addEventListener("click", () => _bcPickLoad(it.path));
+    box.appendChild(row);
+  });
+}
+
+function osSame(a, b) {
+  if (!a || !b) return false;
+  const n = p => String(p).replace(/[\\/]+$/, "").toLowerCase();
+  return n(a) === n(b);
+}
+
+// 侧边栏收起：只隐藏左栏（含对话底端输入区）占满，输入框仍在底端
 function _bcSide(collapsed) {
   const page = $("#page-builder");
   if (!page) return;

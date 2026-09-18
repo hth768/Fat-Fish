@@ -443,6 +443,7 @@
               <div class="bc-opt bc-opt-ws">
                 <span class="bc-opt-k">工作区</span>
                 <input id="bcWs" class="input" placeholder="留空 = 应用目录，例如 E:\my_project">
+                <button class="btn ghost sm" id="bcWsBrowse" title="从硬盘选择目录">📁 浏览…</button>
                 <button class="btn ghost sm" id="bcWsApply">应用</button>
                 <button class="btn ghost sm" id="bcWsReset">恢复默认</button>
               </div>
@@ -504,6 +505,28 @@
       </details>
     </section>
   </main>
+</div>
+<div class="modal hidden" id="pickModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>选择工作区目录</h3>
+      <button class="btn ghost" id="pickClose">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="pick-bar">
+        <button class="btn ghost sm" id="pickUp" title="上一级">↑</button>
+        <input id="pickPath" class="input" placeholder="输入或粘贴路径后回车跳转">
+        <button class="btn ghost sm" id="pickGo">跳转</button>
+      </div>
+      <div class="pick-quick" id="pickQuick"></div>
+      <div class="pick-list" id="pickList"></div>
+      <div class="hint wrap" id="pickMsg"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="pickCancel">取消</button>
+      <button class="btn primary" id="pickChoose">选择此目录</button>
+    </div>
+  </div>
 </div>
 <div class="modal hidden" id="cfgModal">
   <div class="modal-card">

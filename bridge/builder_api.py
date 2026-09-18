@@ -228,6 +228,67 @@ def read_context_file(rel: str) -> dict:
     return {"ok": True, "path": rel, "content": content, "size": os.path.getsize(fp)}
 
 
+# ----------------------------------------------------------------------
+# 磁盘目录浏览（供「工作区位置」从硬盘选择，替代手输路径）
+# ----------------------------------------------------------------------
+# 只列目录名，不返回文件、不读内容、不写：浏览是只读操作，安全面最小。
+_QUICK_DIRS = (("用户目录", "~"), ("桌面", os.path.join("~", "Desktop")),
+               ("文档", os.path.join("~", "Documents")),
+               ("下载", os.path.join("~", "Downloads")))
+
+
+def list_disk_dirs(path: str = "") -> dict:
+    """列出磁盘目录：path 为空 → 盘符 + 常用位置；否则 → 该目录下的子目录。
+
+    返回 {ok, path, parent, dirs:[{name,path}], quick:[{name,path}]}。
+    """
+    p = (path or "").strip().strip('"').strip("'")
+    if not p:
+        dirs = []
+        if os.name == "nt":
+            for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                d = f"{letter}:\\"
+                if os.path.isdir(d):
+                    dirs.append({"name": d, "path": d})
+        else:
+            dirs.append({"name": "/", "path": "/"})
+        quick = []
+        for label, q in _QUICK_DIRS:
+            try:
+                ap = os.path.abspath(os.path.expanduser(q))
+            except Exception:
+                continue
+            if os.path.isdir(ap):
+                quick.append({"name": label, "path": ap})
+        quick.append({"name": "App 目录", "path": os.path.abspath(APP_DIR)})
+        return {"ok": True, "path": "", "parent": "", "dirs": dirs, "quick": quick,
+                "current_workspace": workspace_root()}
+
+    ap = os.path.abspath(os.path.expanduser(p))
+    if not os.path.isdir(ap):
+        return {"ok": False, "error": "目录不存在: %s" % ap, "path": ap}
+    dirs = []
+    try:
+        with os.scandir(ap) as it:
+            for e in it:
+                try:
+                    if not e.is_dir():
+                        continue
+                except OSError:
+                    continue
+                dirs.append({"name": e.name, "path": os.path.join(ap, e.name)})
+    except PermissionError:
+        return {"ok": False, "error": "无权限访问该目录: %s" % ap, "path": ap}
+    except Exception as e:
+        return {"ok": False, "error": "读取失败: %r" % e, "path": ap}
+    dirs.sort(key=lambda x: x["name"].lower())
+    parent = os.path.dirname(ap.rstrip("\\/"))
+    if not parent or os.path.normcase(parent) == os.path.normcase(ap):
+        parent = ""
+    return {"ok": True, "path": ap, "parent": parent, "dirs": dirs,
+            "current_workspace": workspace_root()}
+
+
 def _context_block(rels) -> str:
     """把选中的文件拼成提示词上下文块。"""
     if not rels:
@@ -914,6 +975,10 @@ def generate_plugin_sync(bridge, requirement: str, kind: str = "", model: str = 
 
 def list_context_files_sync() -> dict:
     return list_context_files()
+
+
+def list_disk_dirs_sync(path: str = "") -> dict:
+    return list_disk_dirs(path)
 
 
 def read_context_file_sync(rel: str) -> dict:

@@ -281,6 +281,10 @@ def make_handler(bridge):
                 # ----- 构建助手：文件上下文 / 构建历史 / 会话（只读查询，走 GET） -----
                 if path == "/api/builder/files":
                     return self._json(builder_api.list_context_files_sync())
+                # 磁盘目录浏览（工作区「从硬盘选择」用；只列目录，只读）
+                if path == "/api/fs/dirs":
+                    return self._json(builder_api.list_disk_dirs_sync(
+                        (q.get("path") or [""])[0]))
                 if path == "/api/builder/file/read":
                     return self._json(builder_api.read_context_file_sync((q.get("path") or [""])[0]))
                 if path == "/api/builder/history":
