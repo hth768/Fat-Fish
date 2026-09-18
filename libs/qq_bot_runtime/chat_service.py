@@ -1615,10 +1615,12 @@ class ChatService:
             print(f"[WARN] 说话人标签注入失败（不影响主流程）: {e}")
 
         # 调用模型（统一供应商：推理走 reasoning，否则 chat）
+        # 若当前 bot 在 AgentCore 上设置了 _model_override，则覆盖主聊天模型（不改变推理模型）
+        _model_override = getattr(getattr(self, "core", None), "_model_override", None)
         reply_text = await self.llm.chat(
             messages,
             capability="reasoning" if use_reasoner else "chat",
-            model=config.DEEPSEEK_REASONER_MODEL if use_reasoner else None,
+            model=config.DEEPSEEK_REASONER_MODEL if use_reasoner else (_model_override or None),
         )
 
         # 记录对话（供多轮记忆）

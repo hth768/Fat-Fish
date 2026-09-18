@@ -21,16 +21,18 @@ import uuid
 from typing import Dict, List, Optional
 
 import config
+import agent_ctx
 
 # 文件锁，避免并发写入
 _lock = threading.Lock()
 
 
 def _kb_path() -> str:
-    """知识库文件路径。"""
+    """知识库文件路径（按当前智能体命名空间隔离；默认 bot 回落引擎目录，保持兼容）。"""
     p = getattr(config, "KNOWLEDGE_FILE", "")
     if not p:
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge_base.json")
+        base = agent_ctx.agent_storage_dir(os.path.dirname(os.path.abspath(__file__)))
+        p = os.path.join(base, "knowledge_base.json")
     return p
 
 
@@ -50,6 +52,9 @@ def _load() -> List[Dict]:
 def _save(entries: List[Dict]):
     path = _kb_path()
     try:
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False, indent=2)
     except Exception as e:
