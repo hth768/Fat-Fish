@@ -102,7 +102,8 @@
 - **高危确认**：`high` 或 default 模式 → `_queue_approval` 存 `data/builder_approvals.json`；返回给模型 `{"pending": True, "approval_id", "message": "不要重复提交"}`。**真正执行只发生在 `approve_approval_sync(bridge, aid, remember, scope)`**（用户点批准，可顺带记住）；`approve_all_sync` 一键批准全部。批准/拒绝结果由 `_note_session` 以 `[系统通知]` user 消息写回会话，模型下一轮可见。
 - 模型侧：工具 `get_builder_settings` 可自查约束（含 remembered_rules）；`run_chat` 注入 `#### 当前运行环境`（含已记住规则）；步数上限取 `settings["max_steps"]`（`run_chat(max_steps=None)` 时）。
 - 路由：GET `/api/builder/{settings,approvals,rules}`；POST `/api/builder/settings/save`、`/api/builder/approval/{approve,approve_all,reject,clear}`、`/api/builder/rules/{delete,clear}`。
-- 前端：左栏第三页签「设置」（`bcWs*`/`bcPerm`/`bcConfirm*`/`bcAutoBackup`/`bcRemember`/`bcMaxSteps`/`bcRules`）；输入区上方 `#bcApprovals` 待确认区（含范围下拉与「全部批准」）；工具卡片 `⏳ 待确认`（`.bc-tool.pending`）。完全访问档位下审批卡片记住范围默认选「记住此文件」（前端按 `bchat.mode==="full"`）。
+- 前端控件位置（`76b162f` 起，改动前先看这里）：**模型 / 思考 / 访问权限 / 工作区** 都在对话框输入区下方的 `.bc-opts` 一行里（`bcModel`/`bcCustomModel`/`bcThink`/`bcPerm`/`bcWs`+`bcWsApply`/`bcWsReset`，hint 在 `.bc-opt-hints`）；左栏第三页签已改名 **「高级」**，只剩高危确认开关（`bcConfirm*`/`bcAutoBackup`/`bcRemember`）、`bcMaxSteps`、`bcSettingsSave`、`bcRules`。输入区上方 `#bcApprovals` 待确认区（含范围下拉与「全部批准」）；工具卡片 `⏳ 待确认`（`.bc-tool.pending`）。完全访问档位下审批卡片记住范围默认选「记住此文件」（前端按 `bchat.mode==="full"`）。
+- **权限档位中文名**：`_MODE_LABEL`（plan 只读规划 / default 每次确认 / acceptEdits 自动应用 / full 完全访问 / bypassPermissions 完全放行），`get_settings().modes` 每项含 `id`(英文,后端判定用) + `label`(中文,界面显示) + `desc`(说明)。下拉 value 必须保持英文 id。
 - **测试注意（血泪教训）**：① 测写流程先用 `POST /api/builder/settings/save` 调模式，测完恢复默认（mode=default、workspace=""）并清理 `builder_{approvals,rules}.json` / 测试会话与文件。② **写操作测试的目标路径必须是「不存在的临时文件」**（如 `bridge/_tmp_probe_1.py`——满足 `_sensitive_path` 判定又不破坏真实源码），并在脚本开头断言 `not os.path.isfile(target)`；曾因把 `bridge/builder_api.py` 当测试目标、`approve_approval_sync` 真执行了写入而覆盖掉真实源码（靠 `data/builder_bak/` 的自动备份一分钟内还原）。
 
 ## git 提交规范（PowerShell 中文坑）
