@@ -230,6 +230,13 @@ def make_handler(bridge):
                     if not raw:
                         return self._serve_raw(b"", "image/png", 404)
                     return self._serve_raw(raw, appearance_api._bg_content_type(raw))
+                # ----- 构建助手：文件上下文 / 构建历史（只读查询，走 GET） -----
+                if path == "/api/builder/files":
+                    return self._json(builder_api.list_context_files_sync())
+                if path == "/api/builder/file/read":
+                    return self._json(builder_api.read_context_file_sync((q.get("path") or [""])[0]))
+                if path == "/api/builder/history":
+                    return self._json(builder_api.get_history_sync(int((q.get("limit") or ["60"])[0])))
                 return self._json({"error": "not found"}, 404)
             except Exception as e:
                 return self._json({"error": repr(e)}, 500)
@@ -311,12 +318,6 @@ def make_handler(bridge):
                     except ValueError as e:
                         return self._json({"error": str(e)}, 400)
                 # ----- 构建助手：智能体 / 插件 生成与落盘 -----
-                if path == "/api/builder/files":
-                    return self._json(builder_api.list_context_files_sync())
-                if path == "/api/builder/file/read":
-                    return self._json(builder_api.read_context_file_sync(body.get("path", "")))
-                if path == "/api/builder/history":
-                    return self._json(builder_api.get_history_sync(int(body.get("limit", 60))))
                 if path == "/api/builder/agent/generate":
                     return self._json(builder_api.generate_agent_sync(
                         bridge, body.get("requirement", ""),
