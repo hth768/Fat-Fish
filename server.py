@@ -230,13 +230,18 @@ def make_handler(bridge):
                     if not raw:
                         return self._serve_raw(b"", "image/png", 404)
                     return self._serve_raw(raw, appearance_api._bg_content_type(raw))
-                # ----- 构建助手：文件上下文 / 构建历史（只读查询，走 GET） -----
+                # ----- 构建助手：文件上下文 / 构建历史 / 会话（只读查询，走 GET） -----
                 if path == "/api/builder/files":
                     return self._json(builder_api.list_context_files_sync())
                 if path == "/api/builder/file/read":
                     return self._json(builder_api.read_context_file_sync((q.get("path") or [""])[0]))
                 if path == "/api/builder/history":
                     return self._json(builder_api.get_history_sync(int((q.get("limit") or ["60"])[0])))
+                if path == "/api/builder/sessions":
+                    return self._json(builder_api.list_chat_sessions())
+                if path == "/api/builder/session":
+                    return self._json({"ok": True, "state": builder_api.load_chat_session(
+                        (q.get("name") or [""])[0])})
                 return self._json({"error": "not found"}, 404)
             except Exception as e:
                 return self._json({"error": repr(e)}, 500)
@@ -317,6 +322,13 @@ def make_handler(bridge):
                         return self._json(appearance_api.reset_icon())
                     except ValueError as e:
                         return self._json({"error": str(e)}, 400)
+                # ----- 构建助手：对话式 Agent（工具循环）与会话管理 -----
+                if path == "/api/builder/chat":
+                    return self._json(builder_api.run_chat_sync(bridge, body))
+                if path == "/api/builder/session/new":
+                    return self._json(builder_api.new_chat_session(body.get("title", "") or ""))
+                if path == "/api/builder/session/delete":
+                    return self._json(builder_api.delete_chat_session(body.get("name", "") or ""))
                 # ----- 构建助手：智能体 / 插件 生成与落盘 -----
                 if path == "/api/builder/agent/generate":
                     return self._json(builder_api.generate_agent_sync(

@@ -1110,304 +1110,576 @@ $("#btnResetTitle").addEventListener("click", () => {
   $("#titlePreview").textContent = "肥鱼娘 · App 控制台";
 });
 
-/* ---------------- 构建助手（内置 Agent：生成智能体/插件的产物） ---------------- */
-const builder = { mode: "agent", last: null, contextPaths: [], improve: null };
+/* ---------------- 构建助手（对话式 Agent：像 Codex / WorkBuddy 那样边聊边改） ---------------- */
+const bchat = {
+  session: "",        // 当前会话 id
+  sessions: [],       // 会话列表
+  ctx: [],            // 选中的参考文件（相对路径）
+  dir: "",            // 左栏当前浏览目录
+  drafts: {},         // 未保存草稿（agent / plugin）
+  sending: false,
+  timer: null,
+};
 
-function _bldModelSel() {
-  const val = $("#bldModel").value;
+function _bcModel() {
+  const val = $("#bcModel").value;
   let provider = "", model = null;
-  if (val === "__custom__") {
-    model = $("#bldCustomModel").value.trim() || null;
-  } else if (val) {
-    provider = val;            // 已保存模型名，作为 provider 实时指定
-  }
-  const think = $("#bldThink").value || "low";
-  return { provider, model, think };
+  if (val === "__custom__") model = $("#bcCustomModel").value.trim() || null;
+  else if (val) provider = val;
+  return { provider, model, think: $("#bcThink").value || "low" };
 }
 
-function _bldToggleCustomModel() {
-  const isCustom = $("#bldModel").value === "__custom__";
-  $("#bldCustomModel").style.display = isCustom ? "block" : "none";
+function _bcToggleCustomModel() {
+  $("#bcCustomModel").classList.toggle("hidden", $("#bcModel").value !== "__custom__");
 }
 
 async function loadBuilder() {
-  // 用「AI 供应商」里已保存的模型填充下拉，支持实时切换
+  await _bcFillModels();
+  await _bcLoadSessions();
+  _bcLoadDir(bchat.dir || "bridge");
+  _bcRefreshHistory();
+  _bcRenderCtx();
+}
+
+async function _bcFillModels() {
   try {
     const d = await GET("/api/providers");
-    const sel = $("#bldModel");
-    sel.innerHTML = '<option value="">系统默认（当前对话模型）</option>';
+    const sel = $("#bcModel");
+    sel.innerHTML = '<option value="">系统默认模型</option>';
     (d.models || []).forEach(m => {
       const o = document.createElement("option");
       o.value = m.name; o.textContent = m.name + " · " + m.model;
       sel.appendChild(o);
     });
     const custom = document.createElement("option");
-    custom.value = "__custom__"; custom.textContent = "✎ 自定义模型…";
+    custom.value = "__custom__"; custom.textContent = "✎ 自定义…";
     sel.appendChild(custom);
-  } catch (e) { /* 忽略：网络异常时保留静态选项 */ }
-
-  // 恢复上次选择
-  const saved = localStorage.getItem("bld_model");
-  const sel = $("#bldModel");
+  } catch (e) { /* 保留静态选项 */ }
+  const saved = localStorage.getItem("bc_model");
+  const sel = $("#bcModel");
   if (saved && sel.querySelector('option[value="' + (window.CSS && CSS.escape ? CSS.escape(saved) : saved) + '"]')) {
     sel.value = saved;
   } else if (saved) {
-    sel.value = "__custom__";
-    $("#bldCustomModel").value = saved;
+    sel.value = "__custom__"; $("#bcCustomModel").value = saved;
   }
-  const savedThink = localStorage.getItem("bld_think");
-  if (savedThink) $("#bldThink").value = savedThink;
-  _bldToggleCustomModel();
-  _bldRefreshFiles();
-  _bldRefreshHistory();
+  $("#bcThink").value = localStorage.getItem("bc_think") || "low";
+  _bcToggleCustomModel();
 }
 
-function _bldModeSwitch(mode) {
-  builder.mode = mode;
-  $$("#page-builder .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === mode));
-  const isP = mode === "plugin";
-  $("#bldPluginOpts").style.display = isP ? "flex" : "none";
-  $("#bldTitle").textContent = isP ? "用一句话描述你要的插件" : "用一句话描述你要的智能体";
-  $("#bldHint").textContent = isP
-    ? "例如：「一个定时提醒插件，按 config_schema 让用户填提醒间隔（分钟）和提醒语」"
-    : "例如：「一个毒舌但心软的猫娘客服，负责回答产品问题，绑定我的 QQ 私聊」";
-  $("#bldInput").placeholder = isP ? "描述你要的插件功能…" : "描述你要的智能体…";
-  builder.improve = null;
-  $("#bldGen").textContent = "生成";
-}
-
-function _bldShowResult(data) {
-  const isP = builder.mode === "plugin";
-  $("#bldResult").classList.remove("hidden");
-  $("#bldAgentJson").classList.toggle("hidden", isP);
-  $("#bldPluginBox").classList.toggle("hidden", !isP);
-  $("#bldValidate").textContent = "";
-  if (isP) {
-    $("#bldManifest").value = JSON.stringify(data, null, 2);
-    $("#bldCode").value = data.code || "";
-  } else {
-    $("#bldAgentJson").value = JSON.stringify(data, null, 2);
-  }
-}
-
-async function _bldGenerate() {
-  const req = $("#bldInput").value.trim();
-  if (!req) return toast("先描述一下需求", true);
-  const btn = $("#bldGen");
-  btn.disabled = true;
-  btn.textContent = builder.improve ? "改进中…（LLM 约 10-30s）" : "生成中…（LLM 约 10-30s）";
-  $("#bldStatus").textContent = "";
-  const ctxPaths = builder.contextPaths.slice();
-  const useHistory = $("#bldUseHistory").checked;
+// ---- 会话 ----
+async function _bcLoadSessions() {
   try {
-    const msel = _bldModelSel();
-    localStorage.setItem("bld_model", msel.provider || msel.model);
-    localStorage.setItem("bld_think", msel.think);
-    let r;
-    if (builder.improve) {
-      const body = { instruction: req, model: msel.model, think: msel.think, provider: msel.provider, context_paths: ctxPaths, use_history: useHistory };
-      if (builder.improve.mode === "agent") {
-        body.id = builder.improve.key;
-        r = await POST("/api/builder/agent/improve", body);
-      } else {
-        body.name = builder.improve.key;
-        r = await POST("/api/builder/plugin/improve", body);
-      }
-    } else if (builder.mode === "agent") {
-      r = await POST("/api/builder/agent/generate", { requirement: req, model: msel.model, think: msel.think, provider: msel.provider, context_paths: ctxPaths, use_history: useHistory });
-    } else {
-      r = await POST("/api/builder/plugin/generate", { requirement: req, kind: $("#bldKind").value, model: msel.model, think: msel.think, provider: msel.provider, context_paths: ctxPaths, use_history: useHistory });
-    }
-    if (!r.ok) throw new Error(r.error || "生成失败");
-    builder.last = r.data;
-    _bldShowResult(r.data);
-    const rounds = r.rounds || 1;
-    $("#bldValidate").textContent = rounds > 1
-      ? "✓ 已通过系统干加载校验（" + rounds + " 轮自校正后通过）"
-      : "✓ 已通过系统干加载校验（编译→导入→实例化→契约检查）";
-    if (builder.improve) {
-      toast("已生成改进版，可编辑后保存覆盖");
-      builder.improve = null;
-      $("#bldGen").textContent = "生成";
-    } else {
-      toast("已生成，可编辑后保存");
-    }
-    _bldRefreshHistory();
-  } catch (e) {
-    toast(e.message, true);
-    $("#bldStatus").textContent = e.message;
-  } finally {
-    btn.disabled = false;
-    if (builder.improve) btn.textContent = "改进生成";
-    else btn.textContent = "生成";
-  }
-}
-
-async function _bldSave() {
-  const btn = $("#bldSave");
-  btn.disabled = true; btn.textContent = "保存中…";
-  $("#bldSaveMsg").textContent = "";
-  try {
-    let r;
-    if (builder.mode === "agent") {
-      let data;
-      try { data = JSON.parse($("#bldAgentJson").value); }
-      catch (e) { throw new Error("agent.json 编辑后不是合法 JSON"); }
-      r = await POST("/api/builder/agent/save", { data });
-    } else {
-      let manifest;
-      try { manifest = JSON.parse($("#bldManifest").value); }
-      catch (e) { throw new Error("manifest.json 编辑后不是合法 JSON"); }
-      r = await POST("/api/builder/plugin/save", { name: manifest.name, manifest, code: $("#bldCode").value });
-    }
-    if (!r.ok) throw new Error(r.error || "保存失败");
-    if (builder.mode === "agent") {
-      $("#bldSaveMsg").textContent = "已保存智能体：" + r.id;
-      toast("智能体已保存");
-    } else {
-      $("#bldSaveMsg").textContent = "已写入插件包：" + r.name + "（可在「插件」页重新扫描后启用）";
-      toast("插件已写入插件库");
-    }
-  } catch (e) {
-    toast(e.message, true);
-    $("#bldSaveMsg").textContent = e.message;
-  } finally {
-    btn.disabled = false; btn.textContent = "保存到系统";
-  }
-}
-
-async function _bldCopy() {
-  let txt = builder.mode === "plugin"
-    ? "manifest.json:\n" + $("#bldManifest").value + "\n\nplugin.py:\n" + $("#bldCode").value
-    : $("#bldAgentJson").value;
-  try { await navigator.clipboard.writeText(txt); toast("已复制"); }
-  catch { toast("复制失败，请手动选择", true); }
-}
-
-// ---- 参考文件：让构建助手读取项目源码 ----
-async function _bldRefreshFiles() {
-  const stat = $("#bldFilesStat");
-  stat.textContent = "加载中…";
-  try {
-    const r = await GET("/api/builder/files");
-    if (!r.ok) throw new Error(r.error || "列表获取失败");
-    _bldRenderFiles(r.files || []);
-    stat.textContent = "共 " + (r.files || []).length + " 个可参考文件，已选 " + builder.contextPaths.length + " 个";
-  } catch (e) {
-    stat.textContent = "加载失败: " + e.message;
-  }
-}
-
-function _bldRenderFiles(files) {
-  const box = $("#bldFiles");
-  box.innerHTML = "";
-  const sel = new Set(builder.contextPaths);
-  files.forEach(f => {
-    const label = document.createElement("label");
-    label.className = "ctx-file";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = sel.has(f.path);
-    cb.dataset.path = f.path;
-    label.appendChild(cb);
-    const span = document.createElement("span");
-    span.className = "ctx-path";
-    span.textContent = f.path;
-    label.appendChild(span);
-    const sz = document.createElement("span");
-    sz.className = "ctx-size";
-    sz.textContent = _fmtSize(f.size);
-    label.appendChild(sz);
-    box.appendChild(label);
+    const d = await GET("/api/builder/sessions");
+    bchat.sessions = d.sessions || [];
+  } catch (e) { bchat.sessions = []; }
+  const sel = $("#bcSession");
+  sel.innerHTML = "";
+  const blank = document.createElement("option");
+  blank.value = ""; blank.textContent = "（新会话）";
+  sel.appendChild(blank);
+  bchat.sessions.forEach(s => {
+    const o = document.createElement("option");
+    o.value = s.id;
+    o.textContent = (s.title || s.id) + "  (" + s.count + ")";
+    sel.appendChild(o);
   });
-  box.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-    cb.addEventListener("change", () => {
-      const p = cb.dataset.path;
-      if (cb.checked) { if (builder.contextPaths.indexOf(p) < 0) builder.contextPaths.push(p); }
-      else builder.contextPaths = builder.contextPaths.filter(x => x !== p);
-      $("#bldFilesStat").textContent = "已选 " + builder.contextPaths.length + " 个";
-    });
-  });
-}
-
-// ---- 构建历史：持久化文件，可改进已有产物 ----
-async function _bldRefreshHistory() {
-  const stat = $("#bldHistoryStat");
-  stat.textContent = "加载中…";
-  try {
-    const r = await GET("/api/builder/history");
-    if (!r.ok) throw new Error(r.error || "历史获取失败");
-    _bldRenderHistory(r.history || []);
-    stat.textContent = "共 " + (r.history || []).length + " 条";
-  } catch (e) {
-    stat.textContent = "加载失败: " + e.message;
+  if (!bchat.session) {
+    const saved = localStorage.getItem("bc_session");
+    bchat.session = bchat.sessions.some(s => s.id === saved) ? saved
+      : (bchat.sessions[0] ? bchat.sessions[0].id : "");
   }
+  sel.value = bchat.session || "";
 }
 
-function _bldRenderHistory(list) {
-  const box = $("#bldHistory");
-  box.innerHTML = "";
-  if (!list.length) {
-    box.innerHTML = '<div class="hint wrap">暂无构建历史。生成或保存产物后会自动记录到 data/builder_history.jsonl。</div>';
+async function _bcOpenSession(sid) {
+  bchat.session = sid || "";
+  localStorage.setItem("bc_session", bchat.session);
+  const chat = $("#bcChat");
+  chat.innerHTML = "";
+  if (!bchat.session) {
+    _bcHint("新会话：直接描述你要构建 / 修改的内容，我会自己看代码、改文件并查语法。");
+    _bcRenderCtx();
     return;
   }
-  list.forEach((rec, idx) => {
+  try {
+    const d = await GET("/api/builder/session?name=" + encodeURIComponent(bchat.session));
+    const st = d.state || {};
+    bchat.drafts = st.drafts || {};
+    _bcRenderMessages(st.messages || []);
+    Object.values(bchat.drafts).forEach(dr => dr && _bcRenderDraft(dr));
+  } catch (e) { toast("会话加载失败: " + e.message, true); }
+}
+
+async function _bcNewSession() {
+  try {
+    const r = await POST("/api/builder/session/new", {});
+    if (!r.ok) throw new Error(r.error || "失败");
+    bchat.session = r.session;
+    await _bcLoadSessions();
+    await _bcOpenSession(r.session);
+    toast("已新建会话");
+  } catch (e) { toast(e.message, true); }
+}
+
+async function _bcDelSession() {
+  if (!bchat.session) return toast("当前没有会话", true);
+  if (!confirm("删除会话 " + bchat.session + " ？")) return;
+  try {
+    await POST("/api/builder/session/delete", { name: bchat.session });
+    bchat.session = "";
+    await _bcLoadSessions();
+    await _bcOpenSession(bchat.session);
+  } catch (e) { toast(e.message, true); }
+}
+
+function _bcHint(text) {
+  const chat = $("#bcChat");
+  const d = document.createElement("div");
+  d.className = "bc-hint";
+  d.textContent = text;
+  chat.appendChild(d);
+}
+
+// ---- 对话渲染 ----
+function _bcMsgEl(role, text) {
+  const chat = $("#bcChat");
+  const wrap = document.createElement("div");
+  wrap.className = "bc-msg bc-" + role;
+  const head = document.createElement("div");
+  head.className = "bc-msg-role";
+  head.textContent = role === "user" ? "你" : "构建助手";
+  const body = document.createElement("div");
+  body.className = "bc-msg-text";
+  body.textContent = text || "";
+  wrap.appendChild(head); wrap.appendChild(body);
+  chat.appendChild(wrap);
+  return wrap;
+}
+
+function _bcUserMsg(text) { _bcMsgEl("user", text); }
+
+function _bcRenderMessages(msgs) {
+  const chat = $("#bcChat");
+  chat.innerHTML = "";
+  let shown = 0;
+  (msgs || []).forEach(m => {
+    const role = m.role;
+    if (role === "user") { _bcMsgEl("user", m.content || ""); shown++; }
+    else if (role === "assistant") {
+      if (m.content) { _bcMsgEl("assistant", m.content); shown++; }
+      (m.tool_calls || []).forEach(tc => {
+        let args = {};
+        try { args = JSON.parse((tc.function || {}).arguments || "{}"); } catch (e) { }
+        _bcToolCard({ tool: (tc.function || {}).name, args, ok: null, result: {} });
+      });
+    }
+  });
+  if (!shown) _bcHint("这个会话还没有内容。直接描述你要做的事即可。");
+  _bcScroll();
+}
+
+function _bcScroll() {
+  const chat = $("#bcChat");
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function _bcToolCard(step) {
+  const chat = $("#bcChat");
+  const card = document.createElement("details");
+  card.className = "bc-tool" + (step.ok === false ? " bad" : "");
+  const sum = document.createElement("summary");
+  const icon = step.ok === false ? "✗" : (step.ok === null ? "•" : "✓");
+  sum.innerHTML = '<span class="bc-tool-name">' + icon + " " + (step.tool || "tool") + "</span>"
+    + '<span class="bc-tool-args">' + _bcArgsBrief(step.args) + "</span>";
+  card.appendChild(sum);
+  const box = document.createElement("div");
+  box.className = "bc-tool-body";
+  const res = step.result || {};
+  if (res.diff && res.diff.length) {
+    const pre = document.createElement("pre");
+    pre.className = "bc-diff";
+    pre.textContent = res.diff.join("\n");
+    box.appendChild(pre);
+  }
+  const pre2 = document.createElement("pre");
+  pre2.className = "bc-json";
+  pre2.textContent = _bcBrief(step.result);
+  box.appendChild(pre2);
+  card.appendChild(box);
+  chat.appendChild(card);
+  _bcScroll();
+}
+
+function _bcArgsBrief(args) {
+  if (!args) return "";
+  const keys = Object.keys(args);
+  if (!keys.length) return "";
+  const kv = keys.slice(0, 3).map(k => {
+    let v = args[k];
+    if (typeof v === "string") v = v.length > 60 ? v.slice(0, 60) + "…" : v;
+    else v = JSON.stringify(v);
+    return k + "=" + v;
+  });
+  return kv.join("  ");
+}
+
+function _bcBrief(obj) {
+  try {
+    const s = JSON.stringify(obj, null, 1);
+    if (s === undefined) return "";
+    return s.length > 2600 ? s.slice(0, 2600) + "\n…（已截断）" : s;
+  } catch (e) { return String(obj); }
+}
+
+// ---- 发送 ----
+async function _bcSend() {
+  if (bchat.sending) return;
+  const input = $("#bcInput");
+  const msg = input.value.trim();
+  if (!msg) return toast("先描述你要做的事", true);
+  const msel = _bcModel();
+  localStorage.setItem("bc_model", msel.provider || msel.model || "");
+  localStorage.setItem("bc_think", msel.think);
+
+  input.value = "";
+  _bcUserMsg(msg);
+  const wait = _bcMsgEl("assistant", "思考中…");
+  bchat.sending = true;
+  $("#bcSend").disabled = true;
+  $("#bcStop").style.display = "inline-block";
+  const t0 = Date.now();
+  bchat.timer = setInterval(() => {
+    const s = Math.round((Date.now() - t0) / 1000);
+    $("#bcStatus").textContent = "进行中 " + s + "s …";
+    wait.querySelector(".bc-msg-text").textContent = "思考中…（" + s + "s）";
+  }, 1000);
+  try {
+    const r = await POST("/api/builder/chat", {
+      session: bchat.session, message: msg,
+      model: msel.model, think: msel.think, provider: msel.provider,
+      context_paths: bchat.ctx, use_history: $("#bcUseHistory").checked,
+    });
+    wait.remove();
+    (r.steps || []).forEach(_bcToolCard);
+    if (r.reply) _bcMsgEl("assistant", r.reply);
+    if (!r.ok) throw new Error(r.error || "对话失败");
+    bchat.session = r.session || bchat.session;
+    bchat.drafts = r.drafts || bchat.drafts;
+    Object.values(bchat.drafts).forEach(d => d && _bcRenderDraft(d));
+    $("#bcStatus").textContent = "完成（" + Math.round((Date.now() - t0) / 1000) + "s，"
+      + (r.steps || []).length + " 个工具调用）";
+    _bcLoadSessions();
+    _bcRefreshHistory();
+  } catch (e) {
+    wait.remove();
+    _bcMsgEl("assistant", "出错了：" + e.message);
+    toast(e.message, true);
+    $("#bcStatus").textContent = "失败";
+  } finally {
+    clearInterval(bchat.timer);
+    bchat.sending = false;
+    $("#bcSend").disabled = false;
+    $("#bcStop").style.display = "none";
+    _bcScroll();
+  }
+}
+
+// ---- 草稿卡片（生成 / 改进产物，确认后落盘） ----
+function _bcRenderDraft(draft) {
+  const chat = $("#bcChat");
+  const isPlugin = !!(draft.code && draft.name);
+  const card = document.createElement("div");
+  card.className = "bc-draft";
+  const head = document.createElement("div");
+  head.className = "bc-draft-head";
+  head.textContent = (isPlugin ? "插件草稿：plugins/" + draft.name + "/" : "智能体草稿：" + (draft.name || ""))
+    + "（未落盘）";
+  card.appendChild(head);
+  const ta = document.createElement("textarea");
+  ta.className = "textarea code";
+  ta.rows = 12;
+  ta.spellcheck = false;
+  ta.value = JSON.stringify(draft, null, 2);
+  card.appendChild(ta);
+  const acts = document.createElement("div");
+  acts.className = "row-actions";
+  const save = document.createElement("button");
+  save.className = "btn primary sm"; save.textContent = "保存到系统";
+  save.addEventListener("click", () => _bcSaveDraft(isPlugin, ta.value, save));
+  acts.appendChild(save);
+  const copy = document.createElement("button");
+  copy.className = "btn ghost sm"; copy.textContent = "复制";
+  copy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(ta.value); toast("已复制"); }
+    catch (e) { toast("复制失败", true); }
+  });
+  acts.appendChild(copy);
+  const msg = document.createElement("span");
+  msg.className = "hint";
+  acts.appendChild(msg);
+  card.appendChild(acts);
+  chat.appendChild(card);
+  _bcScroll();
+}
+
+async function _bcSaveDraft(isPlugin, text, btn) {
+  btn.disabled = true;
+  const msg = btn.parentElement.querySelector(".hint");
+  msg.textContent = "保存中…";
+  try {
+    let data;
+    try { data = JSON.parse(text); } catch (e) { throw new Error("JSON 不合法: " + e.message); }
+    let r;
+    if (isPlugin) {
+      r = await POST("/api/builder/plugin/save", { name: data.name, manifest: data, code: data.code });
+    } else {
+      r = await POST("/api/builder/agent/save", { data });
+    }
+    if (!r.ok) throw new Error(r.error || "保存失败");
+    msg.textContent = isPlugin ? ("已写入插件包 " + r.name) : ("已保存智能体 " + r.id);
+    toast(isPlugin ? "插件已保存（可在插件页重新扫描）" : "智能体已保存");
+    bchat.drafts = {};
+  } catch (e) {
+    msg.textContent = e.message;
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---- 左侧：工作区文件树 ----
+async function _bcLoadDir(dir) {
+  bchat.dir = (dir || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  $("#bcDirPath").textContent = bchat.dir || "/（根）";
+  const box = $("#bcTree");
+  box.textContent = "加载中…";
+  try {
+    const d = await POST("/api/builder/workspace/list", { dir: bchat.dir });
+    if (!d.ok) { box.textContent = "读取失败: " + d.error; return; }
+    _bcRenderTree(d.items || []);
+  } catch (e) { box.textContent = "读取失败: " + e.message; }
+}
+
+function _bcRenderTree(items) {
+  const box = $("#bcTree");
+  box.innerHTML = "";
+  items.sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name));
+  items.forEach(it => {
+    const row = document.createElement("div");
+    row.className = "bc-row" + (it.is_dir ? " dir" : "");
+    if (!it.is_dir) row.classList.add("file");
+    const nm = document.createElement("span");
+    nm.className = "bc-row-name";
+    nm.textContent = (it.is_dir ? "▸ " : "· ") + it.name;
+    row.appendChild(nm);
+    if (!it.is_dir) {
+      const sz = document.createElement("span");
+      sz.className = "bc-row-size";
+      sz.textContent = _fmtSize(it.size || 0);
+      row.appendChild(sz);
+      const add = document.createElement("button");
+      add.className = "bc-row-btn";
+      add.textContent = "＋参考";
+      add.title = "作为上下文加入本次对话";
+      add.addEventListener("click", e => { e.stopPropagation(); _bcAddCtx(it.rel); });
+      row.appendChild(add);
+    }
+    row.addEventListener("click", () => {
+      if (it.is_dir) _bcLoadDir(it.rel);
+      else _bcOpenFile(it.rel);
+    });
+    box.appendChild(row);
+  });
+  if (!items.length) box.textContent = "（空目录）";
+}
+
+function _bcUp() {
+  const d = bchat.dir.split("/").filter(Boolean);
+  d.pop();
+  _bcLoadDir(d.join("/"));
+}
+
+// ---- 参考文件（上下文） ----
+function _bcAddCtx(path) {
+  if (!path) return;
+  if (bchat.ctx.indexOf(path) < 0) {
+    if (bchat.ctx.length >= 20) return toast("参考文件最多 20 个", true);
+    bchat.ctx.push(path);
+    _bcRenderCtx();
+    toast("已加入参考：" + path);
+  }
+}
+
+function _bcDelCtx(path) {
+  bchat.ctx = bchat.ctx.filter(p => p !== path);
+  _bcRenderCtx();
+}
+
+function _bcRenderCtx() {
+  const bar = $("#bcCtxBar");
+  bar.innerHTML = "";
+  if (!bchat.ctx.length) {
+    bar.innerHTML = '<span class="hint">参考文件：无（在左侧文件上点「＋参考」，我会读取它作为上下文）</span>';
+    return;
+  }
+  const label = document.createElement("span");
+  label.className = "hint";
+  label.textContent = "参考文件（" + bchat.ctx.length + "）：";
+  bar.appendChild(label);
+  bchat.ctx.forEach(p => {
+    const chip = document.createElement("span");
+    chip.className = "bc-chip";
+    chip.innerHTML = '<span></span>';
+    chip.firstChild.textContent = p;
+    const x = document.createElement("b");
+    x.textContent = "✕";
+    x.addEventListener("click", () => _bcDelCtx(p));
+    chip.appendChild(x);
+    bar.appendChild(chip);
+  });
+  const clr = document.createElement("button");
+  clr.className = "bc-row-btn";
+  clr.textContent = "清空";
+  clr.addEventListener("click", () => { bchat.ctx = []; _bcRenderCtx(); });
+  bar.appendChild(clr);
+}
+
+// ---- 右侧：文件编辑器 ----
+async function _bcOpenFile(path) {
+  const pane = $("#bcEditorPane");
+  pane.classList.remove("hidden");
+  $("#bcFile").value = path;
+  $("#bcContent").value = "读取中…";
+  $("#bcDiffOut").classList.add("hidden");
+  try {
+    const d = await POST("/api/builder/workspace/read", { path });
+    if (!d.ok) { $("#bcContent").value = ""; $("#bcFileMsg").textContent = d.error; return; }
+    $("#bcContent").value = d.content || "";
+    $("#bcFileMsg").textContent = d.size + " bytes";
+  } catch (e) { $("#bcFileMsg").textContent = e.message; }
+}
+
+async function _bcDiffFile() {
+  const path = $("#bcFile").value.trim();
+  if (!path) return;
+  try {
+    const d = await POST("/api/builder/workspace/diff", { path, content: $("#bcContent").value });
+    const out = $("#bcDiffOut");
+    if (!d.ok) { out.textContent = "失败: " + d.error; out.classList.remove("hidden"); return; }
+    out.textContent = (d.diff || []).join("\n") + "\n\n（旧 " + d.old_size + " 行 → 新 " + d.new_size + " 行）";
+    out.classList.remove("hidden");
+  } catch (e) { $("#bcFileMsg").textContent = e.message; }
+}
+
+async function _bcSaveFile() {
+  const path = $("#bcFile").value.trim();
+  if (!path) return;
+  if (!confirm("写入 " + path + " ？原文件会自动备份到 data/builder_bak/")) return;
+  try {
+    const d = await POST("/api/builder/workspace/write", { path, content: $("#bcContent").value, backup: true });
+    $("#bcFileMsg").textContent = d.ok
+      ? ("已保存 " + d.size + "B" + (d.backup ? "（已备份）" : ""))
+      : ("失败: " + d.error);
+    if (d.ok) toast("已保存 " + path);
+  } catch (e) { $("#bcFileMsg").textContent = e.message; }
+}
+
+function _bcCloseEditor() { $("#bcEditorPane").classList.add("hidden"); }
+
+// ---- 左栏页签 + 历史 ----
+function _bcTab(name) {
+  $$("#page-builder .bc-tab").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  $("#bcPaneFiles").classList.toggle("hidden", name !== "files");
+  $("#bcPaneHistory").classList.toggle("hidden", name !== "history");
+  if (name === "history") _bcRefreshHistory();
+}
+
+async function _bcRefreshHistory() {
+  const stat = $("#bcHistStat");
+  stat.textContent = "加载中…";
+  try {
+    const d = await GET("/api/builder/history");
+    if (!d.ok) throw new Error(d.error || "获取失败");
+    _bcRenderHistory(d.history || []);
+    stat.textContent = "共 " + (d.history || []).length + " 条";
+  } catch (e) { stat.textContent = "失败: " + e.message; }
+}
+
+function _bcRenderHistory(list) {
+  const box = $("#bcHistory");
+  box.innerHTML = "";
+  if (!list.length) {
+    box.innerHTML = '<div class="hint wrap">暂无记录。生成 / 改进 / 改文件后会自动记录。</div>';
+    return;
+  }
+  list.forEach(rec => {
     const item = document.createElement("div");
     item.className = "hist-item";
     const meta = document.createElement("div");
     meta.className = "hist-meta";
-    const modeBadge = rec.mode === "plugin" ? "插件" : "智能体";
-    const status = rec.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>';
-    meta.innerHTML = '<span class="hist-mode">' + modeBadge + "</span>" + status +
-      ' <span class="hint">' + _fmtTime(rec.time) + " · " + (rec.event || "") + " · " + (rec.rounds || 1) + " 轮</span>";
+    const badge = rec.mode === "plugin" ? "插件" : (rec.mode === "agent" ? "智能体" : "对话");
+    meta.innerHTML = '<span class="hist-mode">' + badge + "</span>"
+      + (rec.ok ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>')
+      + ' <span class="hint">' + _fmtTime(rec.time) + " · " + (rec.event || "")
+      + " · " + (rec.rounds || 1) + " 步</span>";
     item.appendChild(meta);
     const req = document.createElement("div");
     req.className = "hist-req";
-    req.textContent = rec.requirement || "(无需求描述)";
+    req.textContent = rec.requirement || "(无描述)";
     item.appendChild(req);
-    if (rec.key) {
-      const actions = document.createElement("div");
-      actions.className = "row-actions";
-      const btnImprove = document.createElement("button");
-      btnImprove.className = "btn ghost sm";
-      btnImprove.textContent = "改进";
-      btnImprove.dataset.action = "improve";
-      btnImprove.dataset.idx = idx;
-      actions.appendChild(btnImprove);
-      const btnLoad = document.createElement("button");
-      btnLoad.className = "btn ghost sm";
-      btnLoad.textContent = "载入";
-      btnLoad.dataset.action = "load";
-      btnLoad.dataset.idx = idx;
-      actions.appendChild(btnLoad);
-      item.appendChild(actions);
+    const acts = document.createElement("div");
+    acts.className = "row-actions";
+    const again = document.createElement("button");
+    again.className = "btn ghost sm";
+    again.textContent = "继续改这个";
+    again.addEventListener("click", () => {
+      const key = rec.key || "";
+      let t;
+      if (rec.mode === "plugin" && key) t = "继续改进插件 " + key + "：";
+      else if (rec.mode === "agent" && key) t = "继续改进智能体 " + key + "：";
+      else t = "继续：" + (rec.requirement || "");
+      $("#bcInput").value = t;
+      $("#bcInput").focus();
+    });
+    acts.appendChild(again);
+    if (rec.artifact && rec.mode !== "chat") {
+      const load = document.createElement("button");
+      load.className = "btn ghost sm";
+      load.textContent = "载入草稿";
+      load.addEventListener("click", () => _bcRenderDraft(rec.artifact));
+      acts.appendChild(load);
     }
+    item.appendChild(acts);
     box.appendChild(item);
   });
-  box.querySelectorAll("button[data-action]").forEach(b => {
-    b.addEventListener("click", () => {
-      const rec = list[parseInt(b.dataset.idx, 10)];
-      if (!rec) return;
-      if (b.dataset.action === "improve") _bldStartImprove(rec);
-      else _bldLoadFromHistory(rec);
-    });
+}
+
+// ---- 事件绑定 ----
+function initBuilderUI() {
+  $("#bcSession").addEventListener("change", () => _bcOpenSession($("#bcSession").value));
+  $("#bcNewSession").addEventListener("click", _bcNewSession);
+  $("#bcDelSession").addEventListener("click", _bcDelSession);
+  $("#bcModel").addEventListener("change", _bcToggleCustomModel);
+  $("#bcSend").addEventListener("click", _bcSend);
+  $("#bcStop").addEventListener("click", () => {
+    // HTTP 请求无法中途取消，提示用户等待本轮结束
+    $("#bcStatus").textContent = "本轮结束后生效（HTTP 调用不可中断）";
   });
-}
-
-function _bldLoadFromHistory(rec) {
-  if (!rec.artifact) return toast("该记录无可载入的产物", true);
-  _bldModeSwitch(rec.mode);
-  _bldShowResult(rec.artifact);
-  toast("已载入历史产物（" + rec.mode + "）");
-}
-
-function _bldStartImprove(rec) {
-  if (!rec.key) return toast("该记录无可改进的产物", true);
-  builder.improve = { mode: rec.mode, key: rec.key, requirement: rec.requirement };
-  _bldModeSwitch(rec.mode);
-  $("#bldInput").value = "改进：" + (rec.requirement || rec.key);
-  $("#bldGen").textContent = "改进生成";
-  toast("已进入改进模式，填写改进要求后点「改进生成」");
+  $("#bcRefreshTree").addEventListener("click", () => _bcLoadDir(bchat.dir));
+  $("#bcUp").addEventListener("click", _bcUp);
+  $("#bcRefreshHist").addEventListener("click", _bcRefreshHistory);
+  $$("#page-builder .bc-tab").forEach(b => b.addEventListener("click", () => _bcTab(b.dataset.tab)));
+  $("#bcFileDiff").addEventListener("click", _bcDiffFile);
+  $("#bcFileSave").addEventListener("click", _bcSaveFile);
+  $("#bcEditorClose").addEventListener("click", _bcCloseEditor);
+  $("#bcFileCtx").addEventListener("click", () => _bcAddCtx($("#bcFile").value.trim()));
+  $("#bcInput").addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); _bcSend(); }
+  });
+  $("#bcChat").addEventListener("click", e => {
+    const a = e.target.closest ? e.target.closest("a") : null;
+    if (a) e.preventDefault();
+  });
 }
 
 function _fmtTime(ts) {
@@ -1442,131 +1714,8 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#cfgClose2").addEventListener("click", closeCfgModal);
   $("#cfgSave").addEventListener("click", savePluginConfig);
   $("#bgDim").addEventListener("click", closeCfgModal);
-  // ----- 构建助手 -----
-  $$("#page-builder .seg-btn").forEach(b => b.addEventListener("click", () => _bldModeSwitch(b.dataset.mode)));
-  $("#bldModel").addEventListener("change", _bldToggleCustomModel);
-  $("#bldGen").addEventListener("click", _bldGenerate);
-  $("#bldSave").addEventListener("click", _bldSave);
-  $("#bldCopy").addEventListener("click", _bldCopy);
-  $("#bldRefreshFiles").addEventListener("click", _bldRefreshFiles);
-  $("#bldRefreshHistory").addEventListener("click", _bldRefreshHistory);
-  _bldModeSwitch("agent");
-
-  // ===== 构建助手 · 工作区读写 =====
-  const _ws = {
-    dir: "",
-  };
-  function _wsRenderList(data) {
-    const ul = $("#wsList");
-    ul.innerHTML = "";
-    if (!data.ok) { ul.textContent = "读取失败: " + data.error; return; }
-    const items = data.items || [];
-    if (!items.length) { ul.textContent = "（空目录）"; return; }
-    for (const it of items) {
-      const row = document.createElement("div");
-      row.className = "ws-row";
-      const label = (it.is_dir ? "📁 " : "📄 ") + it.name + (it.is_dir ? "" : `  (${it.size}B)`);
-      row.textContent = label;
-      row.style.cursor = "pointer";
-      row.style.padding = "2px 4px";
-      row.addEventListener("click", () => {
-        if (it.is_dir) {
-          $("#wsDir").value = it.rel;
-          _wsLoadDir(it.rel);
-        } else {
-          $("#wsPath").value = it.rel;
-          _wsRead(it.rel);
-        }
-      });
-      ul.appendChild(row);
-    }
-  }
-  async function _wsLoadDir(dir) {
-    _ws.dir = dir || "";
-    const msg = $("#wsMsg");
-    msg.textContent = "加载中…";
-    try {
-      const data = await POST("/api/builder/workspace/list", { dir });
-      _wsRenderList(data);
-      msg.textContent = data.ok ? `已加载 ${(data.items || []).length} 项` : ("失败: " + (data.error || ""));
-    } catch (e) { msg.textContent = "失败: " + e.message; }
-  }
-  async function _wsRead(path) {
-    path = (path || $("#wsPath").value || "").trim();
-    if (!path) { $("#wsMsg").textContent = "请填写路径"; return; }
-    $("#wsPath").value = path;
-    const msg = $("#wsMsg");
-    msg.textContent = "读取中…";
-    try {
-      const data = await POST("/api/builder/workspace/read", { path });
-      if (!data.ok) { msg.textContent = "失败: " + data.error; return; }
-      $("#wsContent").value = data.content;
-      $("#wsInfo").textContent = `${data.path}  (${data.size} bytes)`;
-      msg.textContent = "已读取";
-    } catch (e) { msg.textContent = "失败: " + e.message; }
-  }
-  async function _wsWrite() {
-    const path = ($("#wsPath").value || "").trim();
-    const content = $("#wsContent").value;
-    if (!path) { $("#wsMsg").textContent = "请填写路径"; return; }
-    if (!confirm(`确认写入 ${path}？原文件将自动备份到 data/builder_bak/`)) return;
-    $("#wsMsg").textContent = "写入中…";
-    try {
-      const data = await POST("/api/builder/workspace/write", { path, content, backup: true });
-      if (!data.ok) { $("#wsMsg").textContent = "失败: " + data.error; return; }
-      $("#wsMsg").textContent = `已保存 ${data.size}B${data.backup ? "（已备份）" : ""}`;
-      $("#wsInfo").textContent = `${data.path}  (${data.size} bytes)`;
-    } catch (e) { $("#wsMsg").textContent = "失败: " + e.message; }
-  }
-  async function _wsDiff() {
-    const path = ($("#wsPath").value || "").trim();
-    const content = $("#wsContent").value;
-    if (!path) { $("#wsMsg").textContent = "请填写路径"; return; }
-    try {
-      const data = await POST("/api/builder/workspace/diff", { path, content });
-      const out = $("#wsDiffOut");
-      if (!data.ok) { out.textContent = "失败: " + data.error; out.classList.remove("hidden"); return; }
-      out.textContent = (data.diff || []).join("\n") + `\n\n（旧 ${data.old_size} 行 → 新 ${data.new_size} 行）`;
-      out.classList.remove("hidden");
-      $("#wsMsg").textContent = "已生成 diff";
-    } catch (e) { $("#wsMsg").textContent = "失败: " + e.message; }
-  }
-  async function _wsListPlugin() {
-    const name = ($("#wsPluginName").value || "").trim();
-    if (!name) { $("#wsPluginMsg").textContent = "请填插件名"; return; }
-    $("#wsPluginMsg").textContent = "加载中…";
-    try {
-      const data = await POST("/api/builder/plugin/files", { name });
-      const box = $("#wsPluginFiles");
-      box.innerHTML = "";
-      if (!data.ok) { $("#wsPluginMsg").textContent = "失败: " + data.error; return; }
-      const files = data.files || [];
-      $("#wsPluginMsg").textContent = `共 ${files.length} 个文件`;
-      for (const f of files) {
-        const row = document.createElement("div");
-        row.className = "ws-row";
-        row.style.cursor = "pointer";
-        row.style.padding = "2px 4px";
-        row.textContent = `${f.text ? "📄" : "🖼"} plugins/${f.name || name}/${f.rel}  (${f.size}B)`;
-        row.addEventListener("click", () => {
-          $("#wsPath").value = `plugins/${name}/${f.rel}`;
-          _wsRead($("#wsPath").value);
-        });
-        box.appendChild(row);
-      }
-    } catch (e) { $("#wsPluginMsg").textContent = "失败: " + e.message; }
-  }
-  // 绑定工作区事件
-  $("#wsRefresh").addEventListener("click", () => _wsLoadDir($("#wsDir").value || _ws.dir));
-  $("#wsGoRoot").addEventListener("click", () => { $("#wsDir").value = ""; _wsLoadDir(""); });
-  $("#wsGoDir").addEventListener("click", () => { _wsLoadDir($("#wsDir").value); });
-  $("#wsRead").addEventListener("click", () => _wsRead());
-  $("#wsWrite").addEventListener("click", _wsWrite);
-  $("#wsDiff").addEventListener("click", _wsDiff);
-  $("#wsListPlugin").addEventListener("click", _wsListPlugin);
-  $$(".quick-roots button").forEach(b => b.addEventListener("click", () => { $("#wsDir").value = b.dataset.root; _wsLoadDir(b.dataset.root); }));
-  // 默认进入 bridge（核心桥接层，常用且肯定存在）
-  _wsLoadDir("bridge");
+  // ----- 构建助手（对话式 Agent） -----
+  initBuilderUI();
 
   // ===== 记忆：导入 / 导出 =====
   $("#btnExportMem").addEventListener("click", async () => {

@@ -1145,3 +1145,446 @@ def list_plugin_files_sync(name: str) -> dict:
             out.append({"rel": rel, "size": size, "text": _is_text_file(full)})
     out.sort(key=lambda x: x["rel"])
     return {"ok": True, "name": name, "files": out}
+
+
+# ============================================================================
+# 对话式构建 Agent（类 Codex / WorkBuddy：一个对话框 + 工具调用 + 会话历史）
+# ============================================================================
+# 设计：把上面所有能力（读文件 / 写文件 / diff / 生成 / 改进 / 保存）包装成 LLM 工具，
+# 在一个多轮 tool-calling 循环里由模型自己决定调用顺序，实现
+# 「说需求 → 自己看代码 → 自己改 → 自己查语法 → 自报结果」的闭环。
+CHAT_DIR = os.path.join(DATA_DIR, "builder_chat")
+CHAT_MAX_STEPS = 14                 # 单轮最多工具步数（防死循环）
+CHAT_TOOL_RESULT_MAX = 6000          # 单条工具结果回喂模型的最大字符数
+CHAT_SEARCH_MAX = 40                 # search_code 最多返回条数
+
+CHAT_SYSTEM = """你是「构建助手」——肥鱼娘桌面 App 内置的代码 / 构建 Agent（类似 Codex、WorkBuddy）。
+你可以通过工具读写用户工作区源码、生成或改进智能体与插件。
+
+可用能力：
+- 列目录 / 读文件 / 写文件（写前自动备份到 data/builder_bak/）/ 查看 diff / 全库搜索 / 语法检查
+- 生成智能体（agent.json）与插件包（manifest.json + plugin.py）；改进已有智能体 / 插件
+- 查看当前已有的智能体与插件列表
+
+工作准则：
+1. 修改代码前先 read_file 看清现状，不要凭空猜文件名或字段名。
+2. 写完 Python 代码必须调 check_syntax 确认语法通过；报错就继续改，直到通过。
+3. write_file 会自动返回 diff，请核对改动是否符合预期。
+4. 生成类工具（generate_agent / generate_plugin）只产出**草稿**，会展示给用户点保存；
+   只有用户明确说「保存 / 落盘 / 装上」时才调用 save_agent / save_plugin。
+5. 改已有的插件/智能体优先用 improve_plugin / improve_agent，不要从零重写。
+6. 一次只做用户要求的事，不要顺手改无关文件。
+7. 回复用中文、简短：先说做了什么（含改动的文件路径），再说下一步建议。
+8. 无法完成时直说原因，不要假装成功。"""
+
+
+def _tool(name: str, desc: str, props: dict, required: list) -> dict:
+    return {"type": "function", "function": {
+        "name": name, "description": desc,
+        "parameters": {"type": "object", "properties": props, "required": required},
+    }}
+
+
+def builder_tools() -> list:
+    S = {"type": "string"}
+    return [
+        _tool("list_dir", "列出工作区目录内容（相对路径，空字符串=根）。",
+              {"dir": S}, ["dir"]),
+        _tool("read_file", "读取工作区某个文本文件的内容。",
+              {"path": S}, ["path"]),
+        _tool("write_file", "写入（覆盖）工作区文本文件，写入前自动备份，返回 diff。",
+              {"path": S, "content": S}, ["path", "content"]),
+        _tool("diff_file", "对比「磁盘现状」与「将要写入的内容」，返回 unified diff 文本。",
+              {"path": S, "content": S}, ["path", "content"]),
+        _tool("search_code", "在工作区源码里全文搜索关键字，返回 文件:行号:内容。",
+              {"query": S, "limit": {"type": "integer"}}, ["query"]),
+        _tool("check_syntax", "检查 Python 代码语法（可传 content 检查待写入内容，或只传 path 检查磁盘文件）。",
+              {"path": S, "content": S}, []),
+        _tool("list_agents", "列出当前已存在的智能体（id / 名称）。", {}, []),
+        _tool("list_plugins", "列出当前已存在的插件包（名称 / 类型 / 说明）。", {}, []),
+        _tool("list_history", "查看最近的构建历史（生成/改进/保存记录）。",
+              {"limit": {"type": "integer"}}, []),
+        _tool("generate_agent", "根据需求生成一个智能体定义草稿（不落盘）。",
+              {"requirement": S}, ["requirement"]),
+        _tool("generate_plugin", "根据需求生成一个插件包草稿（manifest + plugin.py，不落盘）。",
+              {"requirement": S, "kind": S}, ["requirement"]),
+        _tool("improve_agent", "读取磁盘上已有智能体并按指令改进，产出新版草稿。",
+              {"id": S, "instruction": S}, ["id", "instruction"]),
+        _tool("improve_plugin", "读取磁盘上已有插件包并按指令改进，产出新版草稿。",
+              {"name": S, "instruction": S}, ["name", "instruction"]),
+        _tool("save_agent", "把智能体草稿落盘注册（不传 data 时保存最近一次生成/改进的草稿）。",
+              {"data": {"type": "object"}}, []),
+        _tool("save_plugin", "把插件包草稿落盘到 plugins/<name>/（不传参时保存最近一次草稿）。",
+              {}, []),
+    ]
+
+
+def _check_syntax(path: str = "", content: str = None) -> dict:
+    """语法检查：优先检查传入内容，否则检查磁盘文件。"""
+    if content is None:
+        if not path:
+            return {"ok": False, "error": "需要 path 或 content"}
+        r = read_workspace_sync(path)
+        if not r.get("ok"):
+            return r
+        content = r.get("content", "")
+    if not path.endswith(".py"):
+        return {"ok": False, "error": "只能检查 .py 文件语法"}
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "check.py")
+        try:
+            with open(f, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            py_compile.compile(f, doraise=True)
+            return {"ok": True, "path": path, "message": "语法检查通过"}
+        except py_compile.PyCompileError as e:
+            return {"ok": False, "path": path, "error": str(e)[:1500]}
+        except Exception as e:
+            return {"ok": False, "path": path, "error": "检查失败: %r" % e}
+
+
+def _search_workspace(query: str, limit: int = CHAT_SEARCH_MAX) -> dict:
+    """在工作区白名单根下做全文搜索（跳过黑名单/二进制/超大文件）。"""
+    q = (query or "").strip()
+    if not q:
+        return {"ok": False, "error": "关键字为空"}
+    limit = max(1, min(int(limit or CHAT_SEARCH_MAX), 200))
+    hits = []
+    scanned = 0
+    for root in ("plugins", "bridge", "webui", "agents", "config"):
+        base = os.path.join(APP_DIR, root)
+        if not os.path.isdir(base):
+            continue
+        for dirpath, dirnames, filenames in os.walk(base):
+            dirnames[:] = [d for d in dirnames if d not in _WORKSPACE_DENY
+                           and not d.startswith(".") and d != "__pycache__"]
+            for fn in filenames:
+                if fn.startswith(".") or not fn.endswith(
+                        (".py", ".json", ".js", ".css", ".html", ".md", ".txt", ".yml", ".yaml", ".bat")):
+                    continue
+                fp = os.path.join(dirpath, fn)
+                try:
+                    if os.path.getsize(fp) > _MAX_FILE_BYTES:
+                        continue
+                except OSError:
+                    continue
+                scanned += 1
+                try:
+                    with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                        for i, line in enumerate(f, 1):
+                            if q in line:
+                                rel = os.path.relpath(fp, APP_DIR).replace("\\", "/")
+                                hits.append({"path": rel, "line": i, "text": line.strip()[:200]})
+                                if len(hits) >= limit:
+                                    return {"ok": True, "query": q, "scanned": scanned,
+                                            "truncated": True, "hits": hits}
+                except Exception:
+                    continue
+    return {"ok": True, "query": q, "scanned": scanned, "truncated": False, "hits": hits}
+
+
+def _list_plugins_brief() -> dict:
+    out = []
+    if os.path.isdir(PLUGINS_DIR):
+        for name in sorted(os.listdir(PLUGINS_DIR)):
+            d = os.path.join(PLUGINS_DIR, name)
+            if not os.path.isdir(d):
+                continue
+            man = {}
+            mf = os.path.join(d, "manifest.json")
+            if os.path.isfile(mf):
+                try:
+                    with open(mf, "r", encoding="utf-8") as f:
+                        man = json.load(f)
+                except Exception:
+                    man = {}
+            out.append({"name": man.get("name") or name, "kind": man.get("kind") or "?",
+                        "title": man.get("title") or "", "description": (man.get("description") or "")[:120]})
+    return {"ok": True, "plugins": out}
+
+
+async def _exec_tool(bridge, name: str, args: dict, state: dict) -> dict:
+    """执行一个构建工具调用，返回 JSON 结果（同时供 UI 展示）。"""
+    a = args if isinstance(args, dict) else {}
+    llm = state.get("_llm", {})
+    m, th, pv = llm.get("model"), llm.get("think"), llm.get("provider")
+    ctx = state.get("ctx") or None
+    use_hist = bool(state.get("use_history"))
+
+    if name == "list_dir":
+        return list_workspace_sync(a.get("dir", "") or "")
+    if name == "read_file":
+        return read_workspace_sync(a.get("path", ""))
+    if name == "diff_file":
+        return workspace_diff_sync(a.get("path", ""), a.get("content", "") or "")
+    if name == "search_code":
+        return _search_workspace(a.get("query", ""), a.get("limit", CHAT_SEARCH_MAX))
+    if name == "check_syntax":
+        return _check_syntax(a.get("path", ""), a.get("content"))
+    if name == "list_agents":
+        try:
+            import agent_manager
+            return {"ok": True, "agents": [{"id": x.get("id"), "name": x.get("name")}
+                                           for x in agent_manager.list_agents()]}
+        except Exception as e:
+            return {"ok": False, "error": "读取智能体列表失败: %r" % e}
+    if name == "list_plugins":
+        return _list_plugins_brief()
+    if name == "list_history":
+        return get_history(limit=int(a.get("limit", 20) or 20))
+    if name == "write_file":
+        path, content = a.get("path", ""), a.get("content", "") or ""
+        d = workspace_diff_sync(path, content)
+        r = write_workspace_sync(path, content, backup=True)
+        if r.get("ok"):
+            r["diff"] = (d.get("diff") or [])[:120]
+            r["old_size"], r["new_size"] = d.get("old_size"), d.get("new_size")
+        return r
+    # ---- 生成 / 改进（产物进草稿，用户或 save_* 才落盘） ----
+    if name == "generate_agent":
+        r = await generate_agent(a.get("requirement", ""), model=m, think=th, provider=pv,
+                                 context_paths=ctx, use_history=use_hist)
+        if r.get("ok"):
+            state.setdefault("drafts", {})["agent"] = r["data"]
+            r = {"ok": True, "mode": "agent", "rounds": r.get("rounds"),
+                 "draft": r["data"], "note": "草稿已生成，等待用户确认保存"}
+        return r
+    if name == "generate_plugin":
+        r = await generate_plugin(a.get("requirement", ""), a.get("kind", "") or "",
+                                  model=m, think=th, provider=pv,
+                                  context_paths=ctx, use_history=use_hist)
+        if r.get("ok"):
+            state.setdefault("drafts", {})["plugin"] = r["data"]
+            r = {"ok": True, "mode": "plugin", "rounds": r.get("rounds"),
+                 "draft": r["data"], "note": "草稿已生成，等待用户确认保存"}
+        return r
+    if name == "improve_agent":
+        r = await improve_agent(a.get("id", ""), a.get("instruction", "") or "",
+                                model=m, think=th, provider=pv,
+                                context_paths=ctx, use_history=use_hist)
+        if r.get("ok"):
+            state.setdefault("drafts", {})["agent"] = r["data"]
+        return r
+    if name == "improve_plugin":
+        r = await improve_plugin(a.get("name", ""), a.get("instruction", "") or "",
+                                 model=m, think=th, provider=pv,
+                                 context_paths=ctx, use_history=use_hist)
+        if r.get("ok"):
+            state.setdefault("drafts", {})["plugin"] = r["data"]
+        return r
+    if name == "save_agent":
+        data = a.get("data") or (state.get("drafts") or {}).get("agent") or {}
+        if not data:
+            return {"ok": False, "error": "没有可保存的智能体草稿，请先生成"}
+        return await save_agent(bridge, data)
+    if name == "save_plugin":
+        d = (state.get("drafts") or {}).get("plugin") or {}
+        if not d or not d.get("name"):
+            return {"ok": False, "error": "没有可保存的插件草稿，请先生成"}
+        return await save_plugin(bridge, d.get("name"), d.get("manifest") or d, d.get("code") or "")
+    return {"ok": False, "error": "未知工具: %s" % name}
+
+
+# ---------------- 会话存取 ----------------
+def _safe_sid(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_\-]", "", (s or ""))[:64]
+
+
+def _chat_path(sid: str) -> str:
+    return os.path.join(CHAT_DIR, _safe_sid(sid) + ".json")
+
+
+def save_chat_session(state: dict) -> None:
+    sid = _safe_sid(state.get("id") or "")
+    if not sid:
+        return
+    try:
+        os.makedirs(CHAT_DIR, exist_ok=True)
+        out = {k: v for k, v in state.items() if not k.startswith("_")}
+        out["id"] = sid
+        out["updated"] = time.time()
+        tmp = _chat_path(sid) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _chat_path(sid))
+    except Exception:
+        pass
+
+
+def load_chat_session(sid: str) -> dict:
+    p = _chat_path(sid)
+    if not os.path.isfile(p):
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def list_chat_sessions() -> dict:
+    out = []
+    if os.path.isdir(CHAT_DIR):
+        for fn in os.listdir(CHAT_DIR):
+            if not fn.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(CHAT_DIR, fn), "r", encoding="utf-8") as f:
+                    d = json.load(f)
+            except Exception:
+                continue
+            out.append({"id": d.get("id") or fn[:-5], "title": d.get("title") or "",
+                        "updated": d.get("updated") or 0,
+                        "count": len(d.get("messages") or [])})
+    out.sort(key=lambda x: x.get("updated", 0), reverse=True)
+    return {"ok": True, "sessions": out}
+
+
+def delete_chat_session(sid: str) -> dict:
+    p = _chat_path(sid)
+    try:
+        if os.path.isfile(p):
+            os.remove(p)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": "%r" % e}
+
+
+def new_chat_session(title: str = "") -> dict:
+    sid = "chat_" + time.strftime("%Y%m%d_%H%M%S")
+    state = {"id": sid, "title": title or "新会话", "created": time.time(),
+             "messages": [], "drafts": {}}
+    save_chat_session(state)
+    return {"ok": True, "session": sid, "state": state}
+
+
+# ---------------- 主循环 ----------------
+async def _chat_with_tools(llm, convo: list, model=None, think=False, provider=None) -> dict:
+    """带工具调用的对话。
+
+    多数部署只配了 chat / reasoning / vision 能力路由（没有单独的 tools 路由），
+    而工具调用本身仍是该供应商的 chat 接口能力，故 tools 路由不可用时回退到 chat。
+    """
+    try:
+        return await llm.chat(convo, capability="tools", tools=builder_tools(),
+                              model=model, think=think, provider=provider, timeout=300)
+    except Exception as e:
+        msg = str(e)
+        if "tools" in msg or "无可用供应商" in msg or "不支持能力" in msg:
+            return await llm.chat(convo, capability="chat", tools=builder_tools(),
+                                  model=model, think=think, provider=provider, timeout=300)
+        raise
+
+
+async def run_chat(bridge, session_id: str = "", message: str = "", model: str = None,
+                   think: bool = False, provider: str = None, context_paths: list = None,
+                   use_history: bool = False, max_steps: int = CHAT_MAX_STEPS) -> dict:
+    """跑一轮对话：模型自己决定调用哪些构建工具，最多 max_steps 步。"""
+    message = (message or "").strip()
+    if not message:
+        return {"ok": False, "error": "消息为空"}
+    sid = _safe_sid(session_id)
+    state = load_chat_session(sid) if sid else {}
+    if not state:
+        sid = "chat_" + time.strftime("%Y%m%d_%H%M%S")
+        state = {"id": sid, "title": message[:30], "created": time.time(),
+                 "messages": [], "drafts": {}}
+    history = state.setdefault("messages", [])
+    state["_llm"] = {"model": model, "think": think, "provider": provider}
+    state["ctx"] = [p for p in (context_paths or []) if isinstance(p, str) and p.strip()][:20]
+    state["use_history"] = use_history
+
+    sys_parts = [CHAT_SYSTEM]
+    if state["ctx"]:
+        sys_parts.append(_context_block(state["ctx"]))
+    if use_history:
+        sys_parts.append(_history_block("plugin") + _history_block("agent"))
+    drafts = state.get("drafts") or {}
+    if drafts:
+        names = [k for k, v in drafts.items() if v]
+        sys_parts.append("\n#### 当前未保存草稿\n" + "、".join(names)
+                         + "（用户说保存时直接用 save_agent / save_plugin）\n")
+    system_msg = {"role": "system", "content": "\n".join(p for p in sys_parts if p)}
+
+    convo = [system_msg] + list(history)
+    convo.append({"role": "user", "content": message + ("\n\n（当前工作区根目录：%s）"
+                                                       % APP_DIR)})
+    steps = []
+    reply = ""
+    try:
+        from ai_provider import get_llm
+        llm = get_llm()
+        for i in range(max(1, int(max_steps))):
+            assistant = await _chat_with_tools(llm, convo, model=model, think=think, provider=provider)
+            if isinstance(assistant, str):
+                assistant = {"role": "assistant", "content": assistant}
+            if assistant.get("content"):
+                reply = assistant["content"]
+            convo.append(assistant)
+            tcs = assistant.get("tool_calls") or []
+            if not tcs:
+                break
+            for tc in tcs:
+                fn = (tc.get("function") or {})
+                tname = fn.get("name") or ""
+                try:
+                    targs = json.loads(fn.get("arguments") or "{}")
+                except Exception:
+                    targs = {}
+                try:
+                    res = await _exec_tool(bridge, tname, targs, state)
+                except Exception as e:
+                    res = {"ok": False, "error": "工具执行异常: %r" % e}
+                steps.append({"tool": tname, "args": targs, "ok": bool(res.get("ok")),
+                              "result": _trim_tool_result(res)})
+                convo.append({"role": "tool", "tool_call_id": tc.get("id") or tname,
+                              "content": json.dumps(res, ensure_ascii=False)[:CHAT_TOOL_RESULT_MAX]})
+                if not reply and isinstance(res, dict) and res.get("error"):
+                    reply = "执行 %s 时出错：%s" % (tname, res.get("error"))
+    except Exception as e:
+        return {"ok": False, "error": "对话失败: %r" % e, "session": sid, "steps": steps,
+                "drafts": state.get("drafts") or {}}
+
+    # 只把「原始用户消息 + 助手/工具消息」写入历史（不落上下文文件正文，避免会话文件膨胀）
+    turn = convo[len(history) + 1:]
+    if turn:
+        turn[0] = {"role": "user", "content": message}
+    history.extend(turn)
+    state.pop("_llm", None)
+    save_chat_session(state)
+    _record_history("chat", "chat", message[:200], bool(reply), None,
+                    rounds=len(steps) or 1, model=model, provider=provider, key=sid)
+    return {"ok": True, "session": sid, "reply": reply or "（完成）",
+            "steps": steps, "drafts": state.get("drafts") or {},
+            "messages": history, "title": state.get("title", "")}
+
+
+def _trim_tool_result(res: dict) -> dict:
+    """给 UI 展示用的工具结果（裁掉大字段，避免前端卡片过长）。"""
+    if not isinstance(res, dict):
+        return {"value": str(res)[:800]}
+    out = {}
+    for k, v in res.items():
+        if isinstance(v, str):
+            out[k] = v if len(v) <= 800 else v[:800] + " …"
+        elif isinstance(v, list):
+            out[k] = v[:60]
+        elif isinstance(v, dict):
+            out[k] = {kk: (vv if not isinstance(vv, str) or len(vv) <= 400 else vv[:400] + " …")
+                      for kk, vv in list(v.items())[:30]}
+        else:
+            out[k] = v
+    return out
+
+
+def run_chat_sync(bridge, body: dict) -> dict:
+    body = body or {}
+    return bridge.lt.run_coro(
+        run_chat(bridge, body.get("session", "") or "", body.get("message", "") or "",
+                 model=body.get("model") or None, think=body.get("think") or "low",
+                 provider=body.get("provider") or None,
+                 context_paths=body.get("context_paths") or None,
+                 use_history=bool(body.get("use_history", True)),
+                 max_steps=int(body.get("max_steps", CHAT_MAX_STEPS) or CHAT_MAX_STEPS)),
+        timeout=900,
+    )

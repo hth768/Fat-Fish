@@ -329,193 +329,113 @@
       </div>
     </section>
 
-    <!-- 构建助手 -->
+    <!-- 构建助手（对话式 Agent：像 Codex / WorkBuddy 那样边聊边改） -->
     <section class="page hidden" id="page-builder">
       <header class="page-head">
         <h1>构建助手</h1>
         <div class="head-actions">
-          <div class="seg">
-            <button class="seg-btn active" data-mode="agent">智能体</button>
-            <button class="seg-btn" data-mode="plugin">插件</button>
-          </div>
+          <select id="bcSession" class="select" style="min-width:150px" title="历史会话"></select>
+          <button class="btn ghost sm" id="bcNewSession">＋ 新会话</button>
+          <button class="btn ghost sm" id="bcDelSession">删除会话</button>
+          <select id="bcModel" class="select" style="min-width:120px" title="模型"></select>
+          <input id="bcCustomModel" class="input hidden" placeholder="自定义模型名" style="max-width:150px">
+          <select id="bcThink" class="select" title="思考强度">
+            <option value="low">快速</option>
+            <option value="medium">标准</option>
+            <option value="high">深度</option>
+          </select>
         </div>
       </header>
 
-      <div class="panel">
-        <div class="panel-title" id="bldTitle">用一句话描述你要的智能体</div>
-        <div class="hint wrap" id="bldHint"></div>
-        <textarea id="bldInput" class="textarea" rows="4" placeholder="描述需求…"></textarea>
-        <div class="row-actions" style="margin-top:10px">
-          <label class="cfg-field" style="flex:1">
-            <span class="cfg-label">模型（实时切换）</span>
-            <select id="bldModel" class="select">
-              <option value="">系统默认（当前对话模型）</option>
-            </select>
-            <input id="bldCustomModel" class="input" type="text"
-                   placeholder="自定义模型名，如 gpt-4o / claude-3-5-sonnet" style="margin-top:6px; display:none">
-          </label>
-          <label class="cfg-field" style="flex:1">
-            <span class="cfg-label">思考强度</span>
-            <select id="bldThink" class="select">
-              <option value="low">低（快速生成）</option>
-              <option value="medium">中（标准思考）</option>
-              <option value="high">高（深度思考）</option>
-            </select>
-          </label>
-        </div>
-        <div class="row-actions" id="bldPluginOpts" style="display:none">
-          <label class="cfg-field">
-            <span class="cfg-label">插件类型（留空=自动判断）</span>
-            <select id="bldKind" class="select">
-              <option value="">自动判断</option>
-              <option value="feature">feature（功能）</option>
-              <option value="local">local（本地）</option>
-              <option value="brain">brain（大脑）</option>
-              <option value="sidecar">sidecar</option>
-              <option value="platform">platform（平台）</option>
-            </select>
-          </label>
-        </div>
-        <div class="row-actions">
-          <button class="btn primary" id="bldGen">生成</button>
-          <span class="hint" id="bldStatus"></span>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title">参考文件（让构建助手读取项目源码，产出更贴合）</div>
-        <div class="hint wrap" style="margin-bottom:8px">勾选需要作为上下文的文件，生成 / 改进时会读入其内容。文件越贴合需求，产物越契合现有代码风格与契约。</div>
-        <div class="row-actions">
-          <button class="btn ghost" id="bldRefreshFiles">刷新文件列表</button>
-          <span class="hint" id="bldFilesStat"></span>
-        </div>
-        <div id="bldFiles" class="ctx-files"></div>
-        <label class="cfg-field" style="margin-top:8px;display:inline-flex">
-          <input type="checkbox" id="bldUseHistory" checked>
-          <span class="cfg-label">参考历史成功案例作为改进范例</span>
-        </label>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title">智能体接入</div>
-        <div class="hint wrap" style="margin-bottom:10px">除一句话生成外，也可导入本地智能体配置（agent.json），或接入外部 API 智能体（OpenAI 兼容端点）。</div>
-        <div class="row-actions">
-          <label class="btn ghost" style="cursor:pointer">导入智能体（agent.json）<input id="bldImportAgent" type="file" accept="application/json,.json" hidden></label>
-          <span class="hint" id="bldImportMsg"></span>
-        </div>
-        <details style="margin-top:10px">
-          <summary style="cursor:pointer">接入外部智能体（API）</summary>
-          <div class="form-grid" style="margin-top:10px">
-            <label class="cfg-field"><span class="cfg-label">名称</span><input id="extName" class="input" placeholder="如：我的云端助手"></label>
-            <label class="cfg-field"><span class="cfg-label">Base URL</span><input id="extBase" class="input" placeholder="https://api.xxx/v1"></label>
-            <label class="cfg-field"><span class="cfg-label">API Key</span><input id="extKey" class="input" type="password" placeholder="留空可接入免密端点"></label>
-            <label class="cfg-field"><span class="cfg-label">模型名</span><input id="extModel" class="input" placeholder="gpt-4o / claude-3-5-sonnet"></label>
-            <label class="cfg-field"><span class="cfg-label">能力（多选）</span>
-              <select id="extCaps" class="select" multiple size="4">
-                <option value="chat" selected>chat 对话</option>
-                <option value="reasoning">reasoning 推理</option>
-                <option value="vision">vision 视觉</option>
-                <option value="role">role 角色</option>
-              </select>
-            </label>
-            <label class="cfg-field" style="flex:1 1 100%"><span class="cfg-label">系统提示词（可选）</span><textarea id="extSys" class="textarea" rows="3"></textarea></label>
+      <div class="bc-layout">
+        <aside class="bc-side">
+          <div class="bc-tabs">
+            <button class="bc-tab active" data-tab="files">工作区</button>
+            <button class="bc-tab" data-tab="history">历史</button>
           </div>
-          <div class="row-actions" style="margin-top:8px">
-            <button class="btn primary" id="btnConnectExt">接入</button>
-            <span class="hint" id="extMsg"></span>
-          </div>
-        </details>
-      </div>
-
-      <div class="panel hidden" id="bldResult">
-        <div class="panel-title">生成结果（可直接编辑，确认后落盘）</div>
-        <textarea id="bldAgentJson" class="textarea code hidden" rows="22" spellcheck="false"></textarea>
-        <div id="bldPluginBox" class="hidden">
-          <label class="cfg-field">
-            <span class="cfg-label">manifest.json</span>
-            <textarea id="bldManifest" class="textarea code" rows="12" spellcheck="false"></textarea>
-          </label>
-          <label class="cfg-field">
-            <span class="cfg-label">plugin.py</span>
-            <textarea id="bldCode" class="textarea code" rows="18" spellcheck="false"></textarea>
-          </label>
-        </div>
-        <div class="hint" id="bldValidate" style="margin:8px 0"></div>
-        <div class="row-actions">
-          <button class="btn primary" id="bldSave">保存到系统</button>
-          <button class="btn ghost" id="bldCopy">复制</button>
-          <span class="hint" id="bldSaveMsg"></span>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title">构建历史（持久化文件，可改进已有产物）</div>
-        <div class="row-actions">
-          <button class="btn ghost" id="bldRefreshHistory">刷新历史</button>
-          <span class="hint" id="bldHistoryStat"></span>
-        </div>
-        <div id="bldHistory" class="history-list"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-title">工作区源码读写（让构建助手像代码 Agent 一样改 / 升级 / debug 源码）</div>
-        <div class="hint wrap" style="margin-bottom:8px">
-          直接浏览并编辑 <code>plugins/</code>、<code>libs/qq_bot_runtime/</code>、<code>bridge/</code> 等工作区源码。
-          每次写入会先把原文件备份到 <code>data/builder_bak/</code>（每文件最多 20 份），可放心反复修改 / 调试 / 升级；
-          LLM 也可借助这些接口自动读写，实现完整的"生成 → 保存 → 反馈 → 再改进"闭环。
-        </div>
-        <div class="workspace-grid" style="display:grid;grid-template-columns:280px 1fr;gap:12px">
-          <div class="workspace-left">
-            <label class="cfg-field">
-              <span class="cfg-label">当前目录</span>
-              <div class="row-actions">
-                <button class="btn ghost" id="wsGoRoot">根</button>
-                <button class="btn ghost" id="wsRefresh">刷新</button>
-              </div>
-              <input id="wsDir" class="input" placeholder="plugins / libs/qq_bot_runtime/agents" />
-              <div class="row-actions" style="margin-top:6px">
-                <button class="btn ghost" id="wsGoDir">进入</button>
-              </div>
-            </label>
-            <div class="cfg-label" style="margin-top:10px">常用根</div>
-            <div class="quick-roots" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
-              <button class="btn ghost" data-root="plugins">plugins</button>
-              <button class="btn ghost" data-root="bridge">bridge</button>
-              <button class="btn ghost" data-root="webui">webui</button>
-              <button class="btn ghost" data-root="libs">libs</button>
+          <div id="bcPaneFiles" class="bc-pane">
+            <div class="bc-bar">
+              <span class="hint bc-path" id="bcDirPath">/（根）</span>
+              <button class="btn ghost sm" id="bcUp" title="上一级">↑</button>
+              <button class="btn ghost sm" id="bcRefreshTree" title="刷新">⟳</button>
             </div>
-            <div class="cfg-label" style="margin-top:10px">列出内容</div>
-            <div id="wsList" class="ws-list"></div>
+            <div id="bcTree" class="bc-tree"></div>
           </div>
-          <div class="workspace-right">
-            <label class="cfg-field">
-              <span class="cfg-label">文件路径（相对工作区根）</span>
-              <input id="wsPath" class="input" placeholder="plugins/bili_learn/plugin.py" />
-            </label>
-            <label class="cfg-field">
-              <span class="cfg-label">文件内容（编辑后保存；改动会先备份）</span>
-              <textarea id="wsContent" class="textarea code" rows="18" spellcheck="false" placeholder="选择左侧文件后这里显示内容"></textarea>
-            </label>
-            <div class="hint" id="wsInfo" style="margin:6px 0"></div>
+          <div id="bcPaneHistory" class="bc-pane hidden">
+            <div class="bc-bar">
+              <span class="hint" id="bcHistStat"></span>
+              <button class="btn ghost sm" id="bcRefreshHist" title="刷新">⟳</button>
+            </div>
+            <div id="bcHistory" class="history-list"></div>
+          </div>
+        </aside>
+
+        <div class="bc-main">
+          <div id="bcChat" class="bc-chat"></div>
+          <div class="bc-composer">
+            <div id="bcCtxBar" class="bc-ctx-bar"></div>
+            <textarea id="bcInput" class="textarea" rows="3"
+                      placeholder="描述你要做的事，例如：给 bilibili_learn 插件加一个「只学前 5 分钟」的开关（Enter 发送 / Shift+Enter 换行）"></textarea>
             <div class="row-actions">
-              <button class="btn ghost" id="wsRead">读取</button>
-              <button class="btn ghost" id="wsDiff">查看 diff</button>
-              <button class="btn primary" id="wsWrite">保存</button>
-              <span class="hint" id="wsMsg"></span>
+              <button class="btn primary" id="bcSend">发送</button>
+              <button class="btn ghost" id="bcStop" style="display:none">停止</button>
+              <label class="cfg-field" style="display:inline-flex;flex-direction:row;align-items:center;gap:6px;margin-left:6px">
+                <input type="checkbox" id="bcUseHistory" checked>
+                <span class="cfg-label">参考历史成功案例</span>
+              </label>
+              <span class="hint" id="bcStatus"></span>
             </div>
-            <pre id="wsDiffOut" class="diff-out hidden"></pre>
           </div>
         </div>
-        <details style="margin-top:12px">
-          <summary style="cursor:pointer">插件包文件列表（按名浏览 / 一键载入）</summary>
-          <div class="row-actions" style="margin-top:8px">
-            <input id="wsPluginName" class="input" placeholder="插件名，如 bili_learn" style="max-width:260px" />
-            <button class="btn ghost" id="wsListPlugin">列出该包文件</button>
-            <span class="hint" id="wsPluginMsg"></span>
+
+        <aside class="bc-editor hidden" id="bcEditorPane">
+          <div class="bc-bar">
+            <input id="bcFile" class="input" placeholder="plugins/xxx/plugin.py" style="max-width:none;flex:1">
+            <button class="btn ghost sm" id="bcEditorClose" title="关闭">✕</button>
           </div>
-          <div id="wsPluginFiles" class="ws-list" style="margin-top:6px"></div>
-        </details>
+          <div class="row-actions" style="margin:6px 0">
+            <button class="btn ghost sm" id="bcFileCtx">＋参考</button>
+            <button class="btn ghost sm" id="bcFileDiff">diff</button>
+            <button class="btn primary sm" id="bcFileSave">保存</button>
+            <span class="hint" id="bcFileMsg"></span>
+          </div>
+          <textarea id="bcContent" class="textarea code" spellcheck="false" placeholder="在左侧点一个文件即可打开编辑"></textarea>
+          <pre id="bcDiffOut" class="diff-out hidden"></pre>
+        </aside>
       </div>
+
+      <details class="bc-more">
+        <summary>更多：导入智能体 / 接入外部 API 智能体（表单式）</summary>
+        <div class="panel" style="margin-top:10px">
+          <div class="hint wrap" style="margin-bottom:10px">除对话框外，也可导入本地智能体配置（agent.json），或接入外部 API 智能体（OpenAI 兼容端点）。</div>
+          <div class="row-actions">
+            <label class="btn ghost" style="cursor:pointer">导入智能体（agent.json）<input id="bldImportAgent" type="file" accept="application/json,.json" hidden></label>
+            <span class="hint" id="bldImportMsg"></span>
+          </div>
+          <details style="margin-top:10px">
+            <summary style="cursor:pointer">接入外部智能体（API）</summary>
+            <div class="form-grid" style="margin-top:10px">
+              <label class="cfg-field"><span class="cfg-label">名称</span><input id="extName" class="input" placeholder="如：我的云端助手"></label>
+              <label class="cfg-field"><span class="cfg-label">Base URL</span><input id="extBase" class="input" placeholder="https://api.xxx/v1"></label>
+              <label class="cfg-field"><span class="cfg-label">API Key</span><input id="extKey" class="input" type="password" placeholder="留空可接入免密端点"></label>
+              <label class="cfg-field"><span class="cfg-label">模型名</span><input id="extModel" class="input" placeholder="gpt-4o / claude-3-5-sonnet"></label>
+              <label class="cfg-field"><span class="cfg-label">能力（多选）</span>
+                <select id="extCaps" class="select" multiple size="4">
+                  <option value="chat" selected>chat 对话</option>
+                  <option value="reasoning">reasoning 推理</option>
+                  <option value="vision">vision 视觉</option>
+                  <option value="role">role 角色</option>
+                </select>
+              </label>
+              <label class="cfg-field" style="flex:1 1 100%"><span class="cfg-label">系统提示词（可选）</span><textarea id="extSys" class="textarea" rows="3"></textarea></label>
+            </div>
+            <div class="row-actions" style="margin-top:8px">
+              <button class="btn primary" id="btnConnectExt">接入</button>
+              <span class="hint" id="extMsg"></span>
+            </div>
+          </details>
+        </div>
+      </details>
     </section>
   </main>
 </div>

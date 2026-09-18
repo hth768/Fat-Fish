@@ -125,28 +125,122 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 8px; }
 .form-grid label { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12px; }
 
-/* ---------- 构建助手：参考文件 & 历史 ---------- */
-.ctx-files {
-  margin-top: 10px; max-height: 240px; overflow: auto;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); padding: 6px;
+/* ---------- 构建助手：对话式 Agent（Codex / WorkBuddy 风） ---------- */
+#page-builder { display: flex; flex-direction: column; height: calc(100vh - 72px); min-height: 420px; }
+.bc-layout { flex: 1; min-height: 0; display: flex; gap: 12px; }
+
+/* 左栏：工作区 / 历史 */
+.bc-side {
+  width: 268px; flex-shrink: 0; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden;
 }
-.ctx-file {
-  display: flex; align-items: center; gap: 8px; padding: 4px 8px;
-  border-radius: 6px; cursor: pointer; font-size: 12px;
+.bc-tabs { display: flex; border-bottom: 1px solid var(--line); }
+.bc-tab {
+  flex: 1; background: transparent; border: 0; color: var(--muted);
+  padding: 9px 0; cursor: pointer; font-size: 13px;
 }
-.ctx-file:hover { background: var(--panel2); }
-.ctx-file .ctx-path {
-  flex: 1; color: var(--text);
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace; word-break: break-all;
+.bc-tab:hover { color: var(--text); }
+.bc-tab.active { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+.bc-pane { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.bc-bar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; border-bottom: 1px solid var(--line);
 }
-.ctx-file .ctx-size { color: var(--muted); font-size: 11px; white-space: nowrap; }
-.history-list { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.bc-bar .bc-path {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+}
+.bc-tree { flex: 1; overflow: auto; padding: 4px; }
+.bc-row {
+  display: flex; align-items: center; gap: 6px; padding: 3px 6px;
+  border-radius: 6px; cursor: pointer; font-size: 12.5px;
+}
+.bc-row:hover { background: var(--panel2); }
+.bc-row-name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ui-monospace, Consolas, monospace;
+}
+.bc-row.dir .bc-row-name { font-weight: 600; }
+.bc-row-size { color: var(--muted); font-size: 11px; }
+.bc-row-btn {
+  background: transparent; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; font-size: 11px; padding: 1px 6px; cursor: pointer;
+}
+.bc-row-btn:hover { color: var(--accent2); border-color: var(--accent); }
+
+/* 中栏：对话 */
+.bc-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.bc-chat { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; }
+.bc-hint { color: var(--muted); font-size: 13px; padding: 10px 2px; }
+.bc-msg { margin-bottom: 12px; }
+.bc-msg-role { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.bc-msg-text {
+  white-space: pre-wrap; word-break: break-word; line-height: 1.65; font-size: 13.5px;
+}
+.bc-msg.user .bc-msg-text {
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 12px; display: inline-block; max-width: 100%;
+}
+.bc-msg.user .bc-msg-role { text-align: right; }
+.bc-tool {
+  border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: 8px; background: var(--bg2); margin: 8px 0; font-size: 12.5px;
+}
+.bc-tool.bad { border-left-color: var(--err); }
+.bc-tool > summary { cursor: pointer; padding: 6px 10px; list-style: none; }
+.bc-tool > summary::-webkit-details-marker { display: none; }
+.bc-tool-name { font-family: ui-monospace, Consolas, monospace; color: var(--accent2); }
+.bc-tool-args { color: var(--muted); margin-left: 8px; }
+.bc-tool-body { border-top: 1px solid var(--line); padding: 6px 10px; }
+.bc-json, .bc-diff {
+  max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+  font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--muted);
+  margin: 4px 0;
+}
+.bc-diff { color: var(--text); }
+.bc-draft {
+  border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px;
+  background: var(--panel2); margin: 10px 0;
+}
+.bc-draft-head { font-size: 12.5px; font-weight: 600; margin-bottom: 8px; color: var(--accent2); }
+
+/* 输入区 */
+.bc-composer { border-top: 1px solid var(--line); padding: 10px 12px; }
+.bc-ctx-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.bc-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 999px;
+  padding: 2px 8px; font-size: 11.5px; font-family: ui-monospace, Consolas, monospace;
+}
+.bc-chip b { cursor: pointer; color: var(--muted); font-weight: 400; }
+.bc-chip b:hover { color: var(--err); }
+.bc-composer .textarea { margin-bottom: 8px; }
+
+/* 右栏：文件编辑器 */
+.bc-editor {
+  width: 380px; flex-shrink: 0; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 8px; overflow: hidden;
+}
+.bc-editor .textarea { flex: 1; min-height: 120px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.bc-editor .diff-out { max-height: 200px; overflow: auto; }
+
+/* 更多（表单式高级功能） */
+.bc-more { margin-top: 12px; }
+.bc-more > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+
+/* 历史列表（左栏「历史」页签复用） */
+.history-list { flex: 1; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 10px; }
 .hist-item { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel2); }
 .hist-meta { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .hist-mode { font-weight: 600; color: var(--accent2); }
 .hist-meta .ok { color: var(--ok); font-weight: 700; }
 .hist-meta .bad { color: var(--err); font-weight: 700; }
-.hist-req { margin: 6px 0 2px; font-size: 13px; color: var(--text); word-break: break-word; }
+.hist-req { margin: 6px 0 2px; font-size: 12.5px; color: var(--text); word-break: break-word; }
 .btn.sm { padding: 4px 12px; font-size: 12px; border-radius: 8px; }
 
 /* ---------- 模型供应商 / 注册表 ---------- */
