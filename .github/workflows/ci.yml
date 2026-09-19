@@ -34,18 +34,21 @@ jobs:
           python3 -m unittest discover -s tests -v 2>&1 | tee test-output.log
           echo "unittest OK"
 
-      - name: Upload failure log to ci-log branch
+      - name: Post failure log as commit comment
         if: failure()
-        shell: bash
-        run: |
-          git config user.email "ci@github.com"
-          git config user.name "ci-bot"
-          git fetch origin ci-log || true
-          git checkout -B ci-log
-          cp test-output.log ci_failure.log
-          git add ci_failure.log
-          git commit -m "CI unittest failure ${GITHUB_SHA:0:7}" || echo "nothing to commit"
-          git push origin ci-log
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let log = '';
+            try { log = fs.readFileSync('test-output.log', 'utf8'); } catch (e) { log = 'no test-output.log'; }
+            const body = '### CI unittest failure (auto)\n\n```\n' + log.slice(-7000) + '\n```';
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body: body
+            });
 
       - name: Syntax-check frontend
         shell: bash
