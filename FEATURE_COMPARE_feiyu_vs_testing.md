@@ -63,9 +63,9 @@
 
 | | feiyu_app | Pal-AI-Lab |
 |---|---|---|
-| 接入面 | QQ / B站 / 控制台（即时通讯向）| Minecraft / VTuber /（可扩 World）|
-| 扩展性 | 插件包模式，加 platform 插件即可 | World 扩展点，npm 包即插即用 |
-| 优劣 | **A 优**：已有 3 端 + 16 插件，直接跑 | **B 优**：World 抽象更通用（游戏/虚拟人都能接），不止 IM |
+| 接入面 | QQ / B站 / 控制台（IM 向）+ **world 类型**（mc_world 示例接原版 Minecraft）| Minecraft / VTuber /（可扩 World）|
+| 扩展性 | 插件包模式：platform 插件接 IM，world 插件接游戏/虚拟人（同走 `core.brains`）| World 扩展点，npm 包即插即用 |
+| 优劣 | **A 优**：已有 3 端 + 16 插件，直接跑 | **B 优**：World 抽象更通用（游戏/虚拟人都能接），不止 IM；但 feiyu 已补齐 world 一等公民通道 |
 
 ### 维度 4：模型供应商管理
 
@@ -106,12 +106,12 @@
 | Agent/插件生成（开箱即用）| 5 | 2 | A |
 | 记忆系统（结构化/可查）| 5 | 3 | A |
 | 多平台接入（已跑通）| 4 | 3 | A |
-| 世界抽象（通用性）| 2 | 5 | B |
+| 世界抽象（通用性）| 3 | 5 | B |
 | 模型供应商 | 3 | 3 | 平 |
 | 人机协作 UI | 5 | 2 | A |
 | 工程成熟度（TS/CI/隔离）| 2 | 5 | B |
 | 生态组织化 | 2 | 5 | B |
-| **合计** | **28** | **28** | **平** |
+| **合计** | **29** | **28** | **A 微优** |
 
 ---
 
@@ -122,9 +122,9 @@
    - Pal-AI-Lab 是**面向开发者的 Agent 框架生态**——TypeScript + 扩展点 + 组织化。优势在"架构优雅"与"可扩展性"。
 
 2. **feiyu_app 的明显短板**（应借鉴 B 侧）：
-   - 无类型系统 / 无 CI / 部署态与代码态未隔离（data/ 污染曾入仓库）
-   - 插件无标准包规范，难组织化发布
-   - 世界/平台抽象弱（只接 IM，游戏/虚拟人需硬写插件）
+   - 无类型系统 / 无 CI / 部署态与代码态未隔离（data/ 污染曾入仓库）—— **已补齐**：CI 四步（compileall/unittest/node --check/manifest 校验）+ 防运行时污染
+   - 插件无标准包规范，难组织化发布 —— **已补齐**：`VALID_KINDS` 加 `world`、`world_domain` 必填、包名蛇形命名规范
+   - 世界/平台抽象弱（只接 IM，游戏/虚拟人需硬写插件）—— **已补齐**：新增 `world` 类型（`kind="world"` 同走 `create_brain` + `core.brains`），并落地示例包 `plugins/mc_world/`（Python mineflayer 接原版 MC，复用 cortico-world-mc-agent 身体层语义）
 
 3. **Pal-AI-Lab 的明显短板**（应借鉴 A 侧）：
    - 无开箱即用的生成 UI，"改进/回退"无内置 API
@@ -132,6 +132,21 @@
    - 两个 World 仓库（mc-agent/memory）**尚未提交**，有丢失风险
 
 4. **互补建议**：若要让 feiyu 接 Minecraft/VTuber，可直接复用 `cortico-world-*` 的 mineflayer 身体层；若要让 Cortico 有"对话式生成 Bot"能力，可参考 feiyu `builder_api` 的 generate→improve→工作区读写闭环。
+
+---
+
+## 六、本次基于对比分析的改进（补齐项）
+
+> 对应结论第 2 节"feiyu 短板"，已落地代码（详见 git 提交 `31741c7` 及本次 world 示例插件）。
+
+| 短板 | 补齐动作 | 落点 |
+|------|----------|------|
+| 无 CI / 部署污染 | 加 `scripts/ci_validate_manifests.py` + `ci.yml` 四步；`_check_runtime_pollution` 只报 git 跟踪的污染 | `github/workflows/ci.yml`、`scripts/ci_validate_manifests.py` |
+| 插件无标准规范 | `VALID_KINDS` 加 `world`；`world_domain` 必填；包名强制蛇形 `_PKG_NAME_RE`；CI 同步校验 | `bridge/pkg_manager.py` |
+| 世界抽象弱 | 新增 `world` 类型：`pkg_manager.load` 让 `kind in ("brain","world")` 同走 `create_brain`+`core.brains`；落地示例包 `mc_world`（Python mineflayer 接原版 MC，复用 cortico 身体层语义：connect/观察/聊天转发/保命反射/goto·dig·attack·say·scan） | `bridge/pkg_manager.py`、`plugins/mc_world/manifest.json`、`plugins/mc_world/plugin.py`、`plugins/mc_world/body.py` |
+| 单测 | 加 `test_world_requires_domain` / `test_pkg_name_must_be_snake`，断言 `VALID_KINDS` 含 world | `tests/test_builder_core.py` |
+
+验证：CI 四步全绿、`ci_validate_manifests.py` 全包合规、`scan_packages` 正确识别 `mc_world`（kind=world/world_domain=game）、`PackageManager.load('mc_world')` 成功注册进 `core.brains`、59 项单测通过。
 
 ---
 

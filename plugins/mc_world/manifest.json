@@ -1,0 +1,73 @@
+{
+  "schema_version": 2,
+  "name": "mc_world",
+  "title": "Minecraft 世界（示例 world 包）",
+  "kind": "world",
+  "world_domain": "game",
+  "version": "0.1.0",
+  "description": "world 类型示例：用 Python mineflayer 身体接入原版 Minecraft，把游戏世界接进肥鱼。复用 cortico-world-mc-agent 的身体层语义（连服/读世界/动作/保命反射），经官方通道 core.app_bridge 向界面推事件。补齐「World 抽象」短板——feiyu 之前所有接入面都归一种 platform，现在游戏世界也能作为一等公民接入。",
+  "switch": "",
+  "plugin": "mc_world",
+  "config_schema": [
+    {
+      "key": "host",
+      "label": "服务器地址",
+      "type": "str",
+      "default": "127.0.0.1",
+      "desc": "原版「对局域网开放」得到的 IP"
+    },
+    {
+      "key": "port",
+      "label": "端口",
+      "type": "int",
+      "min": 1,
+      "max": 65535,
+      "default": 25565,
+      "desc": "服务器端口"
+    },
+    {
+      "key": "username",
+      "label": "角色名",
+      "type": "str",
+      "default": "FeiyuBot",
+      "desc": "进服后的名字"
+    },
+    {
+      "key": "version",
+      "label": "游戏版本",
+      "type": "str",
+      "default": "auto",
+      "desc": "auto=自动探测(推荐)；或填具体版本如 1.21.1"
+    },
+    {
+      "key": "auth",
+      "label": "登录方式",
+      "type": "str",
+      "default": "offline",
+      "desc": "offline 直接进；mojang 需填 password（本示例仅支持 offline）"
+    },
+    {
+      "key": "observe_interval_ms",
+      "label": "观察间隔(ms)",
+      "type": "int",
+      "min": 5000,
+      "max": 120000,
+      "default": 22000,
+      "desc": "重新看清世界的周期"
+    },
+    {
+      "key": "auto_reflex",
+      "label": "保命反射",
+      "type": "bool",
+      "default": true,
+      "desc": "低血/饿/溺水/卡墙/岩浆自动处理"
+    },
+    {
+      "key": "auto_chat_relay",
+      "label": "聊天转发到界面",
+      "type": "bool",
+      "default": true,
+      "desc": "把游戏内聊天推到 App 事件流"
+    }
+  ]
+}

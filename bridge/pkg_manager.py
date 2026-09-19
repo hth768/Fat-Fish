@@ -386,7 +386,9 @@ class PackageManager:
         try:
             wrapper = _load_wrapper(meta["dir"], name)
             self._loaded[name] = wrapper
-            if meta["kind"] == "brain":
+            if meta["kind"] in ("brain", "world"):
+                # world 与 brain 同走 create_brain：世界包本质是「会主动观察/行动的大脑」，
+                # 由它把游戏/VTuber 等外部世界桥接进肥鱼（参考 Pal-AI-Lab 的 World 抽象）。
                 inst = wrapper.create_brain(core)
                 core.brains.register(inst)
             else:
@@ -446,7 +448,7 @@ class PackageManager:
 
         core = self.bridge.core
         try:
-            if meta["kind"] == "brain" and core is not None:
+            if meta["kind"] in ("brain", "world") and core is not None:
                 b = core.brains.get(meta["plugin_key"])
                 if b is not None:
                     if self.bridge.lt:
@@ -493,7 +495,7 @@ class PackageManager:
             try:
                 wrapper = _load_wrapper(meta["dir"], name)
                 self._loaded[name] = wrapper
-                if meta["kind"] == "brain":
+                if meta["kind"] in ("brain", "world"):
                     core.brains.register(wrapper.create_brain(core))
                 else:
                     _set_switch(meta["switch"], True)
