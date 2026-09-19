@@ -340,7 +340,7 @@ class TestManifestValidation(unittest.TestCase):
     def test_schema_version_and_kinds(self):
         self.assertEqual(pm.MANIFEST_SCHEMA_VERSION, 2)
         self.assertEqual(set(pm.VALID_KINDS),
-                         {"platform", "feature", "brain", "sidecar", "local"})
+                         {"platform", "feature", "brain", "sidecar", "local", "world"})
 
     def test_valid_package(self):
         errs, warns = self._v({"schema_version": 2, "name": "pkg_x", "title": "T",
@@ -357,6 +357,27 @@ class TestManifestValidation(unittest.TestCase):
     def test_bad_kind(self):
         errs, _ = self._v({"name": "pkg_x", "title": "T", "kind": "wizard"})
         self.assertTrue(any("kind 非法" in e for e in errs))
+
+    def test_world_requires_domain(self):
+        # world 类型必须声明 world_domain（借鉴 Pal-AI-Lab 的 World 抽象）
+        errs, _ = self._v({"name": "pkg_x", "title": "T", "kind": "world"})
+        self.assertTrue(any("world_domain" in e for e in errs))
+        errs, _ = self._v({"name": "pkg_x", "title": "T", "kind": "world",
+                            "world_domain": "game"})
+        self.assertEqual(errs, [])
+        errs, _ = self._v({"name": "pkg_x", "title": "T", "kind": "world",
+                            "world_domain": "space"})
+        self.assertTrue(any("world_domain 非法" in e for e in errs))
+
+    def test_pkg_name_must_be_snake(self):
+        # 包名规范：小写蛇形，避免中文/大写跨平台导入异常
+        errs, _ = self._v({"name": "MyPlugin", "title": "T", "kind": "local"})
+        self.assertTrue(any("name（MyPlugin）必须小写蛇形" in e for e in errs))
+        errs, _ = self._v({"name": "我的插件", "title": "T", "kind": "local"})
+        self.assertTrue(any("name（我的插件）必须小写蛇形" in e for e in errs))
+        # 合法：小写蛇形（但目录名是 pkg_x，需一致；用 pkg_x 验证放行路径）
+        errs, _ = self._v({"name": "pkg_x", "title": "T", "kind": "local"})
+        self.assertEqual(errs, [])
 
     def test_missing_name(self):
         errs, _ = self._v({"title": "T", "kind": "local"})

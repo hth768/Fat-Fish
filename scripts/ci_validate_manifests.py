@@ -9,10 +9,16 @@ manifest.json 的目录，检查必填字段、kind 合法性、包名与目录�
 """
 import json
 import os
+import re
 import sys
 
 MANIFEST_SCHEMA_VERSION = 2
-VALID_KINDS = ("platform", "feature", "brain", "sidecar", "local")
+VALID_KINDS = ("platform", "feature", "brain", "sidecar", "local", "world")
+WORLD_DOMAINS = ("im", "game", "vtuber", "other")
+_PKG_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# 运行态污染：这些文件/目录不应进入版本库（data/ 曾被误提交，含密钥与用户数据）
+_RUNTIME_POLLUTION = ("data", "_boot.log", "_boot.err", "_boot.log.lock",
+                      "builder_bak", ".venv", "__pycache__")
 
 
 def _validate_one(pkg_dir: str):
@@ -32,6 +38,8 @@ def _validate_one(pkg_dir: str):
     mn = str(meta.get("name") or "").strip()
     if not mn:
         errors.append(f"{name}: 缺少必填字段 name")
+    elif not _PKG_NAME_RE.match(mn):
+        errors.append(f"{name}: name（{mn}）必须小写蛇形 [a-z][a-z0-9_]*")
     elif mn != name:
         errors.append(f"{name}: name（{mn}）与目录名（{name}）不一致")
 
@@ -45,6 +53,13 @@ def _validate_one(pkg_dir: str):
         errors.append(f"{name}: 缺少必填字段 kind")
     elif kind not in VALID_KINDS:
         errors.append(f"{name}: kind 非法：{kind}（应为 {'/'.join(VALID_KINDS)} 之一）")
+
+    if kind == "world":
+        wd = str(meta.get("world_domain") or "").strip().lower()
+        if not wd:
+            errors.append(f"{name}: kind=world 必须声明 world_domain（im/game/vtuber/other）")
+        elif wd not in WORLD_DOMAINS:
+            errors.append(f"{name}: world_domain 非法：{wd}（应为 {'/'.join(WORLD_DOMAINS)} 之一）")
 
     sv = meta.get("schema_version")
     if sv is None:
@@ -64,8 +79,39 @@ def _validate_one(pkg_dir: str):
     return errors, warns
 
 
+def _check_runtime_pollution(repo_root: str):
+    """扫描版本库根，报告运行态污染（data/、_boot.* 等被 git 跟踪才报错）。
+
+    仅检查 git 实际跟踪的文件——已 gitignore 的运行态目录（/data/）不报错，
+    否则运行时必产生的 data/ 会让 CI 永远红。真被 `git add` 进去才会触发。
+    """
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["git", "-C", repo_root, "ls-files", "-z"],
+            capture_output=True, check=True,
+        )
+        # 用 errors='replace' 避免 Windows GBK 环境解码非 UTF-8 路径抛异常
+        tracked = r.stdout.decode("utf-8", errors="replace").split("\0")
+    except Exception:
+        # 非 git 环境（如单纯目录校验）退化为磁盘检查
+        tracked = None
+    errors = []
+    for name in sorted(os.listdir(repo_root)):
+        if name in _RUNTIME_POLLUTION or name.startswith("_boot."):
+            full = os.path.join(repo_root, name)
+            if not os.path.exists(full):
+                continue
+            if tracked is None:
+                errors.append(f"{name}: 运行态文件/目录不应进入版本库")
+            elif any(t == name or t.startswith(name + "/") for t in tracked):
+                errors.append(f"{name}: 运行态文件/目录被 git 跟踪，必须从版本库移除")
+    return errors
+
+
 def main():
-    roots = sys.argv[1:] or [os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "plugins")]
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    roots = sys.argv[1:] or [os.path.join(repo_root, "plugins")]
     all_errors = []
     for root in roots:
         if not os.path.isdir(root):
@@ -80,6 +126,12 @@ def main():
             all_errors.extend(errors)
             for e in errors:
                 print(f"[manifest][error] {e}")
+
+    # 运行态防污染：仅当仓库根被 git 跟踪时才有意义（CI 里一定是）
+    pollution = _check_runtime_pollution(repo_root)
+    for e in pollution:
+        print(f"[repo][error] {e}")
+    all_errors.extend(pollution)
 
     if all_errors:
         print(f"\n插件包规范校验失败：{len(all_errors)} 个 error")

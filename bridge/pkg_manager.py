@@ -16,6 +16,7 @@ manifest.switch 置 True（底层模块会检查 config 开关），卸载时置
 import importlib.util
 import json
 import os
+import re
 import sys
 
 from quiet import degrade
@@ -26,8 +27,13 @@ PACKAGE_DIR = os.path.join(APP_DIR, "plugins")
 # manifest 协议版本：新增/改变字段语义时 +1。
 # 缺失按 1 处理（兼容老包），仅告警不阻塞装载；高于当前版本则拒绝（避免按旧规则理解新包）。
 MANIFEST_SCHEMA_VERSION = 2
-VALID_KINDS = ("platform", "feature", "brain", "sidecar", "local")
-_KIND_NEEDS_CREATE = ("platform", "feature", "brain", "local")   # local 也走 create_plugin
+VALID_KINDS = ("platform", "feature", "brain", "sidecar", "local", "world")
+# 接入域（借鉴 Pal-AI-Lab 的 World 抽象）：让插件自描述「我接入的是哪类世界」，
+# 而非把所有接入面都塞进一种 platform 类型。构建助手/前端可按域筛选、组合。
+WORLD_DOMAINS = ("im", "game", "vtuber", "other")
+_KIND_NEEDS_CREATE = ("platform", "feature", "brain", "local", "world")   # local 也走 create_plugin
+# 插件包名规范：小写蛇形（与目录名一致、跨平台安全、避免中文/大写导致的导入异常）
+_PKG_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 try:
     from .sidecar_runner import SidecarProcess
@@ -82,6 +88,8 @@ def validate_manifest(meta: dict, pkg_dir: str = "") -> tuple:
     name = str(meta.get("name") or "").strip()
     if not name:
         errors.append("缺少必填字段 name")
+    elif not _PKG_NAME_RE.match(name):
+        errors.append(f"name（{name}）必须小写蛇形 [a-z][a-z0-9_]*（避免中文/大写导致的跨平台导入异常）")
     elif pkg_dir:
         dirname = os.path.basename(os.path.normpath(pkg_dir))
         if dirname != name:
@@ -96,6 +104,17 @@ def validate_manifest(meta: dict, pkg_dir: str = "") -> tuple:
         errors.append("缺少必填字段 kind")
     elif kind not in VALID_KINDS:
         errors.append(f"kind 非法：{kind}（应为 {'/'.join(VALID_KINDS)} 之一）")
+
+    # world 类型：必须声明接入域（im/game/vtuber/other），让构建助手/前端可筛选、组合。
+    # 这是相对 Pal-AI-Lab 的 World 抽象补齐的短板——feiyu 之前所有接入面都归一种 platform。
+    if kind == "world":
+        wd = str(meta.get("world_domain") or "").strip().lower()
+        if not wd:
+            errors.append("kind=world 必须声明 world_domain（im/game/vtuber/other 之一）")
+        elif wd not in WORLD_DOMAINS:
+            errors.append(f"world_domain 非法：{wd}（应为 {'/'.join(WORLD_DOMAINS)} 之一）")
+    elif meta.get("world_domain") is not None:
+        warns.append("仅 kind=world 才需要 world_domain，其它类型将被忽略")
 
     sv = meta.get("schema_version")
     if sv is None:
@@ -244,6 +263,8 @@ def scan_packages() -> list:
             "name": name,
             "title": meta.get("title", name),
             "kind": meta.get("kind", "feature"),
+            "world_domain": meta.get("world_domain") if meta.get("kind") == "world"
+                            else None,   # 仅 world 类型有意义
             "version": meta.get("version", "1.0.0"),
             "description": meta.get("description", ""),
             "switch": meta.get("switch", ""),
