@@ -15,20 +15,42 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.12"
+
+      - name: Print environment
+        shell: bash
+        run: |
+          set -x
+          python --version
+          node --version
+          git --version
+          pwd
+          ls -la
 
       - name: Compile-check Python sources
+        shell: bash
         run: |
+          set -e
           python -m compileall -q -x 'runtime|venv' libs/qq_bot_runtime bridge server.py app.py
+          echo "compileall OK"
 
       - name: Run App unit tests
+        shell: bash
         run: |
+          set -e
           python -m unittest discover -s tests -v
+          echo "unittest OK"
 
       - name: Syntax-check frontend
+        shell: bash
         run: |
+          set -e
           node --check webui/app.js
+          echo "node check OK"
 
       - name: Validate plugin manifests
+        shell: bash
         run: |
+          set -e
           python scripts/ci_validate_manifests.py
+          echo "manifest validate OK"
