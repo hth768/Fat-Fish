@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Compile-check Python sources
+        run: |
+          python -m compileall -q -x 'runtime|venv' libs/qq_bot_runtime bridge server.py app.py
+
+      - name: Run App unit tests
+        run: |
+          python -m unittest discover -s tests -v
+
+      - name: Syntax-check frontend
+        run: |
+          node --check webui/app.js
+
+      - name: Validate plugin manifests
+        run: |
+          python scripts/ci_validate_manifests.py
