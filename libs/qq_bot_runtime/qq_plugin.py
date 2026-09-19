@@ -553,7 +553,7 @@ class QQPlugin(PlatformPlugin):
             if priv_target:
                 msg = (f"[代码修改确认] AI 想修改核心文件：\n{filepath}\n"
                        f"要求：{instruction}\n"
-                       f"回复 /同意修改 {req_id} 批准，或 /拒绝修改 {req_id} 拒绝。")
+                       f"回复 /同意issue {req_id} 批准，或 /拒绝issue {req_id} 拒绝。")
                 asyncio.get_event_loop().create_task(self.adapter.send_private(priv_target, msg))
         try:
             get_event_bus().on("code.edit_request", _on_edit_request)

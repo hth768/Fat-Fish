@@ -123,7 +123,7 @@
 │   ├── web_tools.py ─────────────────── 联网搜索 + 网页抓取（DeepSeek web_search）
 │   ├── time_context.py ──────────────── 统一时间上下文（发消息时感知当前时间）
 │   ├── emoji_store.py ───────────────── 表情包存储（emojis/）
-│   ├── codebuddy_cli.py ─────────────── CodeBuddy CLI 集成
+│   ├── self_coding.py ──────────────── BOT Self Coding（驱动内置构建助手自编程）
 │   ├── gpu_pipeline.py（见⑧）────────── GPU 推理管线
 │   ├── message_bus.py（见②）────────── 消息契约/事件总线
 │   └── 运维 / 迁移 / 基准脚本（独立运行，不被主流程 import）

@@ -352,27 +352,8 @@ PROACTIVE_GROUP_MIN_INTERVAL = 300  # 群里主动说话最小间隔（秒）
 IMPORTANT_NOTES_MAX = 400           # 重要事项最多保留条数
 FULL_HISTORY_MAX_RECORDS = 1000000  # 全文历史最多保留条数
 
-# ---- CodeBuddy 自我编程模块（codebuddy_cli.py）----
-CODEBUDDY_CLI_PATH = ""  # 便携包：目标机器装了 CodeBuddy CLI 再填绝对路径（自我编程模块才需要）
-CODEBUDDY_WORK_DIR = _HERE
-CODEBUDDY_ALLOWED_TOOLS = "Read,Write,Edit"
-CODEBUDDY_TIMEOUT = 120
-# 受保护的核心文件（CodeBuddy 改这些文件需要人工确认）
-CODEBUDDY_CORE_FILES = [
-    "bot.py",             # 主程序
-    "mc_agent.py",        # 自主游戏智能体
-    "mc_watcher.py",      # Minecraft 监控
-    "codebuddy_cli.py",   # 自我编程模块（防止 AI 改掉自己的保护机制）
-    "message_bus.py",     # 消息抽象层
-    "qq_adapter.py",      # QQ 适配器
-    "config.py",          # 全局配置
-    "agent_core.py",      # 智能体核心
-    "scheduler.py",       # 调度器
-    "deepseek_client.py", # AI 客户端
-]
-
 # ---- BOT Self Coding（智能体自编程：驱动内置构建助手构建/改进自己）----
-# 旧版「CodeBuddy CLI 自我编程」依赖外部 CLI 进程，已演进为：开启后智能体直接
+# 旧版「CodeBuddy CLI 自我编程」依赖外部 CLI 进程，已移除；现改为开启后智能体直接
 # 复用内置「构建助手（builder_api）」完成构建/改进，并把受阻/新需求作为 Issue 提给用户。
 BOT_SELF_CODING_ENABLED = False       # 总开关：默认关闭，开启后智能体才获权自我编程
 BOT_SELF_CODING_PERM = "full"          # 开启后默认权限档：完全访问（可在 UI/命令改）
