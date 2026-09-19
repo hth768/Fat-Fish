@@ -439,6 +439,7 @@ python -m unittest discover -s tests -v      # 当前 59 项全过
 - [CI 平台耦合断言失败（test_quiet_and_audit）](./DEBUG.md#1-ci-平台耦合断言失败-run-1--run-12)
 - [引擎测试 mock 签名不匹配（test_routing）](./DEBUG.md#2-引擎测试-mock-签名不匹配-test_routing)
 - [BOT Self Coding：旧 CodeBuddy CLI 自我编程移除](./DEBUG.md#3-bot-self-coding-旧-codebuddy-cli-自我编程移除)
+- [更早历史 Bug（构建助手读不到主文件 / 日志刷屏 / 串台 / 导入崩溃 / telemetry 安全网 / 构建助手 404 等）](./DEBUG.md#4-更早历史-bug来自-git-记录)
 
 ---
 

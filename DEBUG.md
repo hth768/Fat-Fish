@@ -55,6 +55,68 @@
 
 ---
 
+## 4. 更早历史 Bug（来自 git 记录）
+
+> 以下为本次拆分前已修复、散落在提交历史里的真实问题，按排查价值摘录根因与修复。
+> 提交哈希均基于 `hth768/Fat-Fish`。
+
+### 4.1 构建助手读不到自己的主文件 + 来源链接提取静默失败
+- **提交**：`ab383da`（新增 App 层测试套件，测试即时抓出）
+- **现象**：构建助手上下文里大量 `hf_cache/models/site-packages` 缓存 JSON，真正要读的 `builder_api.py` 反被挤掉；正文 URL 提取经常为空，模型只能"凭空引用"。
+- **根因**：
+  1. `CONTEXT_SKIP_DIRS` 未排除模型缓存目录，成千上万缓存 JSON 占满 `MAX_CONTEXT_FILES` 名额；且单文件 48KB 上限 < `builder_api.py`（约 126KB），被静默排除。
+  2. 来源链接提取依赖 `web_tools`，该模块在纯 App 环境不可用（缺依赖）时静默返回空。
+- **修复**：补充跳过目录、单文件上限提到 160KB；新增内置正则兜底（web_tools 优先，缺失时用内置实现）。实测上下文文件从 149 个噪声 → 干净 46 个，`builder_api.py` 正常列入。
+
+### 4.2 控制台日志刷屏（manifest 告警 / buvid 提示 / pywebview 弃用）
+- **提交**：`cddf082`
+- **现象**：启动日志被同一批告警刷十几屏。
+- **根因（三处）**：
+  1. `pkg_manager.scan_packages()` 被高频调用（轮询/刷新），告警每次逐包 print → 15 包 × 每次轮询 = 刷屏；
+  2. `bili_api` 每个实例各领一次 buvid 提示，多实例重复打印；
+  3. `app_window.pick_folder()` 用已废弃 `webview.FOLDER_DIALOG`，每次调用打 deprecation。
+- **修复**：manifest 告警按「包+manifest mtime+内容签名」去重、schema_version 跨包聚合成一行；buvid 提示改模块级标志每进程一次；pywebview 优先 `FileDialog.FOLDER`。部署版启动日志 40 行（原十几屏）。
+
+### 4.3 防 AI 串台 / 记忆写反
+- **提交**：`692cf76`（每条消息注入用户身份）、`7176037`（记忆写反与串台）、`3960c16`（多 Bot 隔离缺口）
+- **现象**：AI 把 A 用户特征套到 B 用户；多 Bot 时知识库/记忆互相串台；user_id 缺失时完全失去身份锚点。
+- **根因**：
+  - 模型调用前未稳定注入"谁在说"，user_id 为空时上下文无身份锚点；
+  - `extract_memory` 曾把 AI（肥鱼娘）特征也写进人物档案、且新旧事实冲突时无限叠加；
+  - `knowledge_store` 未按 `agent_ctx` 命名空间隔离，`chat_service` 未消费 `core._model_override`。
+- **修复**：
+  - `chat_service` 最终调模型前给每条 user 消息加 `[说话人称呼]` 前缀（speaker_label 兜底链）；`memory_context` 加身份锚点降级；
+  - `persona_memory` 加 `reconcile_persona_traits`，旧事实优先、冲突新特征 reject；
+  - `knowledge_store` 按 `agent_ctx` 命名空间隔离（默认 feiyu，其余落 `agents/<id>/memory`），`chat_service` 主回复消费 `core._model_override`。
+- **验证**：`3960c16` 部署验证 test_bot 知识库独立落盘、feiyu 40 条不受影响。
+
+### 4.4 app.py 导入顺序崩溃（ModuleNotFoundError: quiet）
+- **提交**：`8e2b1e4`（静默异常改造顺带修复）
+- **现象**：部署实例启动即崩，`ModuleNotFoundError: quiet`。
+- **根因**：`from quiet import degrade` 放在模块顶部，但 qq_bot 运行时路径要等 `bootstrap()` 才加入 `sys.path`，顶部 import 时还找不到。
+- **修复**：把导入移到 `bootstrap()` 之后、首次使用之前。
+
+### 4.5 telemetry.py 旧 bug 安全网（reporter 线程 5 秒崩、HMAC 静默失败）
+- **位置**：`app.py` 约 L96（`# 安全网：若引擎升级重新带回 telemetry.py 缺 import time/hmac 的旧 bug`）
+- **现象**：引擎升级后 `telemetry.py` 缺 `import time/hmac`，reporter 线程约 5 秒即崩、HMAC 签名静默失败。
+- **根因**：引擎层 `telemetry.py` 历史上漏了 `time`/`hmac` 的导入，模块级用到这两个名字时抛 `AttributeError`。
+- **修复（防御性）**：在 App 启动处探测 `telemetry` 模块，若缺 `time`/`hmac` 属性则直接补上（`_telemetry_mod.time = time; _telemetry_mod.hmac = hmac`），避免升级回带旧 bug 再次崩。属**安全网**而非根治——根治在引擎侧补齐导入。
+
+### 4.6 构建助手只读接口误注册在 POST 分支导致 404
+- **提交**：`2573bb7`
+- **现象**：前端「参考文件」「构建历史」面板加载失败（404）。
+- **根因**：`/api/builder/files`、`/api/builder/file/read`、`/api/builder/history` 三个只读接口放在 `do_POST` 分支，而前端用 GET 调用。
+- **修复**：移到 `do_GET`（`file/read` 用 `?path=`、`history` 用 `?limit=`），POST 仅保留生成/改进/保存等写操作。
+
+### 4.7 其它已修复的小问题（索引）
+- `35e4f91` / `5705525`：主题切换除浅色外都保留暗夜蓝、选完主题色再进外观页跳回深夜蓝。
+- `97a45df` / `eecc06e` / `d19ba13`：侧边栏按钮文字不可见、WebView2 缓存旧静态资源、重新上传背景图仍显示旧图（缓存未刷新）。
+- `e43c623`：构建助手「未返回思考内容」提示文案修正。
+- `7c68046`：`bridge/appearance.py` 重命名为 `appearance_api.py` 以匹配 import 约定（原名导致导入不一致）。
+- `79c0958`：日志噪音修复，并合并另一会话的记忆整理。
+
+---
+
 ## 排查技巧速记
 
 - 国内访问 GitHub 不便时，用 GitHub API 而非网页定位 CI：
