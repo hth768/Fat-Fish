@@ -10,6 +10,14 @@
 <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <!-- 启动遮罩：先显示 UI 骨架，连上后端（/api/boot/status）即淡出；首启由 firstboot 进度窗负责 -->
+  <div id="bootSplash">
+    <div class="boot-card">
+      <div class="boot-spin"></div>
+      <div class="boot-title">肥鱼娘</div>
+      <div class="boot-sub" id="bootSub">正在启动，加载运行环境…</div>
+    </div>
+  </div>
   <div id="bgDim"></div>
   <button id="sidebarToggle" class="sidebar-toggle" type="button" aria-label="收起/展开侧边栏" title="收起侧边栏">« 收回</button>
   <div class="layout">
@@ -569,5 +577,24 @@
 <div class="modal hidden" id="botModal"></div>
 <div class="toast hidden" id="toast"></div>
 <script src="/static/app.js"></script>
+<script>
+  // 启动遮罩：连上后端探针即淡出；9 秒兜底，避免后端异常时卡死
+  (function () {
+    var s = document.getElementById('bootSplash');
+    function hide() {
+      if (!s) return;
+      s.classList.add('hidden');
+      setTimeout(function () { if (s && s.parentNode) s.parentNode.removeChild(s); }, 420);
+    }
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries++;
+      fetch('/api/boot/status').then(function (r) { return r.json(); }).then(function (d) {
+        if (d && d.ready) { clearInterval(timer); hide(); }
+      }).catch(function () { });
+      if (tries > 30) { clearInterval(timer); hide(); }
+    }, 300);
+  })();
+</script>
 </body>
 </html>

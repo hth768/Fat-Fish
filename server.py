@@ -230,6 +230,9 @@ def make_handler(bridge):
                     return self._serve_file(q)
                 if path == "/api/status":
                     return self._json(bridge.status())
+                # 轻量启动探针：前端 splash 用它判断是否已连上后端（先启动 UI，后端就绪即隐藏遮罩）
+                if path == "/api/boot/status":
+                    return self._json({"ready": True, "core": bridge.is_running()})
                 if path == "/api/recent":
                     return self._json({"events": bridge.recent(60)})
                 if path == "/api/memories":

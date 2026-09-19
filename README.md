@@ -172,13 +172,14 @@ feiyu_standalone/
 
 仓库根目录的 `start_app.bat` 是**适配本仓库**的启动器（双击即可），**首启会自动建环境**：
 
-1. 用仓库捆绑解释器 `libs/qq_bot_runtime/runtime/python/python.exe` **自动创建 venv**（若 `venv` 不存在）；
-2. 把 venv 的 `pyvenv.cfg` 的 `home` **重写**为捆绑解释器（幂等、便携，换机器也能跑）；
-3. 若 venv 缺关键依赖（如 `pywebview`/`torch`），**自动 `pip install -r libs/qq_bot_runtime/requirements-app.txt`**（CPU 友好依赖集，含 pywebview 原生窗口，torch 装 CPU 版，首次可能数分钟，需联网）；
-4. 若检测到 **NVIDIA 显卡**，会**交互询问**是否安装 CUDA 版 torch 以加速本地模型（回车默认不装，保持 CPU 版；装 CUDA 版会额外从 PyTorch 官方源下载，体积更大）；
-5. 固定 `FEIYU_QQ_BOT=libs/qq_bot_runtime`，用**仓库内引擎代码**启动 `app.py --with-core`。
+1. **优先复用**本机部署引擎的已建 venv `E:\qq_bot\venv`（若含 `pywebview` 则直接启动，跳过自建）；
+2. 否则若仓库内 `libs/qq_bot_runtime/venv` 已含 `pywebview`，也直接启动（日常最快路径，不弹窗）；
+3. **真正首启**（venv 缺失或缺 `pywebview`）时，调用 `libs/qq_bot_runtime/firstboot.py`：**自动创建 venv** 并 **`pip install -r requirements-app.txt`**（CPU 友好集，含 pywebview 原生窗口，torch 装 CPU 版，首次可能数分钟，需联网）；
+4. 首启过程会**弹出本地 HTML 进度窗**（百分比 + 当前正在安装的包名 + 滚动日志，基于捆绑 Python 自带的 `http.server`，无需额外依赖），装完自动拉起主界面；
+5. 若检测到 **NVIDIA 显卡**，进度窗上会**交互询问**是否安装 CUDA 版 torch 以加速本地模型（默认不装，保持 CPU 版；装 CUDA 版会额外从 PyTorch 官方源下载，体积更大）；
+6. 固定 `FEIYU_QQ_BOT=libs/qq_bot_runtime`，用**仓库内引擎代码**启动 `app.py --with-core`。
 
-> **依赖**：捆绑的 `runtime/python` 是**裸解释器**，无 torch / cv2 / pywebview。首启默认装 `requirements-app.txt`（CPU 友好集，含原生窗口所需的 pywebview，torch 为 CPU 版，无显卡也能跑）。检测到 N 卡时脚本会询问是否改装 CUDA 版 torch。若需本地语音（VoxCPM），另行 `pip install -r requirements-vox.txt`。安装失败（无网络）时脚本会提示手工安装或复用 `E:\qq_bot\venv`。窗口关闭即退出。
+> **依赖**：捆绑的 `runtime/python` 是**裸解释器**，无 torch / cv2 / pywebview（也**未带 tkinter**，故首启进度窗用本地 HTML 而非 Tk）。首启默认装 `requirements-app.txt`（CPU 友好集，含原生窗口所需的 pywebview，torch 为 CPU 版，无显卡也能跑）。检测到 N 卡时进度窗会询问是否改装 CUDA 版 torch。若需本地语音（VoxCPM），另行 `pip install -r requirements-vox.txt`。安装失败（无网络）时进度窗会提示手工安装或复用 `E:\qq_bot\venv`。窗口关闭即退出。
 
 ### 从源码运行（开发者）
 
