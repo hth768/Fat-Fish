@@ -36,6 +36,7 @@
 - [安卓版](#安卓版)
 - [安全边界与合规](#安全边界与合规)
 - [测试 / 回归](#测试--回归)
+- [历史 Bug 与调试记录](#历史-bug-与调试记录)
 - [可观测性与静默异常治理](#可观测性与静默异常治理)
 - [发布与安装](#发布与安装)
 - [许可证](#许可证)
@@ -428,6 +429,16 @@ python -m unittest discover -s tests -v      # 当前 59 项全过
 ```
 
 > 视觉/向量等重依赖模块需在完整依赖环境下测试；若仅用捆绑精简 Python，相关用例可能无法完整加载。CI / 本机验证均建议使用带重依赖的 venv。
+
+---
+
+## 历史 Bug 与调试记录
+
+完整的排查过程、根因与修复记录见 **[DEBUG.md](./DEBUG.md)**。这里只留索引。
+
+- [CI 平台耦合断言失败（test_quiet_and_audit）](./DEBUG.md#1-ci-平台耦合断言失败-run-1--run-12)
+- [引擎测试 mock 签名不匹配（test_routing）](./DEBUG.md#2-引擎测试-mock-签名不匹配-test_routing)
+- [BOT Self Coding：旧 CodeBuddy CLI 自我编程移除](./DEBUG.md#3-bot-self-coding-旧-codebuddy-cli-自我编程移除)
 
 ---
 
