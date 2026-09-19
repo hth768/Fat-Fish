@@ -112,6 +112,8 @@ qq_bot 运行时在 2026-09 重构为「**智能体核心 + 插件系统**」：
 | `emotion.py` | AI 情绪模块（心情状态 `emotion_data.json`） |
 | `quiet.py` | **降级留痕原语**：`degrade` / `attention`，统一替代 `except …: pass`，治理静默吞异常 |
 
+> 注：上表中 `pc_agent.py` / `pc_control.py`（电脑操控大脑）、`pvz_agent.py` / `pvz_*.py`（PVZ 大脑）、以及 MC 的 `mc_bot/`（Mineflayer 桥 `bridge.js` + README）、`mc_mod/feiyuapi/`（FeiyuAPI 模组源码）**并非 git 仓库捆绑运行时的内容**——它们随部署引擎 `E:\qq_bot` 与 Release 的 `mc_pack` / `plugins_pack` 提供，仓库 `libs/qq_bot_runtime` 仅含 Python 侧 MC 大脑（`mc_bot_brain.py` / `mc_bot_run.py`）及对上述模块的引用。基础对话 / 记忆 / 总结 / 插件 / 外观 / 模型注册表等核心能力开箱即用，无需这些额外包。
+
 详细架构见 `libs/qq_bot_runtime/ARCHITECTURE.md` 与 `ARCHITECTURE_TREE.md`。
 
 ---
@@ -136,15 +138,16 @@ feiyu_standalone/
 │   ├── summary_api.py     # 总结 API
 │   ├── builder_api.py     # 构建助手 API：对话式 Agent（工具循环 / 权限 / 审批 / 联网 / 工作区）
 │   ├── pkg_manager.py     # 插件包管理（manifest 校验 / 依赖 / sidecar）
+│   ├── provider_api.py    # 模型注册表 API（命名模型 / 路由 / 默认 / 删除，见「模型注册表」）
+│   ├── bot_manager.py     # 多 Bot 生命周期管理（增删启停 / 隔离）
 │   └── sidecar_runner.py  # 旁路进程运行器（日志落盘 + 端口就绪等待）
 ├── webui/                 # 原生 JS/CSS 前端控制台
 │   ├── index.html
 │   ├── app.js
 │   └── styles.css
-├── libs/qq_bot_runtime/   # 捆绑版 qq_bot 运行时（bot 引擎 + 捆绑 Python + venv + 各类资源）
+├── libs/qq_bot_runtime/   # 捆绑版 qq_bot 运行时（bot 引擎 + 捆绑 Python；venv 由首启脚本自动构建，未纳入 git）
 │   ├── agent_core.py / chat_service.py / main.py / bot.py …   # 智能体核心
-│   ├── mc_bot/            # Mineflayer 纯净版 MC 桥（bridge.js + mc_bot_brain.py）+ README
-│   ├── mc_mod/feiyuapi/   # FeiyuAPI 模组源码（Gradle + NeoForge 1.21.1）
+│   ├── mc_bot_brain.py / mc_bot_run.py   # 原版 MC 大脑（Python 侧；Mineflayer 桥 mc_bot/ 与模组 mc_mod/feiyuapi/ 不在 git，见 Release mc_pack）
 │   ├── webui/             # 运行时自带 WebUI（与根 webui/ 对应）
 │   ├── runtime/           # 捆绑 Python 解释器与标准库
 │   ├── 音色试听/ emojis/ data/ video_tmp/ voice_tmp/ …        # 资源与缓存
@@ -171,10 +174,11 @@ feiyu_standalone/
 
 1. 用仓库捆绑解释器 `libs/qq_bot_runtime/runtime/python/python.exe` **自动创建 venv**（若 `venv` 不存在）；
 2. 把 venv 的 `pyvenv.cfg` 的 `home` **重写**为捆绑解释器（幂等、便携，换机器也能跑）；
-3. 若 venv 缺关键依赖（如 `torch`），**自动 `pip install -r libs/qq_bot_runtime/requirements.txt`**（含 torch 等重依赖，首次可能数分钟，需联网）；
-4. 固定 `FEIYU_QQ_BOT=libs/qq_bot_runtime`，用**仓库内引擎代码**启动 `app.py --with-core`。
+3. 若 venv 缺关键依赖（如 `pywebview`/`torch`），**自动 `pip install -r libs/qq_bot_runtime/requirements-app.txt`**（CPU 友好依赖集，含 pywebview 原生窗口，torch 装 CPU 版，首次可能数分钟，需联网）；
+4. 若检测到 **NVIDIA 显卡**，会**交互询问**是否安装 CUDA 版 torch 以加速本地模型（回车默认不装，保持 CPU 版；装 CUDA 版会额外从 PyTorch 官方源下载，体积更大）；
+5. 固定 `FEIYU_QQ_BOT=libs/qq_bot_runtime`，用**仓库内引擎代码**启动 `app.py --with-core`。
 
-> **依赖**：捆绑的 `runtime/python` 是**裸解释器**，无 torch / cv2；首启会自动装 `requirements.txt`。若需本地语音（VoxCPM）或视觉大模型，另行 `pip install -r requirements-vox.txt`。安装失败（无网络）时脚本会提示手工安装或复用 `E:\qq_bot\venv`。窗口关闭即退出。
+> **依赖**：捆绑的 `runtime/python` 是**裸解释器**，无 torch / cv2 / pywebview。首启默认装 `requirements-app.txt`（CPU 友好集，含原生窗口所需的 pywebview，torch 为 CPU 版，无显卡也能跑）。检测到 N 卡时脚本会询问是否改装 CUDA 版 torch。若需本地语音（VoxCPM），另行 `pip install -r requirements-vox.txt`。安装失败（无网络）时脚本会提示手工安装或复用 `E:\qq_bot\venv`。窗口关闭即退出。
 
 ### 从源码运行（开发者）
 
@@ -322,7 +326,7 @@ python app.py --with-core
 
 ### 模型注册表（LLM 供应商）
 
-侧栏「**AI 供应商（模型管理）**」是统一的命名模型注册表，取代原先分散在配置页的供应商配置（配置页已不再含「AI 供应商」栏目）：
+配置页内的「**AI 供应商（模型管理）**」面板是统一的命名模型注册表，取代原先分散在配置页的供应商配置（无独立侧栏入口，入口即配置页中的该面板）：
 
 - **保存命名模型**：名称、厂商、接口类型、Base URL、API Key、模型名、能力（chat / reasoning / vision / role），写入 `app_settings.json` 覆盖层并热重载 `ai_provider`。
 - **设置中切换默认**：每个能力（capability）的路由可置顶某模型作为默认（`/api/providers/activate` → `set_default`）。
