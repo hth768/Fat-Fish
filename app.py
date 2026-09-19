@@ -138,6 +138,8 @@ def main():
     lt = LoopThread()
     lt.start()
     bridge = CoreBridge(lt, port)
+    from bridge.core_bridge import set_bridge
+    set_bridge(bridge)
 
     # 插件包管理器：每个插件 = plugins/<包名>/ 独立目录，可插拔
     pkg = plugins_api.init(bridge)

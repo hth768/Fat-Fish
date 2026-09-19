@@ -722,44 +722,111 @@ class ChatService:
                 await reply.reply(result.get("error", "记录失败"))
             return
 
-        # ---------------- AI 自我编程确认命令 ----------------
-        if text.strip().startswith("/同意修改") or text.strip().startswith("/批准修改"):
-            req_id = re.sub(r'^/?[同意批准]+[修改改]+[:：\s]*', '', text.strip()).strip()
-            if not req_id:
-                await reply.reply("格式：/同意修改 <请求ID>（先 /待确认修改 查看）")
-                return
-            from codebuddy_cli import confirm_edit
-            result = confirm_edit(req_id, approve=True)
-            if result.get("ok"):
-                await reply.reply(f"已批准修改：{result.get('result','')[:300]}")
-            else:
-                await reply.reply(f"执行失败：{result.get('error','未知错误')}")
+        # ---------------- BOT Self Coding（智能体自编程）命令 ----------------
+        if text.strip().startswith("/开启自我编程"):
+            from self_coding import set_enabled, set_perm
+            raw = re.sub(r'^/?开启自我编程[:：\s]*', '', text.strip()).strip()
+            perm = raw if raw else None
+            set_enabled(True)
+            msg = "已开启 BOT Self Coding ✅ 我现在可以用内置构建助手改进自己啦~"
+            if perm:
+                r = set_perm(perm)
+                if r.get("ok"):
+                    msg += f"\n权限档已设为：{perm}"
+                else:
+                    msg += f"\n（权限档设置失败：{r.get('error')}）"
+            await reply.reply(msg)
             return
 
-        if text.strip().startswith("/拒绝修改"):
-            req_id = re.sub(r'^/?拒绝修改[:：\s]*', '', text.strip()).strip()
-            if not req_id:
-                await reply.reply("格式：/拒绝修改 <请求ID>")
-                return
-            from codebuddy_cli import confirm_edit
-            result = confirm_edit(req_id, approve=False)
-            if result.get("ok"):
-                await reply.reply("已拒绝这次修改~")
-            else:
-                await reply.reply(f"操作失败：{result.get('error','未知错误')}")
+        if text.strip().startswith("/关闭自我编程"):
+            from self_coding import set_enabled
+            set_enabled(False)
+            await reply.reply("已关闭 BOT Self Coding。我不再自行改代码，需要时再 /开启自我编程 即可。")
             return
 
-        if text.strip().startswith("/待确认修改") or text.strip().startswith("/待确认"):
-            from codebuddy_cli import list_pending_edits
-            pending = list_pending_edits()
-            if not pending:
-                await reply.reply("当前没有待确认的代码修改~")
+        if text.strip().startswith("/自我编程权限"):
+            from self_coding import set_perm, get_perm, is_enabled
+            raw = re.sub(r'^/?自我编程权限[:：\s]*', '', text.strip()).strip()
+            if not raw:
+                await reply.reply(f"当前权限档：{get_perm()}（开启中={is_enabled()}）。"
+                                  f"可设：plan / default / acceptEdits / full / bypassPermissions")
                 return
-            lines = ["有这些代码修改等待你确认："]
-            for p in pending:
-                lines.append(f"[{p['id']}] {p['filepath']}")
-                lines.append(f"   要求：{p['instruction']}")
+            r = set_perm(raw)
+            if r.get("ok"):
+                await reply.reply(f"权限档已设为：{raw}")
+            else:
+                await reply.reply(f"设置失败：{r.get('error')}")
+            return
+
+        if text.strip().startswith("/自我编程设置"):
+            from self_coding import set_issue_auto, set_auto_load, is_enabled, get_perm
+            body = re.sub(r'^/?自我编程设置[:：\s]*', '', text.strip()).strip().lower()
+            auto_issue = None
+            auto_load = None
+            if "issue自动" in body or "自动执行" in body:
+                auto_issue = "关" not in body and "否" not in body and "off" not in body
+                set_issue_auto(auto_issue)
+            if "自动装载" in body or "自动启动" in body:
+                auto_load = "关" not in body and "否" not in body and "off" not in body
+                set_auto_load(auto_load)
+            await reply.reply(
+                f"已更新（开启中={is_enabled()}，权限={get_perm()}）：\n"
+                f"  Issue 自动执行 = {'开' if auto_issue is None else ('开' if auto_issue else '关')}\n"
+                f"  产物自动装载 = {'开' if auto_load is None else ('开' if auto_load else '关')}")
+            return
+
+        if text.strip().startswith("/提issue") or text.strip().startswith("/提需求"):
+            from self_coding import file_issue, is_enabled
+            if not is_enabled():
+                await reply.reply("BOT Self Coding 还没开哦，先 /开启自我编程 我才好提需求给自己做~")
+                return
+            raw = re.sub(r'^/?(提issue|提需求)[:：\s]*', '', text.strip()).strip()
+            if not raw:
+                await reply.reply("格式：/提issue 想要一个能定时总结聊天的大脑")
+                return
+            r = file_issue(title=raw, kind="feature")
+            if r.get("ok"):
+                if r.get("auto"):
+                    await reply.reply(f"已提 Issue {r['issue_id']} 并自动派给构建助手执行中（默认自动执行）~")
+                else:
+                    await reply.reply(f"已提 Issue {r['issue_id']}（待你同意才执行，/同意issue {r['issue_id']}）")
+            else:
+                await reply.reply(f"提 Issue 失败：{r.get('error')}")
+            return
+
+        if text.strip().startswith("/待确认issue") or text.strip().startswith("/issue列表"):
+            from self_coding import list_issues
+            pend = list_issues("pending")
+            open_ = list_issues("open")
+            done = list_issues("done")
+            if not (pend or open_ or done):
+                await reply.reply("暂时没有自我编程 Issue~")
+                return
+            lines = ["自我编程 Issue："]
+            for s, lst in (("待你同意", pend), ("执行中", open_), ("已完成", done)):
+                for it in lst:
+                    lines.append(f"[{it['id']}] ({s}) {it.get('title','')}")
             await reply.reply("\n".join(lines))
+            return
+
+        if text.strip().startswith("/同意issue"):
+            from self_coding import approve_issue
+            rid = re.sub(r'^/?同意issue[:：\s]*', '', text.strip()).strip()
+            if not rid:
+                await reply.reply("格式：/同意issue <IssueID>")
+                return
+            r = approve_issue(rid)
+            await reply.reply("已派给构建助手执行~" if r.get("ok") else f"失败：{r.get('error')}")
+            return
+
+        if text.strip().startswith("/拒绝issue"):
+            from self_coding import reject_issue
+            rid = re.sub(r'^/?拒绝issue[:：\s]*', '', text.strip()).strip()
+            if not rid:
+                await reply.reply("格式：/拒绝issue <IssueID>")
+                return
+            r = reject_issue(rid)
+            await reply.reply("已拒绝该 Issue~" if r.get("ok") else f"失败：{r.get('error')}")
             return
 
         if text.strip().startswith("/别看mc") or text.strip().startswith("/别看MC"):
@@ -1104,8 +1171,30 @@ class ChatService:
         try:
             await self._chat_pipeline(msg, reply, text, has_quote, has_voice)
         except Exception as e:
+            # 智能体自我编程：开启后，受阻即把 bug+回传 traceback 作为 Issue 交给构建助手
+            import traceback as _tb
+            tb_text = _tb.format_exc()
             print(f"[ERROR] 处理消息失败: {e}")
-            await reply.reply(f"抱歉，出错了：{e}")
+            auto_issued = False
+            try:
+                from self_coding import is_enabled, file_issue
+                if is_enabled():
+                    r = file_issue(
+                        title=f"处理消息时异常：{type(e).__name__}",
+                        body=f"用户消息：{text[:200]}\n异常：{e}",
+                        kind="fix",
+                        traceback_text=tb_text,
+                    )
+                    if r.get("ok"):
+                        auto_issued = True
+                        if r.get("auto"):
+                            await reply.reply(f"抱歉出错了：{e}\n（已自动提 Issue {r['issue_id']} 交给构建助手修~）")
+                        else:
+                            await reply.reply(f"抱歉出错了：{e}\n（已提 Issue {r['issue_id']}，待你同意才修 /同意issue {r['issue_id']}）")
+            except Exception as ie:
+                print(f"[SELF_CODING] 自动提 Issue 失败（不影响报错回复）: {ie}")
+            if not auto_issued:
+                await reply.reply(f"抱歉，出错了：{e}")
 
     # ==================================================================
     # 电脑操控命令（主人专属，pc_agent.py / pc_control.py）

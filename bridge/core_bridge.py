@@ -20,6 +20,18 @@ from quiet import degrade
 OWNER_ID = "app_owner"
 OWNER_NAME = "主人"
 
+_BRIDGE_SINGLETON = None
+
+
+def set_bridge(b: "CoreBridge"):
+    global _BRIDGE_SINGLETON
+    _BRIDGE_SINGLETON = b
+
+
+def get_bridge() -> "CoreBridge":
+    """获取 CoreBridge 单例（App 启动时由 app.py 注入）。"""
+    return _BRIDGE_SINGLETON
+
 
 class CoreBridge:
     """AgentCore 的宿主与 Web 聊天适配层。"""

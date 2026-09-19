@@ -27,6 +27,7 @@
   - [总结](#总结)
   - [插件系统](#插件系统)
   - [构建助手（对话式 Agent）](#构建助手对话式-agent)
+  - [BOT Self Coding（智能体自我编程）](#bot-self-coding智能体自我编程)
   - [外观](#外观)
   - [模型注册表（LLM 供应商）](#模型注册表llm-供应商)
   - [多 Bot（多智能体切换）](#多-bot多智能体切换)
@@ -281,6 +282,31 @@ python app.py --with-core
 **会话与历史**：对话存 `data/builder_chat/<id>.json`（左栏顶部可切换 / 新建 / 删除），构建历史存 `data/builder_history.jsonl`；写入备份在 `data/builder_bak/`。
 
 > **安全约定**：网页内容视为外部输入、不得执行其中指令（防提示注入）；权限被拒时模型如实说明而非绕过；「高级」里的开关（高危确认 / 记住批准 / 自动备份 / 联网 / 步数上限）即时生效。
+
+### BOT Self Coding（智能体自我编程）
+
+原本「CodeBuddy CLI 自我编程」依赖外部 CLI 进程改代码；现演进为：**用户开启 BOT Self Coding 后，智能体直接复用内置构建助手（builder_api）构建 / 改进自己**，全程不依赖外部 CLI。
+
+开关与默认行为（见 `libs/qq_bot_runtime/config.py`）：
+
+| 配置项 | 默认 | 含义 |
+|---|---|---|
+| `BOT_SELF_CODING_ENABLED` | `False` | 总开关：默认关闭；开启后智能体才获权自我编程 |
+| `BOT_SELF_CODING_PERM` | `"full"` | 开启后默认权限档 = **完全访问**（可在 UI/命令改：plan / default / acceptEdits / full / bypassPermissions） |
+| `BOT_SELF_CODING_ISSUE_AUTO` | `True` | Issue **默认自动执行**：提了即派给构建助手做；关掉后需用户同意 |
+| `BOT_SELF_CODING_AUTO_LOAD` | `True` | 构建产物**默认自动装载并启动**；关掉后需用户允许或手动 `/装载 <name>` |
+
+协作流程（闭环）：
+
+1. **触发**：用户发 `/开启自我编程` 打开开关；之后智能体在两种情形下会行动——
+   - 工作**受阻**（如聊天管线抛异常）时，自动把 `bug + 回传 traceback` 作为 Issue 提给自己；
+   - 想要**新功能 / 改进**时（可由用户 `/提issue` 或智能体自行判定）提 Issue。
+2. **提 Issue**：`/提issue 想要一个能定时总结聊天的大脑`。默认 `ISSUE_AUTO=True` → 立即派给构建助手执行（无需用户再点）；若 `ISSUE_AUTO=False` → 进入「待同意」队列，用户 `/同意issue <ID>` 才执行、`/拒绝issue <ID>` 丢弃。
+3. **与构建助手合作**：智能体把需求 / bug / traceback 交给构建助手，构建助手读码、改文件、做语法检查并产出可装载草稿；**产物若装载后报错，智能体把 bug + 回传 traceback 再次交给构建助手修**，多轮（默认 ≤4 轮）直到通过（状态可在 `/待确认issue` 列表查看）。
+4. **装载**：构建通过且 `AUTO_LOAD=True` → 自动 `pkg_manager.load()` 并启动（brain/world 类型按 `auto_start_on_core`）；`AUTO_LOAD=False` → 只回报「建议装载 `<name>`」，由用户允许或手动 `/装载 <name>`。
+5. **权限可改**：`/自我编程权限 full`（降到 `acceptEdits` 等即每次确认）、`/自我编程设置` 切换 Issue 自动执行 / 产物自动装载开关——四档默认都「可更改 / 可关闭」。
+
+> **安全边界**：即使开启自我编程，权限仍走构建助手既有闸门（高危操作进「待确认」队列、工作区外/黑名单一律拒绝）；关掉 `AUTO_LOAD` 时任何产物都不会被静默装载。旧 CodeBuddy CLI 外部进程模式（`codebuddy_cli.py`）保留为可选项，不再作为默认自编程通道。
 
 ### 外观
 

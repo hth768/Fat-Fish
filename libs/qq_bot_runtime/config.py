@@ -371,6 +371,18 @@ CODEBUDDY_CORE_FILES = [
     "deepseek_client.py", # AI 客户端
 ]
 
+# ---- BOT Self Coding（智能体自编程：驱动内置构建助手构建/改进自己）----
+# 旧版「CodeBuddy CLI 自我编程」依赖外部 CLI 进程，已演进为：开启后智能体直接
+# 复用内置「构建助手（builder_api）」完成构建/改进，并把受阻/新需求作为 Issue 提给用户。
+BOT_SELF_CODING_ENABLED = False       # 总开关：默认关闭，开启后智能体才获权自我编程
+BOT_SELF_CODING_PERM = "full"          # 开启后默认权限档：完全访问（可在 UI/命令改）
+#   可选：plan / default / acceptEdits / full / bypassPermissions（见 builder_api.PERM_MODES）
+BOT_SELF_CODING_ISSUE_AUTO = True      # Issue 默认自动执行：True=提了就自动派给构建助手做；
+                                        # False=需用户同意才执行（/同意issue <id>）
+BOT_SELF_CODING_AUTO_LOAD = True       # 构建产物默认自动装载并启动：True=做完即 load+start；
+                                        # False=需用户允许或手动 /装载 <name> 才生效
+BOT_SELF_CODING_WORKSPACE = _HERE       # 构建助手工作区：默认应用根目录
+
 # ---- 平台插件开关（智能体为核心，QQ 只是其中一个可插拔插件）----
 # ENABLE_QQ_PLUGIN=False 且 ENABLE_CONSOLE_PLUGIN=True 时可完全脱离 QQ 运行
 ENABLE_QQ_PLUGIN = False
