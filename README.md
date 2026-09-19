@@ -167,13 +167,14 @@ feiyu_standalone/
 
 ### 便携版（Windows）
 
-仓库根目录的 `start_app.bat` 是**适配本仓库**的启动器（双击即可）：
+仓库根目录的 `start_app.bat` 是**适配本仓库**的启动器（双击即可），**首启会自动建环境**：
 
-- 固定把 `FEIYU_QQ_BOT` 指向仓库自带的智能体引擎 `libs/qq_bot_runtime`，即始终用**仓库内的引擎代码**启动；
-- 按优先级挑选带依赖的 Python：① 仓库自带 `libs/qq_bot_runtime/venv`（最干净、自包含）→ ② 本机部署引擎 `E:\qq_bot\venv`（复用其解释器与依赖）→ ③ 捆绑裸解释器 `libs/qq_bot_runtime/runtime/python/python.exe`（仅当依赖已就位时可跑）；
-- 若都没有可用 Python，脚本提示如何建 venv 后退出。
+1. 用仓库捆绑解释器 `libs/qq_bot_runtime/runtime/python/python.exe` **自动创建 venv**（若 `venv` 不存在）；
+2. 把 venv 的 `pyvenv.cfg` 的 `home` **重写**为捆绑解释器（幂等、便携，换机器也能跑）；
+3. 若 venv 缺关键依赖（如 `torch`），**自动 `pip install -r libs/qq_bot_runtime/requirements.txt`**（含 torch 等重依赖，首次可能数分钟，需联网）；
+4. 固定 `FEIYU_QQ_BOT=libs/qq_bot_runtime`，用**仓库内引擎代码**启动 `app.py --with-core`。
 
-> **依赖**：捆绑的 `runtime/python` 是**裸解释器**，不含 torch / cv2 等重依赖；请先 `python -m venv libs/qq_bot_runtime/venv` 并 `pip install -r libs/qq_bot_runtime/requirements*.txt`，或让 `E:\qq_bot\venv` 存在以复用依赖。窗口关闭即退出。
+> **依赖**：捆绑的 `runtime/python` 是**裸解释器**，无 torch / cv2；首启会自动装 `requirements.txt`。若需本地语音（VoxCPM）或视觉大模型，另行 `pip install -r requirements-vox.txt`。安装失败（无网络）时脚本会提示手工安装或复用 `E:\qq_bot\venv`。窗口关闭即退出。
 
 ### 从源码运行（开发者）
 
