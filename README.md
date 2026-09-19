@@ -285,7 +285,7 @@ python app.py --with-core
 
 ### BOT Self Coding（智能体自我编程）
 
-原本「CodeBuddy CLI 自我编程」依赖外部 CLI 进程改代码；现演进为：**用户开启 BOT Self Coding 后，智能体直接复用内置构建助手（builder_api）构建 / 改进自己**，全程不依赖外部 CLI。
+旧的「CodeBuddy CLI 自我编程」（依赖外部 CLI 进程）已**彻底移除**；现在智能体自我编程统一走内置构建助手：**用户开启 BOT Self Coding 后，智能体直接复用内置构建助手（builder_api）构建 / 改进自己**，全程不依赖外部 CLI。
 
 开关与默认行为（见 `libs/qq_bot_runtime/config.py`）：
 
@@ -306,7 +306,7 @@ python app.py --with-core
 4. **装载**：构建通过且 `AUTO_LOAD=True` → 自动 `pkg_manager.load()` 并启动（brain/world 类型按 `auto_start_on_core`）；`AUTO_LOAD=False` → 只回报「建议装载 `<name>`」，由用户允许或手动 `/装载 <name>`。
 5. **权限可改**：`/自我编程权限 full`（降到 `acceptEdits` 等即每次确认）、`/自我编程设置` 切换 Issue 自动执行 / 产物自动装载开关——四档默认都「可更改 / 可关闭」。
 
-> **安全边界**：即使开启自我编程，权限仍走构建助手既有闸门（高危操作进「待确认」队列、工作区外/黑名单一律拒绝）；关掉 `AUTO_LOAD` 时任何产物都不会被静默装载。旧的 CodeBuddy CLI 外部进程模式已移除，自编程统一走内置构建助手。
+> **安全边界**：即使开启自我编程，权限仍走构建助手既有闸门（高危操作进「待确认」队列、工作区外/黑名单一律拒绝）；关掉 `AUTO_LOAD` 时任何产物都不会被静默装载。
 
 ### 外观
 
