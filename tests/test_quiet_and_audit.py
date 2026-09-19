@@ -165,7 +165,12 @@ class TestAuditTool(unittest.TestCase):
         ast.parse(out)                                # 必须仍是合法 Python
         self.assertIn("from quiet import degrade", out)
         self.assertIn("        except KeyError as e:", out)     # 保留原缩进
-        self.assertIn("            degrade(\"m.py:", out)       # 体缩进 +4
+        # 体缩进 +4：degrade( 调用被插入在 except 体（12 空格），且调用位置标包含行号与限定名。
+        # 注意：convert() 会把调用位置标准化为「路径:行 限定名」(路径随 OS/临时目录变化)，
+        # 故只对路径前缀无关的部分做断言（行号 7 + C.m），避免平台耦合。
+        self.assertIn('            degrade("', out)            # 体缩进 +4 且使用双引号
+        self.assertIn(":7", out)                               # 调用处行号（class C 起算）
+        self.assertIn("C.m", out)                              # 限定名
         self.assertIn("as e", out)
 
     def test_convert_handles_nested_handlers(self):
