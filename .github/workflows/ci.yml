@@ -37,9 +37,16 @@ jobs:
       - name: Run App unit tests
         shell: bash
         run: |
-          set -e
-          python -m unittest discover -s tests -v
+          set -o pipefail
+          python -m unittest discover -s tests -v 2>&1 | tee test-output.log
           echo "unittest OK"
+
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: test-output.log
 
       - name: Syntax-check frontend
         shell: bash
