@@ -150,7 +150,8 @@ feiyu_standalone/
 │   └── ai_providers.example.json / config.py / requirements*.txt
 ├── plugins/
 │   ├── groups.json        # 插件依赖分组定义（见「插件系统」）
-│   └── greeting_demo/     # 本地插件示例包（官方 UI 事件通道范本，见 PLUGINS.md）
+│   ├── greeting_demo/     # 本地插件示例包（官方 UI 事件通道范本，见 PLUGINS.md）
+│   └── mc_world/          # world 类型示例包：Python mineflayer 接原版 Minecraft（game 域）
 ├── feiyu-android/         # 肥鱼娘安卓版（Kotlin + Compose，独立工程）
 ├── dist/                  # 发布产物（见「发布与安装」；不在 git 内，走 GitHub Releases）
 └── data/                  # 运行数据（用户隐私，git 忽略）
@@ -229,9 +230,11 @@ python app.py --with-core
 | `voice` | 本地语音 | `vox_tts` | `libs/voice_pack` 大件（9.7GB）+ N 卡；无 N 卡自动降级 GLM 云端 |
 | `qq` | QQ 平台 | `qq_platform` | 目标机装有 QQ NT + NapCat（NapCat 在应急包 P3_NapCat） |
 | `bilibili` | B 站全家 | `bilibili_platform` `bilibili_dm` `bilibili_learn` | 共享 SESSDATA 与风控层 |
-| `mc` | Minecraft | `brain_mc_mod` `brain_mc_bot` | 模组世界需 feiyuapi mod / 原版需 mineflayer |
+| `mc` | Minecraft | `brain_mc_mod` `brain_mc_bot` `mc_world` | 模组世界需 feiyuapi mod / 原版需 mineflayer（`mc_world` 为 world 类型示例包）|
 | `desktop` | 桌面与游戏 | `brain_pc` `brain_pvz` | PvZ 需 `PlantsVsZombies.exe` 放 `pvz_games/` |
 | `services` | 后台服务 | `sidecar_memory` `sidecar_monitor` `sidecar_telemetry` | sidecar 子进程 |
+
+> **World 类型（一等公民）**：`kind="world"` 的插件（如 `mc_world`）与 `brain` 走同一条 `create_brain` + `core.brains` 注册通道，天然获得统一生命周期、状态查询与 `brain.event` 事件通道；它把游戏 / 虚拟主播等**外部世界**接入肥鱼，区别于对接 IM 的 `platform` 插件。详见 [`PLUGINS.md`](./PLUGINS.md) 第 3.4 节与 `plugins/mc_world/`。
 
 包管理见 `bridge/pkg_manager.py`；插件包的 `manifest.json` 会在**装载前静态校验**（必填字段、`kind` 合法性、包名与目录一致、依赖字段、`schema_version` 兼容性），坏包不再静默消失（规则见 [`PLUGINS.md`](./PLUGINS.md)）。
 
@@ -319,7 +322,7 @@ python app.py --with-core
 要点速记：
 
 - **往 App 界面推事件**（插件显示消息 / 图片 / 语音 / 状态）：`bridge = getattr(core, "app_bridge", None)` → `bridge.push(session, {"type": "message", "text": ...})`；`push` 线程安全、`session=None` 为全局广播，**不要**用 `sys.modules` 取应用层内部对象。
-- **manifest 校验**（装载前、不执行代码）：必填 `name`（必须等于目录名）/ `title` / `version` / `kind`；`kind ∈ platform|feature|brain|sidecar|local`；`schema_version` 当前为 **2**（缺失按 1 告警放行、高于本机则拒绝装载）；校验不过的包以 `kind: "invalid"` 列在插件页并附原因，不再静默消失。
+- **manifest 校验**（装载前、不执行代码）：必填 `name`（蛇形、必须等于目录名）/ `title` / `version` / `kind`；`kind ∈ platform|feature|brain|world|sidecar|local`；`kind=world` 时额外必填 `world_domain`（∈ `im`/`game`/`vtuber`/`other`）；`schema_version` 当前为 **2**（缺失按 1 告警放行、高于本机则拒绝装载）；校验不过的包以 `kind: "invalid"` 列在插件页并附原因，不再静默消失。
 - **依赖**：`requires`（引擎内建能力）/ `pkg_requires`（其它插件包，缺失则拒绝装载）/ `optional_requires`（软依赖，缺失仅告警）。
 - **sidecar 包**：`manifest.sidecar = {script, host, port}`，启动后等待端口就绪；子进程输出落盘 `<qq_bot>/logs/sidecar_<name>.log`，`status()` 带 `log` 与 `exit_code`，便于排障。
 - **参考实现**：`plugins/greeting_demo/`（自包含、走官方通道、带配置表单与热生效）。
@@ -395,7 +398,7 @@ python libs/qq_bot_runtime/tests/run.py
 ```powershell
 tests\run_tests.bat            # 双击亦可，自动挑一个可用解释器
 # 或
-python -m unittest discover -s tests -v      # 当前 43 项全过
+python -m unittest discover -s tests -v      # 当前 59 项全过
 ```
 
 > 视觉/向量等重依赖模块需在完整依赖环境下测试；若仅用捆绑精简 Python，相关用例可能无法完整加载。CI / 本机验证均建议使用带重依赖的 venv。

@@ -45,7 +45,8 @@ plugins/<package_name>/            # 目录名 = 包名（snake_case，唯一）
 | `name` | string (snake_case) | 包名，等于目录名，全局唯一 |
 | `title` | string | 展示名（中文也可） |
 | `version` | string (`semver` 风格，如 `1.0.0`) | 插件版本 |
-| `kind` | enum | **`platform` / `feature` / `brain` / `sidecar` / `local`** 之一（见第 3 节） |
+| `kind` | enum | **`platform` / `feature` / `brain` / `world` / `sidecar` / `local`** 之一（见第 3 节）；`kind=world` 时必填 `world_domain`（见第 3.4 节）|
+| `world_domain` | enum | **仅 `kind=world` 需要**：`im` / `game` / `vtuber` / `other`，标明这个世界接入的是哪类外部世界 |
 
 **可选字段**
 
@@ -80,7 +81,7 @@ manifest 无效的包不会「凭空消失」：会在插件列表里以 `kind: 
 
 ---
 
-## 3. 四类包的接入契约
+## 3. 五类包的接入契约
 
 ### 3.1 `kind: "platform"`（平台插件）
 把某个聊天/直播平台接入核心。
@@ -129,7 +130,49 @@ def create_brain(core) -> "AgentBrain":
 通过 `await brain_event(core, name, kind, text)` 上报事件（`help`/`notice`/`state`），
 核心会转发求助、平台/功能插件可订阅 `brain.event` 总线事件。
 
-### 3.4 `kind: "sidecar"`（旁路子进程插件）
+### 3.4 `kind: "world"`（世界插件）
+
+把**外部世界**（游戏 / 虚拟主播 / 物联网等，区别于对接 IM 的 `platform`）接入核心。世界与大脑同源：走同一条 `create_brain` 注册通道，由它主动观察世界、在世界上执行动作，并把世界状态/事件经 `core.app_bridge` 与 `brain.event` 桥接进肥鱼。
+
+`manifest` 需额外声明：
+
+```json
+{
+  "name": "mc_world",
+  "kind": "world",
+  "world_domain": "game",          // im | game | vtuber | other
+  "title": "Minecraft 世界",
+  "description": "用 mineflayer 接入原版 Minecraft"
+}
+```
+
+`plugin.py` 提供 `create_brain(core)`，**返回实现 `AgentBrain` 契约的对象**（`name` / `title` / `kind` / `auto_start_on_core` / `start()` / `stop()` / `status()`）：
+
+```python
+# plugins/mc_world/plugin.py
+def create_brain(core) -> "AgentBrain":
+    return MinecraftWorldBrain(core)
+
+class MinecraftWorldBrain:
+    name = "mc_world"
+    title = "Minecraft 世界"
+    kind = "external"          # 外部世界：核心只注册状态/事件通道，由用户主动 connect
+    description = "world 类型示例：mineflayer 接原版 MC"
+    auto_start_on_core = False # 世界需用户主动 connect，不随核心自启
+
+    async def start(self): ...
+    async def stop(self): ...
+    def status(self) -> dict: ...    # 建议返回 {name, kind:"world", world_domain, running, connected}
+    def on_config(self, cfg): ...    # 用户配置热生效
+    def on_agent_reply(self, text, session=None): ...  # 解析 @mc 指令驱身体动作
+```
+
+- 装载时 `pkg_manager` 检测到 `kind=world` 即调 `create_brain(core)` 并 `core.brains.register(inst)`，与大脑完全一致；
+- 世界通常用 `auto_start_on_core=False`，由用户在「大脑」页或 App 里触发 `connect()`（如 `mc_world` 的 `connect(cfg)` 连 MC 服务器）；
+- 事件推送复用第 4.5 节官方通道 `core.app_bridge.push(session, {...})`，`type` 建议用 `"world"` + `domain`/`event`/`state` 字段，便于界面区分；
+- 完整示例见 `plugins/mc_world/`（Python mineflayer 接原版 Minecraft，复用 cortico-world-mc-agent 身体层语义：connect / 观察 / 聊天转发 / 保命反射 / `goto`·`dig`·`attack`·`say`·`scan` 指令）。
+
+### 3.5 `kind: "sidecar"`（旁路子进程插件）
 把独立进程服务（向量记忆、监控、遥测等）作为可插拔包运行。
 
 - `manifest.sidecar = {"script": "run.py", "host": "127.0.0.1", "port": 8765}`；
@@ -145,7 +188,7 @@ def create_brain(core) -> "AgentBrain":
   避免「进程起来了但服务还没在听」导致的首个请求失败；进程中途退出会记录 `returncode`；
 - `status()` 额外返回 `log`（日志路径）与 `exit_code`；`tail_log(n)` 可取日志尾部用于界面排障。
 
-### 3.5 `kind: "local"`（本地包）
+### 3.6 `kind: "local"`（本地包）
 自包含实现，不包装 qq_bot 模块，纯资源/脚本型插件。无需 `create_*` 函数。
 
 ---
@@ -322,6 +365,27 @@ def create_brain(core):
   "version": "1.0.0",
   "kind": "sidecar",
   "sidecar": { "script": "run.py", "host": "127.0.0.1", "port": 8765 }
+}
+```
+
+### 世界插件：`plugins/mc_world/manifest.json`
+```json
+{
+  "name": "mc_world",
+  "title": "Minecraft 世界",
+  "version": "0.1.0",
+  "kind": "world",
+  "world_domain": "game",
+  "description": "world 类型示例：mineflayer 接原版 Minecraft",
+  "plugin": "mc_world",
+  "config_schema": [
+    { "key": "host", "label": "服务器地址", "type": "str", "default": "127.0.0.1" },
+    { "key": "port", "label": "端口", "type": "int", "min": 1, "max": 65535, "default": 25565 },
+    { "key": "username", "label": "角色名", "type": "str", "default": "FeiyuBot" },
+    { "key": "version", "label": "游戏版本", "type": "str", "default": "auto" },
+    { "key": "auto_reflex", "label": "保命反射", "type": "bool", "default": true },
+    { "key": "auto_chat_relay", "label": "聊天转发到界面", "type": "bool", "default": true }
+  ]
 }
 ```
 
