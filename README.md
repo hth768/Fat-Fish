@@ -165,15 +165,15 @@ feiyu_standalone/
 
 ## 快速开始
 
-### 便携版（推荐，Windows）
+### 便携版（Windows）
 
-直接双击 `start_app.bat`。脚本会：
+仓库根目录的 `start_app.bat` 是**适配本仓库**的启动器（双击即可）：
 
-1. 自举 `libs/qq_bot_runtime/venv/pyvenv.cfg`，把 Python `home` 重写为包内捆绑解释器（幂等）；
-2. 设置 `FEIYU_QQ_BOT` 指向 `libs/qq_bot_runtime`，并加载包内 ffmpeg / silk 工具；
-3. 以 `python app.py --with-core` 启动，自动打开桌面窗口。
+- 固定把 `FEIYU_QQ_BOT` 指向仓库自带的智能体引擎 `libs/qq_bot_runtime`，即始终用**仓库内的引擎代码**启动；
+- 按优先级挑选带依赖的 Python：① 仓库自带 `libs/qq_bot_runtime/venv`（最干净、自包含）→ ② 本机部署引擎 `E:\qq_bot\venv`（复用其解释器与依赖）→ ③ 捆绑裸解释器 `libs/qq_bot_runtime/runtime/python/python.exe`（仅当依赖已就位时可跑）；
+- 若都没有可用 Python，脚本提示如何建 venv 后退出。
 
-窗口关闭即退出。
+> **依赖**：捆绑的 `runtime/python` 是**裸解释器**，不含 torch / cv2 等重依赖；请先 `python -m venv libs/qq_bot_runtime/venv` 并 `pip install -r libs/qq_bot_runtime/requirements*.txt`，或让 `E:\qq_bot\venv` 存在以复用依赖。窗口关闭即退出。
 
 ### 从源码运行（开发者）
 
