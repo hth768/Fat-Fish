@@ -29,6 +29,7 @@
       <a class="nav-item" data-page="summary"><span class="nav-ico">≡</span>总结</a>
       <a class="nav-item" data-page="plugins"><span class="nav-ico">⚙</span>插件</a>
       <a class="nav-item" data-page="config"><span class="nav-ico">✎</span>配置</a>
+      <a class="nav-item" data-page="issues"><span class="nav-ico">◷</span>自编程 Issue</a>
       <a class="nav-item" data-page="builder"><span class="nav-ico">⚒</span>构建助手</a>
       <a class="nav-item" data-page="appearance"><span class="nav-ico">❖</span>外观</a>
     </nav>
@@ -217,6 +218,9 @@
       <div id="botConfigPanel" class="panel"></div>
       <div id="configBody">加载中…</div>
 
+      <!-- 智能体自编程 · Issue 队列（简版，完整历史见侧栏「自编程 Issue」） -->
+      <div id="issueMountConfig"></div>
+
       <!-- AI 供应商 / 模型管理（原「AI 供应商」与「自定义模型供应商」合并） -->
       <div class="panel" id="provPanel" style="margin-top:18px">
         <div class="panel-title">AI 供应商（模型管理）</div>
@@ -281,6 +285,17 @@
           </div>
         </div>
       </div>
+    </section>
+
+    <!-- 自编程 Issue 历史 -->
+    <section class="page hidden" id="page-issues">
+      <header class="page-head">
+        <h1>自编程 Issue 历史</h1>
+        <div class="head-actions">
+          <div class="bot-switch"><span class="bot-switch-k">Bot</span><select class="botSwitcher select"></select><button class="btn ghost sm botManageBtn" type="button">管理</button></div>
+        </div>
+      </header>
+      <div id="issueMountPage"></div>
     </section>
 
     <!-- 外观 -->

@@ -514,3 +514,14 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 #botCard .panel-title, #botConfigPanel .panel-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
 #botCard .hint.wrap { white-space: normal; }
 .bot-card .row-actions { margin-top: 8px; }
+
+/* ---------- 智能体自编程 Issue 队列 ---------- */
+.sc-list { display: flex; flex-direction: column; gap: 10px; }
+.sc-issue { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: rgba(255,255,255,.02); }
+.sc-issue-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sc-issue .row-actions { margin-top: 8px; }
+.badge.open { color: var(--accent, #4c9); border-color: var(--accent, #4c9); }
+.badge.pending { color: var(--warn); border-color: var(--warn); }
+.badge.done { color: var(--ok); border-color: var(--ok); }
+.badge.failed { color: #f66; border-color: #f66; }
+.badge.rejected { color: var(--muted); border-color: var(--line); }

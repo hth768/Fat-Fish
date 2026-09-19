@@ -9,6 +9,10 @@
   - `E:\feiyu_app`：第二份 App 部署（有 App 层无 libs），复用 `e:\qq_bot` 引擎，靠 `FEIYU_QQ_BOT=E:\qq_bot`。非 git，**部署副本一律不提交**。
 - **重启部署**：`Get-CimInstance Win32_Process` 找命令行含 `feiyu_app\app.py` 的 PID → `Stop-Process -Force`；再 `Start-Process cmd.exe -ArgumentList '/c','set FEIYU_QQ_BOT=E:\qq_bot&& E:\qq_bot\venv\Scripts\python.exe E:\feiyu_app\app.py --with-core > E:\feiyu_app\data\<log> 2>&1'`（detached，**勿 `-NoNewWindow`** 会阻塞）。会短暂关窗口后自动重开。
 - **同步规则**：App 层→`E:/feiyu_app`：`bridge/* webui/* server.py app.py settings_store.py plugins/groups.json README.md OVERVIEW.md PLUGINS.md tests/*`（先 Get-FileHash 比对落后文件；改 webui 必须重启=WebView2 缓存）。引擎层→`e:\qq_bot`：**必须连带复制全部依赖模块**（逐核对顶层 import + Test-Path），否则"启动能、来消息崩"。
+- **同步方向铁律（2026-09-19 纠正）**：部署副本（`e:\qq_bot`/`E:\feiyu_app`）是仓库**下游**，仓库是唯一真相源。漂移修复一律 **仓库→部署**（复制/新增、**绝不删除**部署副本独有文件）。曾误判为部署→仓库：部署的 `codebuddy_cli.py` + `config.CODEBUDDY_*` + plugin_registry 4 个 brain 注册是**被仓库 `self_coding.py`/构建助手 + 插件化大脑取代的旧方案**，部署副本只是没同步而陈旧——**切勿把 codebuddy_cli 合回仓库**（会回退架构）。
+- `e:\qq_bot` 引擎比仓库 `libs/qq_bot_runtime` **多 27 个 .py**（游戏自动化 `mc_*`/`pc_*`/`pvz_*` + 陈旧 `codebuddy_cli.py`），这些不在仓库、同步时**须保留不删**；仓库捆绑引擎 = 核心，游戏模块是部署副本额外层。
+- 自编程架构（当前）：`libs/qq_bot_runtime/self_coding.py`（Issue 机制 `/同意issue` `/拒绝issue`，复用构建助手 `builder_api`）+ `config.BOT_SELF_CODING_*` 开关。旧 `codebuddy_cli.py`（外部 CLI 方案）已弃用，部署副本残留为孤立文件（无导入、无害）。
+- 游戏大脑（McBotBrain/McModBrain/PcBrain/PvzBrain）**不在** `agent_core.py`，而在 `E:\feiyu_app\plugins/brain_*` 插件包；`plugin_registry` 仅内置注册 `chat` 大脑，其余由 brain_* 插件包自带（`module="agent_core"` 旧写法已废弃）。
 - 模型注册表：`config.py` 的 `AI_PROVIDERS={}`/`AI_CAPABILITY_ROUTING` 置空；真实 Key 在同目录 `ai_providers.json`（覆盖层，热重载）。**Key 勿写 config.py/勿提交**；`GLM_API_KEY` 等顶层变量（语音用）保留。
 - 端点约定：`/api/appearance/icon`(+reset) 是 POST；`/api/memory/export` 是 GET；`/api/builder/*` 只读查询在 do_GET(query 传参)，do_POST 只放写。
 - 捆绑 Python：`libs\qq_bot_runtime\runtime\python\python.exe`（`-m py_compile` 校验）。盘符漂移排错：本机无 F: 盘，绝对路径先 Test-Path 再 where。

@@ -62,7 +62,7 @@
 └─────────────────────────────────────────────────────┘
 ```
 
-- **前端** `webui/index.html · app.js · styles.css`：侧栏含 仪表盘 / 聊天 / 记忆 / 总结 / 插件 / 配置 / 构建助手 / 外观（「AI 供应商（模型管理）」是配置页内的面板）。
+- **前端** `webui/index.html · app.js · styles.css`：侧栏含 仪表盘 / 聊天 / 记忆 / 总结 / 插件 / 配置 / 自编程 Issue / 构建助手 / 外观（「AI 供应商（模型管理）」是配置页内的面板）。
 - **后端 HTTP** `server.py`：仅本机监听，托管静态前端并暴露 REST API 与 SSE 实时事件流（`SO_EXCLUSIVEADDRUSE` 保证单实例）。
 - **智能体核心**：App 以库方式调用 `libs/qq_bot_runtime` 的核心，运行时零源码改动。
 
@@ -303,11 +303,13 @@ python app.py --with-core
    - 工作**受阻**（如聊天管线抛异常）时，自动把 `bug + 回传 traceback` 作为 Issue 提给自己；
    - 想要**新功能 / 改进**时（可由用户 `/提issue` 或智能体自行判定）提 Issue。
 2. **提 Issue**：`/提issue 想要一个能定时总结聊天的大脑`。默认 `ISSUE_AUTO=True` → 立即派给构建助手执行（无需用户再点）；若 `ISSUE_AUTO=False` → 进入「待同意」队列，用户 `/同意issue <ID>` 才执行、`/拒绝issue <ID>` 丢弃。
-3. **与构建助手合作**：智能体把需求 / bug / traceback 交给构建助手，构建助手读码、改文件、做语法检查并产出可装载草稿；**产物若装载后报错，智能体把 bug + 回传 traceback 再次交给构建助手修**，多轮（默认 ≤4 轮）直到通过（状态可在 `/待确认issue` 列表查看）。
+3. **与构建助手合作**：智能体把需求 / bug / traceback 交给构建助手，构建助手读码、改文件、做语法检查并产出可装载草稿；**产物若装载后报错，智能体把 bug + 回传 traceback 再次交给构建助手修**，多轮（默认 ≤4 轮）直到通过（状态可在侧栏「自编程 Issue」页或 `/待确认issue` 查看）。
 4. **装载**：构建通过且 `AUTO_LOAD=True` → 自动 `pkg_manager.load()` 并启动（brain/world 类型按 `auto_start_on_core`）；`AUTO_LOAD=False` → 只回报「建议装载 `<name>`」，由用户允许或手动 `/装载 <name>`。
 5. **权限可改**：`/自我编程权限 full`（降到 `acceptEdits` 等即每次确认）、`/自我编程设置` 切换 Issue 自动执行 / 产物自动装载开关——四档默认都「可更改 / 可关闭」。
 
 > **安全边界**：即使开启自我编程，权限仍走构建助手既有闸门（高危操作进「待确认」队列、工作区外/黑名单一律拒绝）；关掉 `AUTO_LOAD` 时任何产物都不会被静默装载。
+
+**界面入口**：「配置」页新增「智能体自编程（Self Coding）」分区——可开关总开关、选择权限档（`plan / default / acceptEdits / full / bypassPermissions` 下拉）、切换 Issue 自动执行 / 产物自动装载；侧栏新增「自编程 Issue」独立页，列出全部 Issue 历史（状态 / 结果 / 更新时间），`pending` 项可一键「同意 / 拒绝」，并支持手动提交新 Issue（后端 `GET /api/self_coding/issues` 与 `POST /api/self_coding/approve|reject|file`）。
 
 ### 外观
 

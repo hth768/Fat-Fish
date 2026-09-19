@@ -57,7 +57,7 @@ $$(".nav-item").forEach(el => el.addEventListener("click", () => {
   $$(".nav-item").forEach(x => x.classList.toggle("active", x === el));
   $$(".page").forEach(p => p.classList.add("hidden"));
   $("#page-" + el.dataset.page).classList.remove("hidden");
-  const loaders = { dashboard: loadDashboard, chat: null, memory: loadMemory, summary: loadSummary, plugins: loadPlugins, config: loadConfig, appearance: loadAppearance, builder: loadBuilder };
+  const loaders = { dashboard: loadDashboard, chat: null, memory: loadMemory, summary: loadSummary, plugins: loadPlugins, config: loadConfig, issues: loadIssuesPage, appearance: loadAppearance, builder: loadBuilder };
   const fn = loaders[el.dataset.page];
   if (fn) fn().catch(e => toast(e.message, true));
 }));
@@ -883,9 +883,11 @@ async function loadConfig() {
   $$("#configBody input[data-key], #configBody textarea[data-key], #configBody select[data-key]").forEach(inp => {
     inp.dataset.dirty = "";
     inp.addEventListener("input", () => { inp.dataset.dirty = "1"; });
+    if (inp.tagName === "SELECT") inp.addEventListener("change", () => { inp.dataset.dirty = "1"; });
   });
   renderBotConfigPanel();
   loadProviders().catch(e => console.warn("loadProviders", e));
+  mountIssues($("#issueMountConfig"));
 }
 
 /* 当前 Bot 专属配置（人格 / 模型 / 插件 / 自启），随 Bot 切换而切换 */
@@ -1084,6 +1086,12 @@ function cfgItem(it) {
     return `<div class="cfg-item"><span class="cfg-label">${label} <span class="hint">(${key}${it.masked ? "，已配置" : ""})</span></span>
       <input data-key="${key}" data-type="secret" value="${esc(it.value)}" placeholder="留掩码表示不修改"></div>`;
   }
+  if (it.type === "select") {
+    const opts = (it.options || []).map(o =>
+      `<option value="${esc(o)}" ${o === it.value ? "selected" : ""}>${esc(o)}</option>`).join("");
+    return `<div class="cfg-item"><span class="cfg-label">${label} <span class="hint">(${key})</span></span>
+      <select data-key="${key}" data-type="select" class="select">${opts}</select></div>`;
+  }
   return `<div class="cfg-item"><span class="cfg-label">${label} <span class="hint">(${key})</span></span>
     <input data-key="${key}" data-type="${esc(it.type)}" value="${esc(it.value)}"></div>`;
 }
@@ -1106,6 +1114,84 @@ $("#btnSaveConfig").addEventListener("click", async () => {
   } catch (e) { toast(e.message, true); }
   btn.disabled = false;
 });
+
+/* ---------------- 智能体自编程 Issue 管理（可挂载到任意容器） ---------------- */
+function mountIssues(container) {
+  if (!container) return;
+  container.innerHTML = `<div class="panel">
+    <div class="panel-title">智能体自编程 · Issue 队列</div>
+    <div class="hint wrap is-status" style="margin-bottom:10px"></div>
+    <div class="sc-list is-list"></div>
+    <div class="row-actions" style="margin-top:12px">
+      <input class="input is-title" placeholder="提一个需求 / 卡点给智能体（例：加一个每日总结大脑）" style="flex:1 1 320px">
+      <button class="btn ghost is-refresh">刷新</button>
+      <button class="btn primary is-file">提交 Issue</button>
+    </div></div>`;
+  const statusEl = container.querySelector(".is-status");
+  const listEl = container.querySelector(".is-list");
+  const titleEl = container.querySelector(".is-title");
+
+  async function refresh() {
+    try {
+      const d = await GET("/api/self_coding/issues");
+      const enabled = !!d.enabled;
+      statusEl.innerHTML = `自编程总开关：<b style="color:${enabled ? "var(--ok)" : "var(--warn)"}">`
+        + `${enabled ? "已开启" : "未开启"}</b> ｜ 开关与权限档在「配置」页的「智能体自编程」区；`
+        + `Issue 默认自动执行，关闭后需在此点「同意」才构建。`;
+      const issues = d.issues || [];
+      if (!issues.length) {
+        listEl.innerHTML = `<div class="hint">暂无 Issue。智能体受阻或想要新功能时会自动提；也可在下方输入框手动提交。</div>`;
+        return;
+      }
+      const stateName = { open: "执行中", pending: "待批准", done: "已完成", failed: "失败", rejected: "已拒绝" };
+      listEl.innerHTML = issues.map(it => {
+        const cls = (it.state || "").replace(/[^a-z]/g, "");
+        const actions = it.state === "pending"
+          ? `<button class="btn ghost sm" data-act="approve" data-id="${esc(it.id)}">同意</button>`
+            + `<button class="btn ghost sm" data-act="reject" data-id="${esc(it.id)}">拒绝</button>`
+          : `<span class="hint">轮次 ${it.rounds || 0}${it.updated ? " · " + it.updated : ""}</span>`;
+        return `<div class="sc-issue">
+          <div class="sc-issue-head"><span class="badge">${esc(it.kind || "")}</span>`
+          + `<span class="badge ${esc(cls)}">${stateName[it.state] || it.state || ""}</span>`
+          + `<b>${esc(it.id)}</b> <span class="hint">${esc(it.title || "")}</span></div>`
+          + (it.result ? `<div class="hint wrap" style="margin:4px 0">结果：${esc(it.result)}</div>` : "")
+          + `<div class="row-actions">${actions}</div></div>`;
+      }).join("");
+      listEl.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => {
+        const id = b.dataset.id, act = b.dataset.act;
+        (act === "approve" ? POST("/api/self_coding/approve", { id })
+                           : POST("/api/self_coding/reject", { id }))
+          .then(r => {
+            toast(r && r.ok !== false ? (act === "approve" ? "已派给构建助手执行~" : "已拒绝")
+                                       : "失败：" + ((r && r.error) || ""), !(r && r.ok !== false));
+            refresh();
+          })
+          .catch(e => toast(e.message, true));
+      });
+    } catch (e) {
+      listEl.innerHTML = `<div class="hint" style="color:var(--warn)">${esc(e.message)}</div>`;
+    }
+  }
+
+  container.querySelector(".is-refresh").onclick = refresh;
+  container.querySelector(".is-file").onclick = async () => {
+    const title = (titleEl.value || "").trim();
+    if (!title) return toast("请先填写需求 / 卡点");
+    try {
+      const r = await POST("/api/self_coding/file", { title, kind: "feature" });
+      if (r && r.ok !== false) {
+        toast(r.auto ? `已提交并自动执行（${r.issue_id}）` : `已提交，待批准（${r.issue_id}）`);
+        titleEl.value = "";
+        refresh();
+      } else toast("提交失败：" + ((r && r.error) || ""), true);
+    } catch (e) { toast(e.message, true); }
+  };
+  refresh();
+}
+
+function loadIssuesPage() {
+  mountIssues($("#issueMountPage"));
+}
 
 // ----- AI 供应商 / 模型管理 -----
 $("#provList").addEventListener("click", e => {

@@ -19,6 +19,8 @@ def config_view() -> dict:
             v = _current(it["key"])
             t = it["type"]
             view = {"key": it["key"], "type": t, "label": it["label"]}
+            if "options" in it:
+                view["options"] = it["options"]
             if t == "secret":
                 view["value"] = settings_store.mask_secret(v) if v else ""
                 view["masked"] = bool(v)

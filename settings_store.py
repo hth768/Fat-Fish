@@ -234,6 +234,17 @@ CONFIG_SCHEMA = [
             {"key": "ONLY_MENTION_OR_PRIVATE", "type": "bool", "label": "仅@或私聊时回复"},
         ],
     },
+    {
+        "section": "智能体自编程（Self Coding）",
+        "hint": "开启后智能体可用内置「构建助手」自我改进：把新需求/卡点作为 Issue 提给自己，自动构建并装载。关闭时任何改动都需人工 /同意issue 批准。",
+        "items": [
+            {"key": "BOT_SELF_CODING_ENABLED", "type": "bool", "label": "启用智能体自编程"},
+            {"key": "BOT_SELF_CODING_PERM", "type": "select", "label": "构建助手权限档",
+             "options": ["plan", "default", "acceptEdits", "full", "bypassPermissions"]},
+            {"key": "BOT_SELF_CODING_ISSUE_AUTO", "type": "bool", "label": "Issue 自动执行（关=需人工批准）"},
+            {"key": "BOT_SELF_CODING_AUTO_LOAD", "type": "bool", "label": "产物自动装载并启动"},
+        ],
+    },
 ]
 
 # 供应商相关键：保存后需要热重载 ai_provider

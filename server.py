@@ -309,6 +309,12 @@ def make_handler(bridge):
                 if path == "/api/builder/session":
                     return self._json({"ok": True, "state": builder_api.load_chat_session(
                         (q.get("name") or [""])[0])})
+                # ----- 智能体自编程：Issue 队列（只读查询走 GET） -----
+                if path == "/api/self_coding/issues":
+                    import self_coding
+                    st = (q.get("state") or [""])[0] or None
+                    return self._json({"issues": self_coding.list_issues(st),
+                                       "enabled": self_coding.is_enabled()})
                 return self._json({"error": "not found"}, 404)
             except Exception as e:
                 return self._json({"error": repr(e)}, 500)
@@ -512,6 +518,18 @@ def make_handler(bridge):
                 if path in ("/api/providers/main", "/api/providers/vision", "/api/providers/role"):
                     slot = path.rsplit("/", 1)[-1]
                     return self._json(provider_api.save_provider(slot, body))
+                # ----- 智能体自编程：Issue 批准 / 拒绝 / 手动提交 -----
+                if path == "/api/self_coding/approve":
+                    import self_coding
+                    return self._json(self_coding.approve_issue(body.get("id", "")))
+                if path == "/api/self_coding/reject":
+                    import self_coding
+                    return self._json(self_coding.reject_issue(body.get("id", "")))
+                if path == "/api/self_coding/file":
+                    import self_coding
+                    return self._json(self_coding.file_issue(
+                        title=body.get("title", ""), body=body.get("body", ""),
+                        kind=body.get("kind", "feature")))
                 return self._json({"error": "not found"}, 404)
             except Exception as e:
                 return self._json({"error": repr(e)}, 500)
