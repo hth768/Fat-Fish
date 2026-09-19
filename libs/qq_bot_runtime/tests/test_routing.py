@@ -78,7 +78,8 @@ class RoutingTest(unittest.TestCase):
         captured = {}
 
         async def fake_call_once(self2, name, prov, messages, capability, model,
-                                 think, tools, images, timeout, role=None):
+                                 think, tools, images, timeout, role=None,
+                                 **kwargs):
             captured.update(name=name, capability=capability, model=model, role=role)
             return "ok"
 
