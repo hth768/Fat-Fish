@@ -17,11 +17,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Print environment
+      - name: Diagnose environment
         shell: bash
         run: |
           set -x
-          python --version
+          which python python3 || true
+          python3 --version
+          python3 -c "import sys; print('exec', sys.executable)"
           node --version
           git --version
           pwd
@@ -31,22 +33,15 @@ jobs:
         shell: bash
         run: |
           set -e
-          python -m compileall -q -x 'runtime|venv' libs/qq_bot_runtime bridge server.py app.py
+          python3 -m compileall -q -x 'runtime|venv' libs/qq_bot_runtime bridge server.py app.py
           echo "compileall OK"
 
       - name: Run App unit tests
         shell: bash
         run: |
-          set -o pipefail
-          python -m unittest discover -s tests -v 2>&1 | tee test-output.log
+          set -e
+          python3 -m unittest discover -s tests -v
           echo "unittest OK"
-
-      - name: Upload test output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-output
-          path: test-output.log
 
       - name: Syntax-check frontend
         shell: bash
@@ -59,5 +54,5 @@ jobs:
         shell: bash
         run: |
           set -e
-          python scripts/ci_validate_manifests.py
+          python3 scripts/ci_validate_manifests.py
           echo "manifest validate OK"
