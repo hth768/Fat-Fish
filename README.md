@@ -152,7 +152,7 @@ feiyu_standalone/
 │   ├── runtime/           # 捆绑 Python 解释器与标准库
 │   ├── 音色试听/ emojis/ data/ video_tmp/ voice_tmp/ …        # 资源与缓存
 │   ├── ARCHITECTURE.md / ARCHITECTURE_TREE.md                 # 智能体架构文档
-│   └── ai_providers.example.json / config.py / requirements*.txt
+│   └── ai_providers.example.json / config.py / requirements*.txt   # requirements-ui.txt(首启最小集) / requirements-local.txt(本地AI按需后装) / requirements-app.txt(完整集) / requirements-vox.txt(语音)
 ├── plugins/
 │   ├── groups.json        # 插件依赖分组定义（见「插件系统」）
 │   ├── greeting_demo/     # 本地插件示例包（官方 UI 事件通道范本，见 PLUGINS.md）
@@ -174,12 +174,16 @@ feiyu_standalone/
 
 1. **优先复用**本机部署引擎的已建 venv `E:\qq_bot\venv`（若含 `pywebview` 则直接启动，跳过自建）；
 2. 否则若仓库内 `libs/qq_bot_runtime/venv` 已含 `pywebview`，也直接启动（日常最快路径，不弹窗）；
-3. **真正首启**（venv 缺失或缺 `pywebview`）时，调用 `libs/qq_bot_runtime/firstboot.py`：**自动创建 venv** 并 **`pip install -r requirements-app.txt`**（CPU 友好集，含 pywebview 原生窗口，torch 装 CPU 版，首次可能数分钟，需联网）；
+3. **真正首启**（venv 缺失或缺 `pywebview`）时，调用 `libs/qq_bot_runtime/firstboot.py`：**自动创建 venv** 并安装 **`requirements-ui.txt`（最小集：UI + 核心 + 云端 API 所需依赖，含 pywebview 原生窗口，体积小、安装快）**；
 4. 首启过程会**弹出本地 HTML 进度窗**（百分比 + 当前正在安装的包名 + 滚动日志，基于捆绑 Python 自带的 `http.server`，无需额外依赖），装完自动拉起主界面；
-5. 若检测到 **NVIDIA 显卡**，进度窗上会**交互询问**是否安装 CUDA 版 torch 以加速本地模型（默认不装，保持 CPU 版；装 CUDA 版会额外从 PyTorch 官方源下载，体积更大）；
+5. 首启只装最小集，**本地 AI 能力（torch / 视觉 / 语音等重依赖）启动后按需后装**：在 App「配置 → 本地 AI 依赖」面板点按钮后台安装（检测 N 卡可装 CUDA 版 torch 加速本地模型）；
 6. 固定 `FEIYU_QQ_BOT=libs/qq_bot_runtime`，用**仓库内引擎代码**启动 `app.py --with-core`。
 
-> **依赖**：捆绑的 `runtime/python` 是**裸解释器**，无 torch / cv2 / pywebview（也**未带 tkinter**，故首启进度窗用本地 HTML 而非 Tk）。首启默认装 `requirements-app.txt`（CPU 友好集，含原生窗口所需的 pywebview，torch 为 CPU 版，无显卡也能跑）。检测到 N 卡时进度窗会询问是否改装 CUDA 版 torch。若需本地语音（VoxCPM），另行 `pip install -r requirements-vox.txt`。安装失败（无网络）时进度窗会提示手工安装或复用 `E:\qq_bot\venv`。窗口关闭即退出。
+> **依赖分层**：捆绑的 `runtime/python` 是**裸解释器**，无 torch / cv2 / pywebview（也**未带 tkinter**，故首启进度窗用本地 HTML 而非 Tk）。
+> - 首启装 `requirements-ui.txt`（最小集，含原生窗口所需的 pywebview，无显卡也能跑，安装快）；
+> - 本地模型 / 视觉 / 语音等重依赖在 `requirements-local.txt`，由 App「配置 → 本地 AI 依赖」面板**按需后装**（CPU 版，或检测 N 卡装 CUDA 版）；
+> - `requirements-app.txt` 是完整集（= ui ∪ local）备用；本地语音（VoxCPM）另行 `pip install -r requirements-vox.txt`。
+> 安装失败（无网络）时进度窗/面板会提示手工安装或复用 `E:\qq_bot\venv`。窗口关闭即退出。
 
 ### 从源码运行（开发者）
 

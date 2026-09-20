@@ -536,6 +536,18 @@
           </details>
         </div>
       </details>
+
+      <div class="panel" id="localDepsPanel" style="margin-top:18px">
+        <div class="panel-title">本地 AI 依赖（按需后装）</div>
+        <div class="hint wrap" style="margin-bottom:10px">首启只装了界面所需最小依赖，云端对话等功能立即可用。如需<strong>本地模型 / 视觉理解 / 语音</strong>等离线能力，点下方按钮在后台安装（体积较大，可能数分钟）。</div>
+        <div class="row-actions">
+          <button class="btn primary" id="btnInstallLocalCpu">安装本地依赖（CPU 版）</button>
+          <button class="btn" id="btnInstallLocalCuda">安装（CUDA 版·需 N 卡）</button>
+          <span class="hint" id="localDepsMsg"></span>
+        </div>
+        <div class="boot-bar" style="margin-top:12px"><div class="boot-fill" id="localDepsFill"></div></div>
+        <div class="boot-log" id="localDepsLog"></div>
+      </div>
     </section>
   </main>
 </div>

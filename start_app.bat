@@ -39,8 +39,8 @@ if exist "%VENV%\Scripts\python.exe" (
 )
 
 rem ---- 3) 真正首启：venv 缺失或缺 pywebview → 交给 firstboot.py（弹 HTML 进度窗 + 后台建环境 + 装完拉起 app）----
-echo [BOOT] 首次启动：用捆绑解释器搭建运行环境（将弹出进度窗，后台安装依赖）...
-"%RUNTIME_PY%" "%ENGINE%\firstboot.py" --engine "%ENGINE%" --venv "%VENV%" --rpy "%RUNTIME_PY%" --req "%ENGINE%\requirements-app.txt" --app "%ROOT%app.py" --progress-port 8910 --app-port 8900 %*
+echo [BOOT] 首次启动：用捆绑解释器搭建运行环境（将弹出进度窗，后台安装最小 UI 依赖；本地 AI 依赖可稍后按需装）...
+"%RUNTIME_PY%" "%ENGINE%\firstboot.py" --engine "%ENGINE%" --venv "%VENV%" --rpy "%RUNTIME_PY%" --req "%ENGINE%\requirements-ui.txt" --app "%ROOT%app.py" --progress-port 8910 --app-port 8900 %*
 if errorlevel 1 (
   echo [ERROR] 首启引导失败。可手动执行：
   echo   %VENV%\Scripts\python.exe -m pip install -r %ENGINE%\requirements-app.txt

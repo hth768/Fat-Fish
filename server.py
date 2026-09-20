@@ -4,7 +4,9 @@ import json
 import mimetypes
 import os
 import socket
+import subprocess
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -39,6 +41,112 @@ class QuietServer(ThreadingHTTPServer):
         if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
             return
         super().handle_error(request, client_address)
+
+
+# ---------------- 本地 AI 依赖按需后装 ----------------
+# 首启只装最小 UI 集（requirements-ui.txt）；torch / 视觉 / 语音等重依赖在此后台安装，
+# 主界面可立即使用云端功能，本地能力按需开启（检测 N 卡可装 CUDA 版）。
+def _detect_nvidia():
+    try:
+        r = subprocess.run(["nvidia-smi"], stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, shell=True)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+_NVIDIA = _detect_nvidia()
+
+
+class LocalDepInstaller:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.state = {"running": False, "percent": 0, "log": [], "done": False,
+                      "error": "", "nvidia": _NVIDIA}
+
+    def _engine_dir(self):
+        cands = [os.getcwd(), os.path.join(APP_DIR, "libs", "qq_bot_runtime")]
+        for c in cands:
+            if os.path.isfile(os.path.join(c, "requirements-local.txt")):
+                return c
+        return cands[0]
+
+    def _count(self, path):
+        n = 0
+        try:
+            for line in open(path, encoding="utf-8"):
+                s = line.strip()
+                if not s or s.startswith("#") or s.startswith("-"):
+                    continue
+                n += 1
+        except Exception:
+            pass
+        return max(n, 1)
+
+    def status(self):
+        with self.lock:
+            return dict(self.state)
+
+    def start(self, cuda):
+        with self.lock:
+            if self.state["running"]:
+                return False
+            self.state.update(running=True, percent=0, log=[], done=False, error="")
+        threading.Thread(target=self._run, args=(cuda,), daemon=True,
+                        name="feiyu-local-deps").start()
+        return True
+
+    def _log(self, msg):
+        with self.lock:
+            self.state["log"].append(msg)
+            if len(self.state["log"]) > 600:
+                self.state["log"] = self.state["log"][-600:]
+        try:
+            print(msg)
+        except Exception:
+            pass
+
+    def _run(self, cuda):
+        try:
+            eng = self._engine_dir()
+            py = sys.executable
+            local_req = os.path.join(eng, "requirements-local.txt")
+            if cuda:
+                self._log("[local] 安装 CUDA 版 torch（cu128，加速本地模型）…")
+                rc = subprocess.run([py, "-m", "pip", "install", "torch",
+                                     "torchvision", "torchaudio", "--index-url",
+                                     "https://download.pytorch.org/whl/cu128"]).returncode
+                if rc != 0:
+                    raise RuntimeError("CUDA 版 torch 安装失败")
+            self._log(f"[local] 安装本地 AI 依赖集：{local_req}")
+            total = self._count(local_req)
+            seen = set()
+            proc = subprocess.Popen([py, "-m", "pip", "install", "-r", local_req],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, bufsize=1, encoding="utf-8",
+                                    errors="replace")
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                self._log(line)
+                if line.startswith("Collecting "):
+                    name = line[len("Collecting "):].split()[0].split("(")[0].strip()
+                    if name and name not in seen:
+                        seen.add(name)
+                        with self.lock:
+                            self.state["percent"] = min(int(95 * len(seen) / total), 95)
+            rc = proc.wait()
+            if rc != 0:
+                raise RuntimeError("本地 AI 依赖安装失败（可能无网络/被墙）")
+            with self.lock:
+                self.state.update(running=False, done=True, percent=100)
+            self._log("[local] 安装完成：本地模型 / 视觉 / 语音等能力已可用")
+        except Exception as e:
+            with self.lock:
+                self.state.update(running=False, done=False, error=repr(e))
+            self._log(f"[local][ERR] {e!r}")
+
+
+_local_installer = LocalDepInstaller()
 
 
 def make_handler(bridge):
@@ -231,8 +339,16 @@ def make_handler(bridge):
                 if path == "/api/status":
                     return self._json(bridge.status())
                 # 轻量启动探针：前端 splash 用它判断是否已连上后端（先启动 UI，后端就绪即隐藏遮罩）
+                # 本地 AI 依赖按需后装：触发安装（mode=cpu|cuda）
+                if path == "/api/system/install_local_deps":
+                    mode = (body.get("mode") or "cpu")
+                    ok = _local_installer.start(cuda=(mode == "cuda"))
+                    return self._json({"ok": ok, "status": _local_installer.status()})
                 if path == "/api/boot/status":
                     return self._json({"ready": True, "core": bridge.is_running()})
+                # 本地 AI 依赖按需后装：状态查询
+                if path == "/api/system/install_local_deps":
+                    return self._json(_local_installer.status())
                 if path == "/api/recent":
                     return self._json({"events": bridge.recent(60)})
                 if path == "/api/memories":

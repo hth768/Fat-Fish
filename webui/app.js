@@ -40,6 +40,47 @@ function withBot(p, params) {
 const GB = (p, params) => GET(withBot(p, params));
 const PB = (p, body) => POST(p, Object.assign({ bot_id: state.botId }, body || {}));
 
+/* ---------------- 本地 AI 依赖按需后装 ---------------- */
+function initLocalDeps() {
+  const fill = $("#localDepsFill"), bar = fill ? fill.parentElement : null;
+  const logBox = $("#localDepsLog"), msg = $("#localDepsMsg");
+  const btnCpu = $("#btnInstallLocalCpu"), btnCuda = $("#btnInstallLocalCuda");
+  let timer = null, lastLog = 0;
+
+  async function poll() {
+    try {
+      const s = await GET("/api/system/install_local_deps");
+      fill.style.width = (s.percent || 0) + "%";
+      if (s.running) bar.classList.add("show");
+      if (s.log && s.log.length > lastLog) {
+        const add = s.log.slice(lastLog); lastLog = s.log.length;
+        logBox.classList.add("show");
+        for (const l of add) { const d = document.createElement("div"); d.textContent = l; logBox.appendChild(d); }
+        logBox.scrollTop = logBox.scrollHeight;
+      }
+      if (s.done) { msg.textContent = "安装完成，本地能力已可用 ✅"; msg.style.color = "var(--ok)"; clearInterval(timer); timer = null; btnCpu.disabled = false; btnCuda.disabled = false; }
+      if (s.error) { msg.textContent = "安装失败：" + s.error; msg.style.color = "var(--err)"; clearInterval(timer); timer = null; btnCpu.disabled = false; btnCuda.disabled = false; }
+    } catch (e) { /* 后端未就绪，忽略 */ }
+  }
+
+  async function install(mode) {
+    if (timer) return;
+    btnCpu.disabled = true; btnCuda.disabled = true;
+    msg.textContent = "正在后台安装，请稍候…"; msg.style.color = "var(--muted)";
+    logBox.innerHTML = ""; lastLog = 0; bar.classList.add("show"); logBox.classList.add("show");
+    try {
+      const r = await POST("/api/system/install_local_deps", { mode });
+      if (!r.ok) { msg.textContent = "已在安装中或启动失败"; btnCpu.disabled = false; btnCuda.disabled = false; return; }
+    } catch (e) { msg.textContent = e.message || "请求失败"; btnCpu.disabled = false; btnCuda.disabled = false; return; }
+    timer = setInterval(poll, 800);
+  }
+
+  if (btnCpu) btnCpu.addEventListener("click", () => install("cpu"));
+  if (btnCuda) btnCuda.addEventListener("click", () => install("cuda"));
+  // 进入配置页时若正在安装则恢复轮询
+  poll();
+}
+
 let toastTimer = null;
 function toast(msg, isErr) {
   const t = $("#toast");
@@ -2593,6 +2634,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("#bgDim").addEventListener("click", closeCfgModal);
   // ----- 构建助手（对话式 Agent） -----
   initBuilderUI();
+
+  // ----- 本地 AI 依赖按需后装（配置页） -----
+  initLocalDeps();
 
   // ===== 记忆：导入 / 导出 =====
   $("#btnExportMem").addEventListener("click", async () => {

@@ -96,15 +96,11 @@ def _progress_html() -> str:
   @keyframes s{to{transform:rotate(360deg)}}
 </style></head><body><div class="card">
   <h1>肥鱼娘 · 首次启动</h1>
-  <div class="sub">正在为你自动搭建运行环境（创建虚拟环境并安装依赖）</div>
+  <div class="sub">正在搭建运行环境（安装界面所需最小依赖，本地 AI 能力可稍后按需安装）</div>
   <div class="bar"><div class="fill" id="fill"></div></div>
   <div class="meta"><span id="phase">准备中…</span><span class="cur" id="pct">0%</span></div>
   <div class="meta"><span>当前：<span class="cur" id="cur">—</span></span></div>
   <div class="log" id="log"></div>
-  <div class="btns" id="btns">
-    <button class="yes" id="yes">安装 CUDA 版（加速本地模型）</button>
-    <button class="no" id="no">保持 CPU 版（跳过）</button>
-  </div>
   <div class="done" id="done">
     <p>主界面已启动 🎉</p>
     <a id="open" href="#" target="_blank">打开肥鱼娘 →</a>
@@ -114,8 +110,7 @@ def _progress_html() -> str:
 <script>
 const $=id=>document.getElementById(id);
 const ph={
-  init:'准备中…',creating_venv:'创建虚拟环境',installing:'安装依赖',
-  ask_cuda:'检测到 N 卡',cuda_install:'安装 CUDA 版 torch',
+  init:'准备中…',creating_venv:'创建虚拟环境',installing:'安装界面依赖',
   launching:'启动主界面',done:'完成',error:'出错'
 };
 let lastLog=0;
@@ -131,14 +126,11 @@ async function tick(){
       for(const l of add){const d=document.createElement('div');d.textContent=l;$('log').appendChild(d);}
       $('log').scrollTop=$('log').scrollHeight;
     }
-    if(s.need_cuda&&!s.cuda_asked){$('btns').classList.add('show');}
     if(s.done){$('done').classList.add('show');if(s.app_url)$('open').href=s.app_url;}
     if(s.error){const e=$('err');e.textContent='环境搭建失败：\\n'+s.error;$('err').classList.add('show');}
   }catch(e){}
   setTimeout(tick,500);
 }
-$('yes').onclick=async()=>{await fetch('/api/cuda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({choice:'yes'})});$('btns').classList.remove('show');};
-$('no').onclick=async()=>{await fetch('/api/cuda',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({choice:'no'})});$('btns').classList.remove('show');};
 tick();
 </script></body></html>"""
 
@@ -178,20 +170,8 @@ def make_handler():
 
         def do_POST(self):
             p = urlparse(self.path).path
-            if p == "/api/cuda":
-                try:
-                    n = int(self.headers.get("Content-Length") or 0)
-                    raw = self.rfile.read(n) if n else b"{}"
-                    choice = (json_loads(raw.decode("utf-8") or "{}") or {}).get("choice", "")
-                except Exception:
-                    choice = ""
-                with _STATE_LOCK:
-                    STATE["cuda_choice"] = "yes" if choice == "yes" else "no"
-                    STATE["cuda_asked"] = True
-                _CUDA_EVENT.set()
-                self._json({"ok": True})
-            else:
-                self._json({"error": "not found"}, 404)
+            # 首启只装最小集；本地 AI 依赖的 CUDA/CPU 选择交由 App 内按钮处理
+            self._json({"error": "not found"}, 404)
 
     return Handler
 
@@ -283,7 +263,11 @@ def _launch_app(venv_py, app_py, app_args, app_port):
 
 
 def worker(opts):
-    """后台主流程：建 venv → 装依赖 → (可选 CUDA) → 启动 app。"""
+    """后台主流程：建 venv → 装最小 UI 集（秒级到一两分钟）→ 启动 app。
+
+    本地 AI / 视觉 / 语音等重依赖（torch/transformers/opencv…）不在此安装，
+    由 App「配置 → 本地 AI 依赖」按钮按需后装，主界面可立即使用云端功能。
+    """
     try:
         venv_py = os.path.join(opts.venv, "Scripts", "python.exe")
 
@@ -298,56 +282,29 @@ def worker(opts):
         else:
             _log("[venv] 虚拟环境已存在，跳过创建")
 
-        # 2) 安装依赖
+        # 2) 安装最小 UI 集（仅 UI + 核心 + 云端 API 所需）
         _set(phase="installing", percent=10, current="解析依赖…")
         if _has_webview(venv_py):
-            _log("[deps] 依赖已就绪（含 pywebview），跳过安装")
+            _log("[deps] UI 依赖已就绪（含 pywebview），跳过安装")
             _set(percent=95)
         else:
             ok = _run_pip(venv_py, opts.req, opts.index_url,
                           on_line=lambda l: (_log(l) if l.strip() else None))
             if not ok:
                 _set(phase="error",
-                     error="依赖安装失败（可能无网络/被墙）。可手动执行：\n"
+                     error="UI 依赖安装失败（可能无网络/被墙）。可手动执行：\n"
                            f"{venv_py} -m pip install -r {opts.req}")
                 return
-            _log("[deps] 依赖安装完成")
+            _log("[deps] 最小 UI 依赖安装完成（本地 AI 能力可在启动后按需安装）")
             _set(percent=95)
 
-        # 3) N 卡交互询问（仅自建成 CPU 版时）
-        if _detect_nvidia():
-            _log("[gpu] 检测到 NVIDIA 显卡，等待用户选择是否安装 CUDA 版 torch…")
-            with _STATE_LOCK:
-                STATE["need_cuda"] = True
-                STATE["phase"] = "ask_cuda"
-                STATE["current"] = "等待选择"
-            _CUDA_EVENT.clear()
-            _CUDA_EVENT.wait(timeout=180)   # 超时默认保持 CPU
-            choice = _get("cuda_choice", "no")
-            _log(f"[gpu] 用户选择：{choice}")
-            if choice == "yes":
-                _set(phase="cuda_install", percent=96, current="torch cu128")
-                _log("[gpu] 安装 CUDA 版 torch（cu128）…")
-                proc = subprocess.Popen(
-                    [venv_py, "-m", "pip", "install", "torch", "torchvision",
-                     "torchaudio", "--index-url",
-                     "https://download.pytorch.org/whl/cu128"],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1, encoding="utf-8", errors="replace")
-                for line in proc.stdout:
-                    _log(line.rstrip("\n"))
-                if proc.wait() != 0:
-                    _log("[gpu][WARN] CUDA 版安装失败，保持 CPU 版")
-                else:
-                    _log("[gpu] 已切换 CUDA 版 torch")
-
-        # 4) 启动主界面
+        # 3) 启动主界面（本地 AI 重依赖留给 App 内按钮后台安装）
         _set(phase="launching", percent=99, current="启动中…")
         if not opts.no_launch:
             if not _launch_app(venv_py, opts.app, opts.app_args, opts.app_port):
                 return
         _set(phase="done", percent=100, done=True, current="完成")
-        _log("[done] 首启完成")
+        _log("[done] 首启完成（UI 已就绪；本地 AI 依赖可在「配置 → 本地 AI 依赖」按需安装）")
     except Exception as e:
         _set(phase="error", error=repr(e))
         _log(f"[FATAL] {e!r}")

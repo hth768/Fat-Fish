@@ -534,3 +534,10 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 @keyframes bootspin { to { transform: rotate(360deg); } }
 .boot-title { font-size: 22px; font-weight: 700; letter-spacing: 1px; }
 .boot-sub { margin-top: 8px; font-size: 13px; color: #8b96ad; }
+
+/* 本地依赖安装进度条 / 日志（配置页内联） */
+.boot-bar { height: 10px; border-radius: 6px; background: rgba(255,255,255,.08); overflow: hidden; display: none; }
+.boot-bar.show { display: block; }
+.boot-fill { height: 100%; width: 0; background: linear-gradient(90deg, #5ad1c4, #7aa2ff); transition: width .35s ease; border-radius: 6px; }
+.boot-log { margin-top: 10px; background: rgba(0,0,0,.35); border-radius: 10px; padding: 10px 12px; height: 150px; overflow: auto; font: 12px/1.5 ui-monospace, Consolas, Menlo, monospace; white-space: pre-wrap; word-break: break-all; color: #cdd6e6; display: none; }
+.boot-log.show { display: block; }
