@@ -117,6 +117,38 @@
 
 ---
 
+## 5. 2026-09-20 会话修复（窗口不退出 / 聊天 NameError / 模型设置误报 / 自检 web 误报）
+
+> 提交 `b4dc8d3`（仓库 + 三处部署副本同步：仓库 / `E:\qq_bot` 引擎 / `E:\feiyu_app` / `D:	esting\Fat-Fish`）。
+> 用户实际运行 `D:	esting\Fat-Fish` 克隆版（`"E:\qq_bot\venv\Scripts\python.exe" app.py --with-core`）。
+
+### 5.1 聊天 NameError: user_name is not defined
+- **现象**：发任意聊天消息，前端返回「抱歉，出错了：name 'user_name' is not defined」，完全无法对话。
+- **根因**：`chat_service._handle_message` 构造「说话人标识」（防串台降级）时引用了未定义的局部变量 `user_name`；正确来源是 `InboundMessage` 字段 `msg.user_name`。该异常被聊天管线的兜底 `except` 转成了用户可见错误。
+- **修复**：在引用前补 `user_name = getattr(msg, "user_name", "") or ""`，后续复用 `msg.user_name` 的既有 `resolve_display_name` 链路。提交 `b4dc8d3`。
+
+### 5.2 编辑模型时 API Key 留空误报「请填写 API Key」
+- **现象**：配置页「AI 供应商（模型管理）」编辑已有命名模型，API Key 字段**留空**（不改）便保存，直接报「请填写 API Key」，无法单独改 Base URL / 模型名。
+- **根因**：`provider_api.save_model` / `save_provider` 在**还原掩码密钥之前**就做 `if not api_key: 报错`，且完全没有「空值保留原 key」回退。前端对未改动的密钥回传掩码 `"****"` 或空串，于是被误判为缺值。
+- **修复**：先 `load_provider_config()` 取 `existing` → 还原掩码密钥（`is_masked` 且 `existing` 有 key）→ 空值且 `existing` 有 key 则保留原值 → 最后才校验 `if not api_key` 报错。提交 `b4dc8d3`。
+
+### 5.3 关闭窗口进程不彻底 / sidecar 孤儿堆积
+- **现象**：关闭桌面窗口后 Python 主进程不退出；长期运行后系统出现数十上百个 `memory_server` / `monitor_server` / `telemetry_server` 孤儿进程（实测一次积压达 218 个进程）。
+- **根因**（两处叠加）：
+  1. `app_window._wait_for_close` 在 **Edge `--app` 模式**下是 `while True: time.sleep(3600)` 死循环，永不感知窗口关闭（webui / 浏览器模式本就常驻是合理的；Edge 模式是本次新增的退不干净来源）；
+  2. `app.py` 的 `finally` 清理后用 `sys.exit()`，而引擎核心可能起**非守护线程**，`sys.exit` 只结束主线程、残留线程会拖住整个进程不退出。
+- **修复**：
+  - `app_window._open_edge_app` 保存 Edge 子进程句柄到模块级 `_edge_proc`；`_wait_for_close` 改为每 0.5s 轮询 `_edge_proc.poll()`，窗口关即 `return` 触发清理；
+  - `app.py` 清理后改用 `os._exit(exit_code)` 强制终止（清理已在 `finally` 完成、sidecar 子进程已回收）。提交 `b4dc8d3`。
+- **排查要点**：`Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*app.py*' -or $_.CommandLine -match 'memory_server|monitor_server|telemetry_server' }` 找主实例与孤儿，再 `Stop-Process -Force`；重启用 detached `cmd /c`（勿 `-NoNewWindow` 会阻塞）。
+
+### 5.4 注册表自检误报「web 平台已请求启用但未注册」
+- **现象**：App 启动日志 `[REGISTRY][ERR] web: 平台已请求启用但未注册进 PluginManager`，但功能正常。
+- **根因**：App 模式 `core_bridge._build_core` 故意 `register_builtin_plugins(platforms=[])`（App 自身即平台、用 `server.py` 提供 WebUI，不启动引擎的 `WebPlugin`）；而 `agent_core.core.start()` 的 `validate_registry` 用 `_platforms_from_config()`，引擎 `config.ENABLE_WEB_PLUGIN=True` → 推导出 `["web"]`，把「config 要求、实际未注册」判成漂移。**纯属 App 模式误报，不影响运行**。
+- **修复**：`agent_core.core.start()` 自检时若检测到 `core.app_bridge`（App 嵌入模式标记）已挂载，则给 `validate_registry` 传 `platforms=None`（复用其既有「`platforms=None` 不检查平台」守卫）；引擎独立运行（`main.py` / `web_plugin.py`，不挂 `app_bridge`）仍按 config 全量校验平台。修复后日志 `[REGISTRY] 校验通过：清单与已注册插件一致`。提交 `b4dc8d3`。
+
+---
+
 ## 排查技巧速记
 
 - 国内访问 GitHub 不便时，用 GitHub API 而非网页定位 CI：
@@ -125,3 +157,4 @@
   - 在 `ci.yml` 加 commit comment 步骤把 traceback 回贴到提交评论。
 - Windows PowerShell 下中文 commit message 用 `>` 写 `commit_msg.txt` 再 `git commit -F`；`curl` 被别名成 `Invoke-WebRequest` 时改用 `cmd /c curl ...` 或 `python -c urllib`。
 - 平台耦合断言：凡断言里出现字面路径/前缀（`m.py:`、`/tmp/...`、大小写），优先改路径无关匹配。
+- 关闭窗口进程不退出 → 先看是哪种窗口模式：`app_window.MODE`（`webview` / `edge-app` / `webui`）。`edge-app` 模式主进程靠轮询 Edge 子进程 `poll()` 退出；若残留，用 `Get-CimInstance Win32_Process` 按 `CommandLine` 找 `*app.py*` 主实例与 `*memory_server|monitor_server|telemetry_server*` 孤儿 sidecar，逐一 `Stop-Process -Force`。`app.py` 清理后 `os._exit` 兜底非守护线程。

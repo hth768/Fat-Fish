@@ -452,6 +452,7 @@ python -m unittest discover -s tests -v      # 当前 59 项全过
 - [引擎测试 mock 签名不匹配（test_routing）](./DEBUG.md#2-引擎测试-mock-签名不匹配-test_routing)
 - [BOT Self Coding：旧 CodeBuddy CLI 自我编程移除](./DEBUG.md#3-bot-self-coding-旧-codebuddy-cli-自我编程移除)
 - [更早历史 Bug（构建助手读不到主文件 / 日志刷屏 / 串台 / 导入崩溃 / telemetry 安全网 / 构建助手 404 等）](./DEBUG.md#4-更早历史-bug来自-git-记录)
+- [2026-09-20 会话修复（窗口不退出 / 聊天 NameError / 模型设置误报 / 自检 web 误报）](./DEBUG.md#5-2026-09-20-会话修复窗口不退出--聊天-nameerror--模型设置误报--自检-web-误报)
 
 ---
 

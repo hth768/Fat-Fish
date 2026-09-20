@@ -22,6 +22,7 @@
 
 - 便携版：双击 `start_app.bat`。
 - 源码：`python app.py --with-core`（设 `FEIYU_QQ_BOT` 指向 qq_bot 运行时）。
+- **退出**：关闭桌面窗口即退出主进程（Edge `--app` 模式轮询子进程、清理后 `os._exit` 强退残留线程，不会留下孤儿 sidecar）；纯浏览器（`--browser` / `--no-window`）模式为服务常驻，需 Ctrl+C 退出。
 - 运行数据（`data/`、缓存、`dist/`、`.gitignore` 项）不入库。
 
 ## 仓库地址
