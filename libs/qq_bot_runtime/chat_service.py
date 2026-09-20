@@ -9,6 +9,8 @@
 流程：
   InboundMessage -> 命令分发 -> 触发判断 -> 记忆/上下文构建 -> DeepSeek -> 回复动作
 """
+from __future__ import annotations
+
 import asyncio
 import os
 import re
