@@ -5,11 +5,11 @@
 肥鱼娘智能体桌面控制台（Feiyu Standalone）：后端 Python（本机 HTTP + 智能体核心），前端 `pywebview`/Edge 窗口承载的原生 JS/CSS 控制台（`webui/`）。**所有能力在本机单进程内运行，数据留本机，无需公网。**
 
 - **核心架构**：「智能体核心 + 插件系统」，QQ / B 站等平台即插件；`AgentCore.brains` 统一注册与管理各大脑生命周期与事件通道。
-- **聊天大脑** `chat_service.py`：命令分发、记忆注入、图片/语音/视频理解、意图识别、MC 注入，经 `ai_provider` 对接多 LLM（含 thinking 档位）。
+- **聊天大脑** `chat_service.py`：命令分发、记忆注入、图片/语音/视频理解、意图识别、MC 注入，经 `ai_provider` 对接多 LLM（含 thinking 档位）。**能力感知**：每次调模型前注入当前「已启用插件」清单（名称 / 类型 / 运行状态 / 描述）+ 自我编程能力提示，让智能体优先调用插件、在暂无现成能力时主动声明要构建插件，而非回答「做不到了 / 我做不到 / 不支持」。
 - **记忆子系统**：用户画像 / AI 人格 / 对话反思 / 重要备忘，主体区分严谨 + 运行期防串台。
 - **插件系统**：平台插件（QQ / B 站）与功能插件（余额监控 / 主动说话 / 定时），按 `plugins/groups.json` 分组；`manifest.json` 装载前静态校验（`schema_version` 2、`name` 必须等于目录名，坏包以 `kind:invalid` 列出而非静默消失），依赖分硬（`requires` / `pkg_requires`）软（`optional_requires`）。
 - **构建助手（对话式 Agent）**：像 Codex / WorkBuddy 那样**边聊边改**——21 个工具的工具循环（读写源码 / diff / 语法检查 / 生成与改进智能体·插件）；**5 档访问权限**（只读规划 / 每次确认 / 自动应用 / 完全访问 / 完全放行）+ 高危操作（覆盖、核心代码、落盘）进「待确认」队列、批准可记忆；工作区可**从硬盘选择**；支持**联网**搜索 / 抓取 / 下载、**思维链**展示（本轮结束自动折叠、点箭头展开）与**流式输出**（可开关）；左栏可折叠且收起后输入框仍贴底。
-- **BOT Self Coding（智能体自我编程）**：旧的「CodeBuddy CLI 自我编程」（外部 CLI 进程）已**移除**，自编程统一走内置构建助手。用户开 `BOT_SELF_CODING_ENABLED` 后，智能体直接驱动内置构建助手**构建 / 改进自己**——受阻时把 `bug + 回传 traceback` 作为 Issue 提给自己，默认 `ISSUE_AUTO` 自动执行、`AUTO_LOAD` 自动装载启动（两者均可关闭，关闭后需用户同意 / 手动装载）；权限档默认 **完全访问**且可在 UI/命令改。界面上：「配置」页「智能体自编程」区可开关与选权限档，侧栏「自编程 Issue」页可查看/管理 Issue 历史（同意/拒绝/提交）。详见 [README](./README.md#bot-self-coding智能体自我编程)。
+- **BOT Self Coding（智能体自我编程）**：旧的「CodeBuddy CLI 自我编程」（外部 CLI 进程）已**移除**，自编程统一走内置构建助手。用户开 `BOT_SELF_CODING_ENABLED` 后，智能体直接驱动内置构建助手**构建 / 改进自己**——受阻时把 `bug + 回传 traceback` 作为 Issue 提给自己，默认 `ISSUE_AUTO` 自动执行、`AUTO_LOAD` 自动装载启动（两者均可关闭，关闭后需用户同意 / 手动装载）；权限档默认 **完全访问**且可在 UI/命令改。界面上：「配置」页「智能体自编程」区可开关与选权限档，侧栏「自编程 Issue」页可查看/管理 Issue 历史（同意/拒绝/提交）。构建通过后**自动上架「插件」页**：`pkg_manager.load()` 完成即向界面广播 `plugins_updated` 事件并聊天提示「✅ 已自动装载并启动插件」，无需手动刷新即可在插件页看到并管理。详见 [README](./README.md#bot-self-coding智能体自我编程)。
 - **插件协议**：第三方插件经**官方 UI 事件通道** `core.app_bridge` 往界面推消息 / 图片 / 语音 / 状态（线程安全、无需 hack 内部对象）；sidecar 包输出落盘 `logs/`、启动等待端口就绪。规范见 [`PLUGINS.md`](./PLUGINS.md)，范本见 `plugins/greeting_demo/`。
 - **World 类型（world kind）**：插件 `kind="world"` 与 `kind="brain"` 同走 `create_brain` + `core.brains` 注册，天然获得统一生命周期 / 状态查询 / `brain.event` 通道；其 `world_domain` 必填（im / game / vtuber / other），让游戏 / 虚拟主播等**外部世界**成为平台之外的「一等公民」。示例包 `plugins/mc_world/`：用 Python mineflayer 接入原版 Minecraft，复用 cortico-world-mc-agent 身体层语义（connect / 观察 / 聊天转发 / 保命反射 / goto·dig·attack·say·scan 指令），补齐「多世界接入」短板。
 - **外观自定义**：8 套主题（暗色各自配色、1 套浅色）、背景图（重传即生效）、应用图标、窗口标题；侧边栏可「« 收回 / ☰ 拉出」折叠并持久化。

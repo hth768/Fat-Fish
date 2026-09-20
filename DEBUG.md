@@ -149,6 +149,27 @@
 
 ---
 
+## 6. 2026-09-20 新增机制（非 bug，排错参考）
+
+> 本节能帮你在回归 / 联调时快速确认两处新行为是否生效。功能设计见 [README](./README.md) / [OVERVIEW.md](./OVERVIEW.md)。
+
+### 6.1 构建成功后自动上架「插件」页并启动
+- **触发**：`libs/qq_bot_runtime/self_coding.py` 的 `_try_load` 在 `pm.load(name)` 成功后，经 `pm.bridge.push(None, {"type":"plugins_updated","name":name})` **全局广播** UI 刷新事件，并推送一条 assistant 消息「✅ 已自动装载并启动插件「`<name>`」」。
+- **前端响应**：`webui/app.js` 的 `handleEvent` 收 `plugins_updated` → 若正停留在插件页则 `loadPlugins()` 立即刷新，并 `refreshCorePill()`。改前端后须 `node --check webui/app.js` 且重启（WebView2 缓存）。
+- **排查**：
+  - 插件页没刷新 → 先确认事件链：`pm.bridge` 是否挂上（App 嵌入模式 `core.app_bridge` 已挂载即有效，纯引擎 `None` 会静默跳过）；再查 `app.js` `handleEvent` 是否含 `plugins_updated` 分支。
+  - 没收到「已装载」提示 → 看 `self_coding.py` `_try_load` 的 `try/except` 是否吞了异常（`push` 失败不应中断装载）。
+  - 构建后未启动 → `feature`/`local` 由 `pm.load` 内部 `lt.schedule(inst.start())` 启动；`brain`/`world` 由 `_try_load` 调 `br.start()`（受 `auto_start_on_core` 约束）。
+
+### 6.2 聊天能力感知（不再回答「做不到了」）
+- **机制**：`chat_service._build_self_capability_hint()` 在 `_chat_pipeline` 调模型前注入一条 system 消息——列出 `plugins_api.manager().list_all()` 中**已启用**（`enabled=True`、非 `invalid`）的插件，并当 `config.BOT_SELF_CODING_ENABLED=True` 时附「自我编程能力」说明（遇做不到的需求应主动声明要构建插件而非拒绝）。
+- **零开销边界**：无已启用插件 **且** 自编程关闭时，函数返回空串 **不注入** 任何 system 消息。
+- **排查**：
+  - 智能体仍回答「做不到了」→ ①确认对应插件在 `list_all` 里 `enabled=True` 且非 `invalid`（未装载/校验失败的包不会出现）；②确认 `BOT_SELF_CODING_ENABLED=True`（默认 False，需 `/开启自我编程`）；③确认提示文案被注入——可在 `_chat_pipeline` 注入点前后打日志看 `cap_hint` 是否为空。
+  - 注入内容不对（缺插件 / 描述陈旧）→ 提示在**每次请求即时读取** `list_all()`，重启构建实例后即刷新，无需改代码。
+
+---
+
 ## 排查技巧速记
 
 - 国内访问 GitHub 不便时，用 GitHub API 而非网页定位 CI：
