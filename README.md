@@ -215,6 +215,8 @@ python app.py --with-core
 
 `chat_service.py` 平台无关的聊天大脑：命令分发、记忆注入、图片/语音/视频理解、意图识别（如 `/电脑做`、`/mc`、`/总结`）、MC 指令注入、DeepSeek 调用。通过 `ai_provider` 的统一接口对接多 LLM，支持文本/视觉/工具/thinking 能力。
 
+**控制台聊天发送多模态**：聊天输入框工具栏支持发送 **图片 / 视频 / 语音**（纯文本照常）。前端把附件以 base64 dataURL 随消息 POST `/api/chat`，后端解码落盘 `data/media/<uuid>.<ext>` 并构造 `InboundMessage`（`image_refs` / `has_video`+`video_ref` / `audio_wav`）。语音经 `config.FFMPEG_PATH`（ffmpeg）转 16k 单声道 wav 再走 ASR。能力依赖：图片/视频理解需已配 vision 能力或本地视觉模型（视频需 ffmpeg 抽帧）；语音输入依赖 `ENABLE_VOICE` + 云端 ASR（GLM ASR 需 Key）。
+
 ### 记忆子系统
 
 分四类、主体区分严谨（用户 vs AI 肥鱼娘），避免写反/串台：

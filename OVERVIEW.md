@@ -25,6 +25,13 @@
 - **退出**：关闭桌面窗口即退出主进程（Edge `--app` 模式轮询子进程、清理后 `os._exit` 强退残留线程，不会留下孤儿 sidecar）；纯浏览器（`--browser` / `--no-window`）模式为服务常驻，需 Ctrl+C 退出。
 - 运行数据（`data/`、缓存、`dist/`、`.gitignore` 项）不入库。
 
+## 即时能力（速览）
+
+- **控制台聊天支持多模态输入**：图片 / 视频 / 语音（聊天栏 🖼️🎬🎤 工具栏）。前端以 base64 随消息上传 → 后端落盘 `data/media/` → 构造带 `image_refs`/`video_ref`/`audio_wav` 的入站消息。
+  - 图片/视频理解：需已配 vision 能力或本地视觉模型；视频理解额外依赖 ffmpeg 抽帧（可在「本地 AI 依赖」面板安装）。
+  - 语音输入：浏览器录音 → ffmpeg 转 16k wav → 云端 GLM ASR（依赖 `ENABLE_VOICE` 与 ASR Key）。
+- 纯文本 / 记忆 / 意图指令（`/电脑做`、`/mc`、`/总结` 等）/ 构建助手 / 外观自定义等均开箱可用，无需额外依赖。
+
 ## 仓库地址
 
 `hth768/Fat-Fish` —— 包管理器：无（便携自举 `venv` / 捆绑 Python）；智能体核心复用 `libs/qq_bot_runtime`（qq_bot 运行时）。
