@@ -1604,8 +1604,17 @@ class ChatService:
                 need_search = _caps["need_search"]
                 use_reasoner = _caps["need_reason"]
                 _voice_judged = _caps["need_voice"]
-                if _judge_feature and _caps["need_feature"] and not _caps["feature_already"]:
-                    asyncio.create_task(self._file_feature_issue_now(_caps["feature_summary"], user_id))
+                if _judge_feature:
+                    # 功能需求：LLM 判定 ∪ 本地启发式，降低漏判（增强判断强度）
+                    _need_feat = _caps["need_feature"]
+                    _feat_summary = _caps["feature_summary"]
+                    _fh = _looks_like_feature_request(effective_text)
+                    if _fh[0] and not _caps["feature_already"] \
+                            and not _catalog_covers_request(_fh[1], _feature_catalog):
+                        _need_feat = True
+                        _feat_summary = _feat_summary or _fh[1] or effective_text.strip()[:60]
+                    if _need_feat and _feat_summary:
+                        asyncio.create_task(self._file_feature_issue_now(_feat_summary, user_id))
             if need_search:
                 await reply.reply("唔...这个我得去查查最新的，等我翻翻资料~")
                 try:
@@ -2204,6 +2213,68 @@ async def wants_voice_reply(text: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# 自编程功能需求探测：LLM 判断 + 本地启发式双保险（增强判断强度）
+# ---------------------------------------------------------------------------
+async def _call_capability_judge(prompt: str) -> str:
+    """调用「判断用」LLM：优先 role=judge（若有专门路由），失败回退默认 chat 供应商。
+
+    D 盘部署实测 role=judge 无可用供应商会抛异常，导致整段判断失效、功能需求探测形同虚设。
+    回退默认 chat 供应商可让判断真正生效；两层都不可用才交给启发式兜底。
+    """
+    try:
+        return await get_llm().chat([{"role": "user", "content": prompt}], capability="chat", role="judge")
+    except Exception:
+        # 未配置 judge 供应商时，用默认 chat 供应商兜底，确保判断仍可用
+        return await get_llm().chat([{"role": "user", "content": prompt}], capability="chat")
+
+
+# 明确「请求新增/设置/支持某功能」的信号（偏向新功能，规避普通闲聊）
+_FEATURE_REQ_PATTERNS = [
+    r"定时(任务|提醒|闹钟|计划)",
+    r"提醒我(每|在|到|几点|\d|每天|每周|上午|下午|早上|晚上)",
+    r"(帮我|请|能不能|可以|可不可以|能否|想让你)(设置|添加|加|创建|建|写|做|实现|弄|搞|开发|造|搞个|做个)(一个|个|一)?(.{0,6})(功能|插件|能力|模块|大脑|机器人|小工具|定时|提醒)",
+    r"(增加|添加|支持|开通|实现|开发|集成|接入)(了?)(一个|个|一)?(.{0,6})(功能|插件|能力|模块|大脑|接口|定时|提醒)",
+    r"有没有(.{0,6})(功能|插件|能力|办法|方式|渠道|方法)(可以|能|来|去)?",
+    r"能不能(.{0,8})(功能|插件|能力|定时|提醒)|能(.{0,4})(帮我)?(.{0,6})吗",
+    r"我希望(有|能|可以|具备)(一个|个|一)?(.{0,6})(功能|插件|能力|定时|提醒)",
+    r"我想要(一个|个|一)?(.{0,6})(功能|插件|能力|定时|提醒)",
+    r"(帮|给)我(写一个|做个|编个|开发个)(.{0,6})(脚本|程序|机器人|插件)",
+]
+# 否定信号：表明确认「已有」该能力，不视为新需求
+_FEATURE_ALREADY_OK = ["已经", "早就", "本来就有", "本来就会", "已经可以", "已经有了", "你不是已经"]
+
+
+def _looks_like_feature_request(text: str):
+    """启发式判断用户是否在请求新功能/能力。返回 (是否像, 提取的简短需求短语)。
+
+    仅作 LLM 判断不可用或漏判时的增强兜底；模式偏向明确的「新增/设置/支持某功能」，
+    普通闲聊（如「帮我查天气」）不会命中。命中后由调用方对照能力清单过滤已支持项。
+    """
+    if not text:
+        return (False, "")
+    if any(neg in text for neg in _FEATURE_ALREADY_OK):
+        return (False, "")
+    for pat in _FEATURE_REQ_PATTERNS:
+        m = re.search(pat, text)
+        if m:
+            phrase = m.group(0).strip()
+            phrase = re.sub(r"^(帮我|请|想让你|能不能|可以|可不可以|能否|我希望|我想要|给我|你)(帮我)?", "", phrase)
+            return (True, phrase[:40])
+    return (False, "")
+
+
+def _catalog_covers_request(phrase: str, catalog: str) -> bool:
+    """粗粒度：提取的需求短语是否已被现有能力清单覆盖，避免为已有功能误提单。"""
+    if not phrase or not catalog:
+        return False
+    toks = set(re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_\-]+", catalog))
+    for seg in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_\-]+", phrase):
+        if seg in toks:
+            return True
+    return False
+
+
 async def _judge_capabilities(text: str, judge_search: bool, judge_reason: bool,
                             judge_voice: bool, judge_feature: bool = False,
                             feature_catalog: str = "") -> Dict[str, object]:
@@ -2227,7 +2298,9 @@ async def _judge_capabilities(text: str, judge_search: bool, judge_reason: bool,
     if judge_feature:
         parts.append("4) 用户是否在请求「当前尚不具备的新能力/功能」（而非普通闲聊或对已有功能的正常使用）："
                      "回答 需要 或 不需要；若需要，再回答 feature_already（该能力是否已在下方清单里有对应/等价能力：是/否）"
-                     "和 feature_summary（用一句话概括这个待新增功能）")
+                     "和 feature_summary（用一句话概括这个待新增功能）。"
+                     "注意：即便只是隐含地希望拥有某种新能力（如「帮我做个X」「有没有办法X」「能XX吗」「设置定时任务」），"
+                     "只要当前清单没有对应/等价能力，也应判为需要——宁可多提，不要漏判。")
     prompt = (
         "你是一个判断助手。请对用户消息逐条判断，每项只回答「需要」或「不需要」（功能项额外回答 是/否 与 一句话）。\n"
         + "\n".join(parts) + "\n\n"
@@ -2248,7 +2321,7 @@ async def _judge_capabilities(text: str, judge_search: bool, judge_reason: bool,
     if judge_feature:
         prompt += "need_feature: 需要/不需要\nfeature_already: 是/否\nfeature_summary: <待新增功能一句话概括>\n"
     try:
-        result = await get_llm().chat([{"role": "user", "content": prompt}], capability="chat", role="judge")
+        result = await _call_capability_judge(prompt)
         result = result or ""
         for key, on in (("need_search", judge_search), ("need_reason", judge_reason), ("need_voice", judge_voice)):
             if not on:
