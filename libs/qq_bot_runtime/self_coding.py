@@ -11,6 +11,7 @@
 - 构建产物默认自动装载并启动（BOT_SELF_CODING_AUTO_LOAD=True），关闭后需用户允许。
 """
 import os
+import threading
 import time
 import uuid
 from typing import Dict, List, Optional
@@ -92,6 +93,24 @@ def _ensure_dir():
         pass
 
 
+# 写锁：自编程可能在后台任务并发重写 issues.jsonl，串行化避免互相覆盖
+_WRITE_LOCK = threading.Lock()
+
+
+def _coalesce_delta(log: List[Dict], ev: Dict) -> bool:
+    """把连续的 delta 文本合并到同 round+kind 的最后一条，避免日志条目爆炸。"""
+    r = ev.get("round")
+    k = ev.get("kind")
+    if log:
+        last = log[-1]
+        if (last.get("type") == "delta" and last.get("round") == r
+                and last.get("kind") == k):
+            last["text"] = (last.get("text") or "") + (ev.get("text") or "")
+            return True
+    log.append(dict(ev))
+    return False
+
+
 def _read_issues() -> List[Dict]:
     _ensure_dir()
     if not os.path.isfile(ISSUES_PATH):
@@ -115,8 +134,9 @@ def _read_issues() -> List[Dict]:
 def _append_issue(issue: Dict):
     _ensure_dir()
     try:
-        with open(ISSUES_PATH, "a", encoding="utf-8") as f:
-            f.write(repr(issue) + "\n")
+        with _WRITE_LOCK:
+            with open(ISSUES_PATH, "a", encoding="utf-8") as f:
+                f.write(repr(issue) + "\n")
     except Exception as e:
         degrade("libs/qq_bot_runtime/self_coding.py:_append_issue", e, "降级：写入 issue 失败")
 
@@ -124,9 +144,10 @@ def _append_issue(issue: Dict):
 def _rewrite_issues(issues: List[Dict]):
     _ensure_dir()
     try:
-        with open(ISSUES_PATH, "w", encoding="utf-8") as f:
-            for it in issues:
-                f.write(repr(it) + "\n")
+        with _WRITE_LOCK:
+            with open(ISSUES_PATH, "w", encoding="utf-8") as f:
+                for it in issues:
+                    f.write(repr(it) + "\n")
     except Exception as e:
         degrade("libs/qq_bot_runtime/self_coding.py:_rewrite_issues", e, "降级：重写 issue 失败")
 
@@ -193,6 +214,7 @@ def file_issue(title: str, body: str = "", kind: str = "feature",
         "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
         "rounds": 0,
         "result": "",
+        "build_log": [],            # 实时构建过程事件流（供 UI 展开查看）
     }
     auto = bool(getattr(config, "BOT_SELF_CODING_ISSUE_AUTO", True))
     if auto:
@@ -274,6 +296,25 @@ def reject_issue(issue_id: str) -> Dict:
     return {"ok": False, "error": "未找到待处理的 Issue"}
 
 
+def retry_issue(issue_id: str) -> Dict:
+    """把失败（failed）的 Issue 重新派发给构建助手执行（失败重提）。"""
+    issues = _read_issues()
+    for it in issues:
+        if it.get("id") == issue_id and it.get("state") == ISSUE_FAILED:
+            it["state"] = ISSUE_OPEN
+            it["result"] = ""
+            it.setdefault("build_log", [])
+            it["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            _rewrite_issues(issues)
+            try:
+                _launch_dispatch(issue_id)
+            except Exception as e:
+                degrade("libs/qq_bot_runtime/self_coding.py:retry_issue", e,
+                        "降级：重提 issue 失败")
+            return {"ok": True, "issue_id": issue_id}
+    return {"ok": False, "error": "未找到失败状态的 Issue"}
+
+
 # ---------------------------------------------------------------------------
 # 派发 + 协作构建（与构建助手对话，出 bug 反馈 traceback 再修）
 # ---------------------------------------------------------------------------
@@ -303,7 +344,7 @@ async def _dispatch(issue_id: str, max_rounds: int = 4) -> Dict:
                 turn = (f"上一次构建后运行报错，请修复。\n"
                         f"错误/失败信息：\n{last_err}\n"
                         f"请定位并修正后重新给出可装载的产物。")
-            res = await _run_builder(turn)
+            res = await _run_builder(turn, issue, issues, issue_id)
             if not res.get("ok"):
                 last_err = res.get("error", "未知错误")
                 issue["result"] = last_err
@@ -349,8 +390,14 @@ def _build_prompt(issue: Dict) -> str:
     return "\n\n".join(parts)
 
 
-async def _run_builder(turn: str) -> Dict:
-    """调用内置构建助手（builder_api.run_chat）执行一轮构建。"""
+async def _run_builder(turn: str, issue: Optional[Dict] = None,
+                      issues: Optional[List[Dict]] = None,
+                      issue_id: str = "") -> Dict:
+    """调用内置构建助手（builder_api.run_chat）执行一轮构建。
+
+    若传入 issue/issues，则把构建过程事件（emit 回调）实时写入 issue['build_log']
+    并节流落盘，供 UI 点击 Issue 展开查看实时构建过程。
+    """
     try:
         import bridge.builder_api as builder_api
     except Exception as e:
@@ -367,12 +414,41 @@ async def _run_builder(turn: str) -> Dict:
         bridge = None
     if bridge is None:
         return {"ok": False, "error": "核心未运行，无法调用构建助手"}
+
+    emit_last = {"t": 0.0}
+
+    def _emit(ev: Dict):
+        if not issue or not issues:
+            return
+        try:
+            log = issue.setdefault("build_log", [])
+            if ev.get("type") == "delta":
+                _coalesce_delta(log, ev)
+            else:
+                log.append(dict(ev))
+            issue["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            now = time.time()
+            # 节流落盘：至少 0.4s 一次，关键节点（工具/思考/完成）立即落盘
+            if (now - emit_last["t"]) >= 0.4 or ev.get("type") in ("done", "tool_end", "think_end"):
+                emit_last["t"] = now
+                _rewrite_issues(issues)
+        except Exception as e:
+            degrade("libs/qq_bot_runtime/self_coding.py:_run_builder.emit",
+                    e, "降级：构建日志落盘失败")
+
     try:
         res = await builder_api.run_chat(
             bridge,
             message=turn,
             use_history=True,
+            stream=True,
+            emit=_emit,
         )
+        # 确保最终状态落盘（避免末尾 delta 被节流丢弃）
+        try:
+            _rewrite_issues(issues)
+        except Exception:
+            pass
         return {"ok": True, "result": res}
     except Exception as e:
         return {"ok": False, "error": f"构建助手执行异常：{e!r}"}
@@ -423,10 +499,27 @@ async def _try_load(build_res: Dict, issue: Dict) -> Dict:
         return {"ok": False, "error": f"装载异常：{e!r}"}
 
 
+def _pkg_name_from_plugin_path(p) -> Optional[str]:
+    """从 plugins/<name>/... 形式的相对路径取包名（目录第二段）。"""
+    if not isinstance(p, str):
+        return None
+    rel = p.replace("\\", "/").lstrip("/")
+    if rel.startswith("plugins/"):
+        parts = rel.split("/")
+        if len(parts) >= 2 and parts[1]:
+            return parts[1]
+    return None
+
+
 def _extract_pkg_name(build_res: Dict) -> Optional[str]:
-    """从构建助手返回里尽量提取保存的包名（优先 manifest 中的 name）。"""
+    """从构建助手返回里尽量提取保存的包名（优先 manifest 中的 name）。
+
+    run_chat 不会回填 saved/artifacts，因此还要扫描工具步骤（save_plugin /
+    write_file）与草稿，才能稳定拿到包名，否则会一直报「无法解析包名」。
+    """
     if not isinstance(build_res, dict):
         return None
+    # 1) 显式 saved / artifacts 字段
     saved = build_res.get("saved") or build_res.get("artifacts") or []
     if isinstance(saved, list):
         for art in saved:
@@ -434,7 +527,32 @@ def _extract_pkg_name(build_res: Dict) -> Optional[str]:
                 nm = art.get("name")
                 if nm:
                     return nm
-    # 兼容字符串回执
+    # 2) 扫描工具步骤：save_plugin(name=...) 或 write_file(path=plugins/<name>/...)
+    for src in (build_res.get("steps"), build_res.get("blocks")):
+        if isinstance(src, list):
+            for st in src:
+                if not isinstance(st, dict):
+                    continue
+                t = st.get("tool") or ""
+                a = st.get("args") or {}
+                if t == "save_plugin":
+                    nm = a.get("name") if isinstance(a, dict) else None
+                    if nm:
+                        return nm
+                    man = a.get("manifest") if isinstance(a, dict) else None
+                    if isinstance(man, dict) and man.get("name"):
+                        return man["name"]
+                elif t == "write_file":
+                    nm = _pkg_name_from_plugin_path(a.get("path") if isinstance(a, dict) else None)
+                    if nm:
+                        return nm
+    # 3) 草稿里的 plugin / agent / brain 名
+    drafts = build_res.get("drafts") or {}
+    if isinstance(drafts, dict):
+        for v in drafts.values():
+            if isinstance(v, dict) and v.get("name"):
+                return v["name"]
+    # 4) 兼容字符串回执
     txt = str(build_res.get("text", ""))
     import re
     m = re.search(r"manifest[\"']?\s*name[\"']?\s*[:=]\s*[\"']([\w\-]+)[\"']", txt)

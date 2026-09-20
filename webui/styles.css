@@ -553,6 +553,22 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .badge.failed { color: #f66; border-color: #f66; }
 .badge.rejected { color: var(--muted); border-color: var(--line); }
 
+/* 点击 Issue 展开实时构建过程 */
+.sc-issue-head { cursor: pointer; user-select: none; }
+.sc-issue .tw { display: inline-block; transition: transform .15s; color: var(--muted); font-size: 11px; }
+.sc-issue.open .tw { transform: rotate(90deg); }
+.sc-issue-actions { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sc-issue-detail { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.sc-issue-detail .bhead { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.bline { font-size: 12.5px; line-height: 1.6; padding: 3px 0; border-bottom: 1px dotted rgba(255,255,255,.05); white-space: pre-wrap; word-break: break-word; }
+.bline .blabel { display: inline-block; min-width: 38px; color: var(--muted); margin-right: 6px; font-size: 11px; }
+.bline.bthink .btext { color: var(--muted); font-style: italic; }
+.bline.bcontent .btext { color: var(--text); }
+.bline.btool code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+.bline .bok { color: var(--ok); }
+.bline .berr { color: #f66; }
+.bline.bdone { color: var(--accent, #4c9); text-align: center; }
+
 /* 启动遮罩 splash：先于数据加载显示，连上后端即淡出 */
 #bootSplash { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center; justify-content: center; background: radial-gradient(1200px 600px at 50% -10%, #16203a, #0d1220); transition: opacity .4s ease; }
 #bootSplash.hidden { opacity: 0; pointer-events: none; }

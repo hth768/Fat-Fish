@@ -744,6 +744,9 @@ def make_handler(bridge):
                 if path == "/api/self_coding/reject":
                     import self_coding
                     return self._json(self_coding.reject_issue(body.get("id", "")))
+                if path == "/api/self_coding/retry":
+                    import self_coding
+                    return self._json(self_coding.retry_issue(body.get("id", "")))
                 if path == "/api/self_coding/file":
                     import self_coding
                     return self._json(self_coding.file_issue(

@@ -1274,6 +1274,101 @@ function mountIssues(container) {
   const listEl = container.querySelector(".is-list");
   const titleEl = container.querySelector(".is-title");
 
+  // 展开状态 / 当前数据 / 轮询句柄（mountIssues 内闭包共享）
+  const expanded = new Set();
+  let currentIssues = [];
+  let pollTimer = null;
+
+  // 把构建助手的实时事件流渲染成可读的构建过程
+  function renderBuildLog(log) {
+    if (!log || !log.length) return `<div class="hint">（构建尚未产生日志）</div>`;
+    return log.map(ev => {
+      const t = ev.type;
+      if (t === "delta") {
+        const isThink = ev.kind === "think";
+        return `<div class="bline ${isThink ? "bthink" : "bcontent"}">`
+          + `<span class="blabel">${isThink ? "思考" : "输出"}</span>`
+          + `<span class="btext">${esc(ev.text || "")}</span></div>`;
+      }
+      if (t === "tool_start") {
+        return `<div class="bline btool"><span class="blabel">工具</span>`
+          + `调用 <code>${esc(ev.tool || "")}</code></div>`;
+      }
+      if (t === "tool_end") {
+        const s = ev.step || {};
+        let detail = "";
+        if (s.result) {
+          const r = s.result;
+          detail = r.detail != null ? r.detail
+                 : r.value != null ? String(r.value)
+                 : (r.error ? "错误：" + r.error : JSON.stringify(r));
+        }
+        return `<div class="bline btool"><span class="blabel">结果</span>`
+          + `<span class="${s.ok ? "bok" : "berr"}">${s.ok ? "✅" : "❌"}</span>`
+          + `<span class="btext">${esc(detail)}</span></div>`;
+      }
+      if (t === "done") return `<div class="bline bdone">— 本轮构建完成 —</div>`;
+      return "";
+    }).join("");
+  }
+
+  function renderList() {
+    const issues = currentIssues;
+    if (!issues.length) {
+      listEl.innerHTML = `<div class="hint">暂无 Issue。智能体受阻或想要新功能时会自动提；也可在下方输入框手动提交。</div>`;
+      return;
+    }
+    const stateName = { open: "执行中", pending: "待批准", done: "已完成", failed: "失败", rejected: "已拒绝" };
+    listEl.innerHTML = issues.map(it => {
+      const id = it.id;
+      const cls = (it.state || "").replace(/[^a-z]/g, "");
+      const isOpen = expanded.has(id);
+      let actions;
+      const meta = `<span class="hint">轮次 ${it.rounds || 0}${it.updated ? " · " + it.updated : ""}</span>`;
+      if (it.state === "pending") {
+        actions = `<button class="btn ghost sm" data-act="approve" data-id="${esc(id)}">同意</button>`
+          + `<button class="btn ghost sm" data-act="reject" data-id="${esc(id)}">拒绝</button>`;
+      } else if (it.state === "failed") {
+        actions = `<button class="btn ghost sm" data-act="retry" data-id="${esc(id)}">重提</button>` + meta;
+      } else {
+        actions = meta;
+      }
+      const detail = isOpen
+        ? `<div class="sc-issue-detail"><div class="bhead">实时构建过程</div>${renderBuildLog(it.build_log)}</div>`
+        : "";
+      return `<div class="sc-issue ${isOpen ? "open" : ""}" data-id="${esc(id)}">
+        <div class="sc-issue-head" data-toggle="${esc(id)}">
+          <span class="tw">▸</span>
+          <span class="badge">${esc(it.kind || "")}</span>`
+        + `<span class="badge ${esc(cls)}">${stateName[it.state] || it.state || ""}</span>`
+        + `<b>${esc(id)}</b> <span class="hint">${esc(it.title || "")}</span></div>`
+        + `<div class="sc-issue-actions">${actions}</div>`
+        + (it.result && !isOpen ? `<div class="hint wrap" style="margin:4px 0">结果：${esc(it.result)}</div>` : "")
+        + detail;
+    }).join("");
+    listEl.querySelectorAll("[data-toggle]").forEach(h => h.onclick = () => {
+      const id = h.getAttribute("data-toggle");
+      if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+      renderList();
+    });
+    listEl.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => {
+      const id = b.dataset.id, act = b.dataset.act;
+      const map = {
+        approve: ["/api/self_coding/approve", "已派给构建助手执行~"],
+        reject: ["/api/self_coding/reject", "已拒绝"],
+        retry: ["/api/self_coding/retry", "已重新派发构建~"],
+      };
+      const cfg = map[act];
+      if (!cfg) return;
+      POST(cfg[0], { id })
+        .then(r => {
+          toast(r && r.ok !== false ? cfg[1] : "失败：" + ((r && r.error) || ""), !(r && r.ok !== false));
+          refresh();
+        })
+        .catch(e => toast(e.message, true));
+    });
+  }
+
   async function refresh() {
     try {
       const d = await GET("/api/self_coding/issues");
@@ -1281,36 +1376,15 @@ function mountIssues(container) {
       statusEl.innerHTML = `自编程总开关：<b style="color:${enabled ? "var(--ok)" : "var(--warn)"}">`
         + `${enabled ? "已开启" : "未开启"}</b> ｜ 开关与权限档在「配置」页的「智能体自编程」区；`
         + `Issue 默认自动执行，关闭后需在此点「同意」才构建。`;
-      const issues = d.issues || [];
-      if (!issues.length) {
-        listEl.innerHTML = `<div class="hint">暂无 Issue。智能体受阻或想要新功能时会自动提；也可在下方输入框手动提交。</div>`;
-        return;
+      currentIssues = d.issues || [];
+      renderList();
+      // 有正在构建（执行中）的 Issue 时自动轮询，实时刷新展开中的构建过程
+      const building = currentIssues.some(it => it.state === "open");
+      if (building && !pollTimer) {
+        pollTimer = setInterval(() => refresh().catch(() => {}), 2000);
+      } else if (!building && pollTimer) {
+        clearInterval(pollTimer); pollTimer = null;
       }
-      const stateName = { open: "执行中", pending: "待批准", done: "已完成", failed: "失败", rejected: "已拒绝" };
-      listEl.innerHTML = issues.map(it => {
-        const cls = (it.state || "").replace(/[^a-z]/g, "");
-        const actions = it.state === "pending"
-          ? `<button class="btn ghost sm" data-act="approve" data-id="${esc(it.id)}">同意</button>`
-            + `<button class="btn ghost sm" data-act="reject" data-id="${esc(it.id)}">拒绝</button>`
-          : `<span class="hint">轮次 ${it.rounds || 0}${it.updated ? " · " + it.updated : ""}</span>`;
-        return `<div class="sc-issue">
-          <div class="sc-issue-head"><span class="badge">${esc(it.kind || "")}</span>`
-          + `<span class="badge ${esc(cls)}">${stateName[it.state] || it.state || ""}</span>`
-          + `<b>${esc(it.id)}</b> <span class="hint">${esc(it.title || "")}</span></div>`
-          + (it.result ? `<div class="hint wrap" style="margin:4px 0">结果：${esc(it.result)}</div>` : "")
-          + `<div class="row-actions">${actions}</div></div>`;
-      }).join("");
-      listEl.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => {
-        const id = b.dataset.id, act = b.dataset.act;
-        (act === "approve" ? POST("/api/self_coding/approve", { id })
-                           : POST("/api/self_coding/reject", { id }))
-          .then(r => {
-            toast(r && r.ok !== false ? (act === "approve" ? "已派给构建助手执行~" : "已拒绝")
-                                       : "失败：" + ((r && r.error) || ""), !(r && r.ok !== false));
-            refresh();
-          })
-          .catch(e => toast(e.message, true));
-      });
     } catch (e) {
       listEl.innerHTML = `<div class="hint" style="color:var(--warn)">${esc(e.message)}</div>`;
     }
