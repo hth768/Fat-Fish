@@ -1363,6 +1363,7 @@ class ChatService:
 
         messages = self.memory.get(channel_type, channel_id, user_id)
         use_reasoner = False
+        _voice_judged = False  # 合并判断的语音意图结果（仅普通文字分支内赋值，其余分支保持 False）
 
         # 每 bot 人格覆盖：若该 bot 在 AgentCore 上设置了 _persona_override，
         # 用它替换基座人设（config.SYSTEM_PROMPT），实现多 bot 人格隔离。
@@ -1553,6 +1554,16 @@ class ChatService:
                 else:
                     effective_text = "[用户引用了上一条消息，但没有附文字] 请回应"
 
+            # 平台语音能力（提前计算，供下方合并判断复用）
+            _cap = getattr(reply, "capabilities", None) or {}
+            platform_voice_ok = bool(_cap.get("voice", True))
+            voice_only = bool(_cap.get("voice_only", False))
+
+            # 功能需求探测：自编程开启时，后台判断用户是否请求尚不具备的能力，缺则提 Issue
+            if getattr(config, "BOT_SELF_CODING_ENABLED", False) and effective_text \
+                    and not effective_text.strip().startswith("/"):
+                asyncio.create_task(self._maybe_file_feature_issue(effective_text, user_id))
+
             # 知识库召回：以前搜索学到过的知识直接注入使用，省一次联网搜索。
             # 用户明确要「最新/现在/今天」等信息时不拦截，照常走联网判断
             kb_context = ""
@@ -1564,32 +1575,35 @@ class ChatService:
                         messages.append({"role": "system", "content": kb_context})
                         print("[KB] 知识库命中，跳过联网搜索")
 
-            # 自动联网判断（知识库已命中时不重复联网）
+            # 自动联网 + 自动推理 + 语音意图：合并为「一次」LLM 判断（替代 should_web_search /
+            # should_reason / wants_voice_reply 三次独立调用，省 2 次往返）。各能力有开关/前置预判守卫。
             need_search = False
-            if config.AUTO_WEB_SEARCH and effective_text and not kb_context:
-                # 关键词预判：仅疑似实时话题才跑 LLM judge + 联网，闲聊直接跳过（省 ~1.7s 前置开销）
-                if _looks_realtime(effective_text):
-                    need_search = await should_web_search(effective_text)
-                else:
-                    print("[WEB] 非实时话题，跳过联网 judge")
-                if need_search:
-                    await reply.reply("唔...这个我得去查查最新的，等我翻翻资料~")
-                    try:
-                        search_result = await search_web(effective_text)
-                        await reply.reply(search_result)
-                        # 后台沉淀：把这次搜到的通用知识记进知识库
-                        knowledge_service.get_knowledge().learn_async(effective_text, search_result)
-                        if config.ENABLE_MEMORY:
-                            self.memory.add(channel_type, channel_id, user_id, "user", effective_text)
-                        return
-                    except Exception as e:
-                        print(f"[ERROR] 自动联网搜索失败: {e}")
-                        need_search = False
-
-            # 自动推理判断
             use_reasoner = False
-            if config.AUTO_REASONING and effective_text:
-                use_reasoner = await should_reason(effective_text)
+            _judge_search = bool(config.AUTO_WEB_SEARCH and effective_text and not kb_context
+                                  and _looks_realtime(effective_text))
+            _judge_reason = bool(config.AUTO_REASONING and effective_text)
+            _judge_voice = bool(config.ENABLE_VOICE and platform_voice_ok
+                                and not (has_voice or voice_only)
+                                and not effective_text.strip().startswith(("/", "搜索", "思考")))
+            _voice_judged = False
+            if _judge_search or _judge_reason or _judge_voice:
+                _caps = await _judge_capabilities(effective_text, _judge_search, _judge_reason, _judge_voice)
+                need_search = _caps["need_search"]
+                use_reasoner = _caps["need_reason"]
+                _voice_judged = _caps["need_voice"]
+            if need_search:
+                await reply.reply("唔...这个我得去查查最新的，等我翻翻资料~")
+                try:
+                    search_result = await search_web(effective_text)
+                    await reply.reply(search_result)
+                    # 后台沉淀：把这次搜到的通用知识记进知识库
+                    knowledge_service.get_knowledge().learn_async(effective_text, search_result)
+                    if config.ENABLE_MEMORY:
+                        self.memory.add(channel_type, channel_id, user_id, "user", effective_text)
+                    return
+                except Exception as e:
+                    print(f"[ERROR] 自动联网搜索失败: {e}")
+                    need_search = False
 
             # 注入实时时间
             try:
@@ -1781,15 +1795,13 @@ class ChatService:
         # 平台能力降级：capabilities.voice=False 的平台（如 B 站弹幕）直接走文字，
         # 跳过语音意图判断（省一次 LLM 调用）与语音合成；
         # capabilities.voice_only=True 的平台（如 B 站直播）只有语音通道，恒走语音。
-        _cap = getattr(reply, "capabilities", None) or {}
-        platform_voice_ok = bool(_cap.get("voice", True))
-        voice_only = bool(_cap.get("voice_only", False))
         want_voice = has_voice or voice_only
         if config.ENABLE_VOICE and platform_voice_ok and not want_voice:
             if re.match(r'^/?(语音|voice)\b', text.strip()):
                 want_voice = True
-            elif not text.strip().startswith(("/", "搜索", "思考")):
-                want_voice = await wants_voice_reply(text)
+            else:
+                # 复用上方「一次合并判断」的语音意图结果（不再单独调 wants_voice_reply）
+                want_voice = bool(_voice_judged)
 
         if config.ENABLE_VOICE and platform_voice_ok and want_voice:
             voice_text = clean_voice_text(reply_text)
@@ -1827,6 +1839,68 @@ class ChatService:
     # ==================================================================
     # 触发判断
     # ==================================================================
+    async def _maybe_file_feature_issue(self, text: str, user_id: str):
+        """功能需求探测：用户是否请求「当前尚不具备的能力/功能」。
+
+        命中且自编程已开启 → 经 self_coding.file_issue 提 feature Issue（受 ISSUE_AUTO 控制自动执行）。
+        仅当 BOT_SELF_CODING_ENABLED 时由调用方触发；本函数自身不重复判断开关。
+        以一次 LLM 调用完成「是否需求 / 是否已有 / 需求摘要」，并做冷却去重防刷屏。
+        全程异常静默，绝不阻塞主回复。
+        """
+        try:
+            from self_coding import file_issue, is_enabled
+            if not is_enabled():
+                return
+            catalog = _build_capability_catalog()
+            try:
+                core = getattr(self, "core", None)
+                if core is not None:
+                    brains = [getattr(b, "title", "") or getattr(b, "name", "") for b in core.brains.all()]
+                    if brains:
+                        catalog += "\n【已注册大脑】\n" + "\n".join("- " + x for x in brains)
+            except Exception as e:
+                print(f"[WARN] 功能清单-大脑读取失败: {e}")
+            prompt = (
+                "你是一个能力评估助手。下面是「肥鱼娘」当前已具备的功能/能力清单。\n"
+                "请判断用户的消息：\n"
+                "A) 是否是一个「希望新增某种能力/功能」的需求（而非普通闲聊、也非对已有功能的正常使用提问）；\n"
+                "B) 该需求是否已经在清单里有对应或等价能力。\n\n"
+                f"{catalog}\n\n"
+                f"用户消息：{text}\n\n"
+                "请严格按以下格式输出：\n"
+                "is_request: 是/否\n"
+                "already_have: 是/否\n"
+                "summary: <若 is_request=是，用一句话概括这个待新增功能；否则留空>\n"
+            )
+            result = await get_llm().chat([{"role": "user", "content": prompt}], capability="chat", role="judge")
+            result = result or ""
+            m_req = re.search(r"is_request\s*[:：]?\s*(是|否)", result)
+            is_req = bool(m_req) and m_req.group(1) == "是"
+            if not is_req:
+                return
+            m_have = re.search(r"already_have\s*[:：]?\s*(是|否)", result)
+            already = bool(m_have) and m_have.group(1) == "是"
+            if already:
+                return
+            m_sum = re.search(r"summary\s*[:：]?\s*(.+)", result)
+            summary = (m_sum.group(1).strip() if m_sum else text.strip())[:120]
+            # 冷却去重：同一需求 10 分钟内不重复提
+            _now = time.time()
+            _key = re.sub(r"\s+", "", summary)[:40]
+            if _FEATURE_ISSUE_COOLDOWN.get(_key, 0) > _now - 600:
+                return
+            for _k in list(_FEATURE_ISSUE_COOLDOWN):
+                if _FEATURE_ISSUE_COOLDOWN[_k] < _now - 600:
+                    _FEATURE_ISSUE_COOLDOWN.pop(_k, None)
+            _FEATURE_ISSUE_COOLDOWN[_key] = _now
+            body = (f"用户提出但尚未具备的能力需求：{summary}\n\n"
+                    f"原始消息：{text}\n\n"
+                    "请在现有架构（插件/大脑/聊天管道）内评估如何实现，若可行请自动构建并提交。")
+            res = file_issue(title=f"需求：{summary}", body=body, kind="feature")
+            print(f"[SELF-CODING] 功能需求探测命中，已提 Issue: {res.get('issue_id')} （{summary}）")
+        except Exception as e:
+            print(f"[WARN] 功能需求探测失败（不影响主回复）: {e}")
+
     def should_reply(self, msg: InboundMessage) -> bool:
         """判断是否应回复该消息。"""
         if msg.channel_type == "private":
@@ -2145,6 +2219,77 @@ async def wants_voice_reply(text: str) -> bool:
     except Exception as e:
         print(f"[WARN] 语音意图判断失败，默认不用语音: {e}")
         return False
+
+
+async def _judge_capabilities(text: str, judge_search: bool, judge_reason: bool,
+                            judge_voice: bool) -> Dict[str, bool]:
+    """一次 LLM 调用，综合判断本消息是否需要：联网搜索 / 深度推理 / 语音回复。
+
+    替代原 should_web_search / should_reason / wants_voice_reply 三次独立判断（省 2 次 LLM 往返）。
+    judge_* 为对应能力的启用开关；关闭的能力不参与、直接返回 False。
+    解析：对每项取首次出现的「需要/不需要」判定（「不需要」优先），稳健不依赖模型严格格式。
+    """
+    out = {"need_search": False, "need_reason": False, "need_voice": False}
+    if not (judge_search or judge_reason or judge_voice):
+        return out
+    parts = []
+    if judge_search:
+        parts.append("1) 是否需要联网搜索实时信息（天气/新闻/股价/最新事件/时效事实/现实人物公司地点事件）：回答 需要 或 不需要")
+    if judge_reason:
+        parts.append("2) 是否需要深度推理（数学证明/逻辑/算法/为什么怎么办/多步思考）：回答 需要 或 不需要")
+    if judge_voice:
+        parts.append("3) 用户是否希望用语音（而非文字）回复（如「说给我听」「用语音和我聊」）：回答 需要 或 不需要")
+    prompt = (
+        "你是一个判断助手。请对用户消息逐条判断，每项只回答「需要」或「不需要」。\n"
+        + "\n".join(parts) + "\n\n"
+        f"用户消息：{text}\n\n"
+        "请严格按以下格式每行一项输出（未启用的项不输出）：\n"
+        + ("need_search: 需要/不需要\n" if judge_search else "")
+        + ("need_reason: 需要/不需要\n" if judge_reason else "")
+        + ("need_voice: 需要/不需要\n" if judge_voice else "")
+    )
+    try:
+        result = await get_llm().chat([{"role": "user", "content": prompt}], capability="chat", role="judge")
+        result = result or ""
+        for key, on in (("need_search", judge_search), ("need_reason", judge_reason), ("need_voice", judge_voice)):
+            if not on:
+                continue
+            m = re.search(rf"{key}\s*[:：]?\s*(需要|不需要)", result)
+            out[key] = bool(m) and m.group(1) == "需要"
+    except Exception as e:
+        print(f"[WARN] 综合能力判断失败，按保守兜底(联网/推理默认需要): {e}")
+        if judge_search:
+            out["need_search"] = True
+        if judge_reason:
+            out["need_reason"] = True
+    return out
+
+
+_FEATURE_ISSUE_COOLDOWN: Dict[str, float] = {}
+
+
+def _build_capability_catalog() -> str:
+    """汇总「当前已具备的能力/功能/插件/大脑」清单，供功能需求探测判定。
+    含插件/大脑 SPECS 名与已知内置能力关键词（自然语言表述的能力即使无对应插件也计入）。
+    """
+    items = []
+    try:
+        from plugin_registry import SPECS
+        for s in SPECS:
+            title = f"（{s.title}）" if s.title else ""
+            items.append(f"{s.name}{title}[{s.kind}]")
+    except Exception as e:
+        print(f"[WARN] 功能清单-插件读取失败: {e}")
+    known = [
+        "聊天对话", "记忆(人物档案/重要信息)", "表情包识别", "心情(情绪)识别与表达",
+        "联网搜索(实时信息)", "深度推理(推理模型)", "语音输入(语音识别)", "语音输出(语音合成/朗读)",
+        "电脑操控(操控鼠标键盘)", "Minecraft(MC)监听与操控", "植物大战僵尸(PVZ)自动化",
+        "B站直播/视频学习", "对话总结", "实时视觉(看屏幕/窗口/摄像头/游戏)", "截图",
+        "插件/大脑管理(安装启用)", "自我编程(自动提Issue构建功能)", "主动说话(闲聊)",
+        "翻译", "身份绑定(跨平台)", "知识库(搜索沉淀)",
+    ]
+    lines = ["【插件/大脑清单】"] + ["- " + i for i in items] + ["【内置/已知能力】"] + ["- " + k for k in known]
+    return "\n".join(lines)
 
 
 async def extract_memory(user_text: str, reply: str, include_mood: bool = False, user_id: str = "") -> dict:
