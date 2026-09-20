@@ -339,11 +339,6 @@ def make_handler(bridge):
                 if path == "/api/status":
                     return self._json(bridge.status())
                 # 轻量启动探针：前端 splash 用它判断是否已连上后端（先启动 UI，后端就绪即隐藏遮罩）
-                # 本地 AI 依赖按需后装：触发安装（mode=cpu|cuda）
-                if path == "/api/system/install_local_deps":
-                    mode = (body.get("mode") or "cpu")
-                    ok = _local_installer.start(cuda=(mode == "cuda"))
-                    return self._json({"ok": ok, "status": _local_installer.status()})
                 if path == "/api/boot/status":
                     return self._json({"ready": True, "core": bridge.is_running()})
                 # 本地 AI 依赖按需后装：状态查询
@@ -448,6 +443,11 @@ def make_handler(bridge):
             bid = (body.get("bot_id") or (self._qs().get("bot_id") or ["feiyu"])[0] or "feiyu")
             tok = agent_ctx.set_agent(bid or "feiyu")
             try:
+                # 本地 AI 依赖按需后装：触发安装（mode=cpu|cuda）
+                if path == "/api/system/install_local_deps":
+                    mode = (body.get("mode") or "cpu")
+                    ok = _local_installer.start(cuda=(mode == "cuda"))
+                    return self._json({"ok": ok, "status": _local_installer.status()})
                 if path == "/api/chat":
                     return self._json(bridge.submit_chat(
                         text=body.get("text", ""),
