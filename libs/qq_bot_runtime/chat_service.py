@@ -125,6 +125,13 @@ class ChatService:
     async def _handle_message(self, msg: InboundMessage, reply: ReplyTarget):
         user_id = msg.user_id
         text = msg.text or ""
+        # 标记当前 world 为 chat：AI 调用失败时经统一入口报障（self_coding.report_ai_error）。
+        # 默认关闭（BOT_SELF_CODING_ENABLED=False）时不触发，故不影响日常。
+        try:
+            from self_coding import set_world
+            set_world("chat")
+        except Exception:
+            pass
 
         # 目标用户（私聊对象）主动发消息，视为"已回复"，重置主动说话计数
         if msg.channel_type == "private" and getattr(config, "ENABLE_PROACTIVE_SPEAKER", False):
@@ -1171,30 +1178,10 @@ class ChatService:
         try:
             await self._chat_pipeline(msg, reply, text, has_quote, has_voice)
         except Exception as e:
-            # 智能体自我编程：开启后，受阻即把 bug+回传 traceback 作为 Issue 交给构建助手
-            import traceback as _tb
-            tb_text = _tb.format_exc()
+            # AI 调用失败已在 UnifiedLLM.chat 统一报障（self_coding.report_ai_error）。
+            # 此处仅负责把错误回给用户，不再重复提 Issue。
             print(f"[ERROR] 处理消息失败: {e}")
-            auto_issued = False
-            try:
-                from self_coding import is_enabled, file_issue
-                if is_enabled():
-                    r = file_issue(
-                        title=f"处理消息时异常：{type(e).__name__}",
-                        body=f"用户消息：{text[:200]}\n异常：{e}",
-                        kind="fix",
-                        traceback_text=tb_text,
-                    )
-                    if r.get("ok"):
-                        auto_issued = True
-                        if r.get("auto"):
-                            await reply.reply(f"抱歉出错了：{e}\n（已自动提 Issue {r['issue_id']} 交给构建助手修~）")
-                        else:
-                            await reply.reply(f"抱歉出错了：{e}\n（已提 Issue {r['issue_id']}，待你同意才修 /同意issue {r['issue_id']}）")
-            except Exception as ie:
-                print(f"[SELF_CODING] 自动提 Issue 失败（不影响报错回复）: {ie}")
-            if not auto_issued:
-                await reply.reply(f"抱歉，出错了：{e}")
+            await reply.reply(f"抱歉，出错了：{e}")
 
     # ==================================================================
     # 电脑操控命令（主人专属，pc_agent.py / pc_control.py）

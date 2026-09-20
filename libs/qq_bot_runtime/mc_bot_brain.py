@@ -388,6 +388,13 @@ class BotAgent:
     # ---------------- 主循环 ----------------
     async def run(self):
         self._running = True
+        # 标记当前 world 为 mc：AI 调用失败时经统一入口（self_coding.report_ai_error）报障。
+        # 默认关闭（BOT_SELF_CODING_ENABLED=False）时不触发，故不影响日常游玩。
+        try:
+            from self_coding import set_world
+            set_world("mc")
+        except Exception:
+            pass
         self._hb = asyncio.create_task(self._heartbeat())  # 独立心跳：状态文件常新鲜
         while self._running:
             state = _bridge_get("/state")

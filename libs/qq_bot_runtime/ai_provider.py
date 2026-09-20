@@ -610,6 +610,18 @@ class UnifiedLLM:
                 telemetry.record_fail("providers", name, e)
                 last_err = e
                 print(f"[LLM] 供应商「{name}」调用失败(能力={cap}, role={role}): {e}，尝试下一个")
+        # 统一提自编程 Issue：所有供应商失败时，按当前 world（chat/mc/pvz/...）报障。
+        # 默认关闭（BOT_SELF_CODING_ENABLED=False）不触发；自编程构建过程内不递归。
+        try:
+            from self_coding import report_ai_error
+            report_ai_error(
+                last_err,
+                context=f"能力={cap}, role={role}",
+                kind="fix",
+                title=f"AI 调用全部失败（{role or cap}）",
+            )
+        except Exception:
+            pass
         raise ProviderError(f"所有供应商均失败(能力={cap}, role={role}): {last_err}")
 
     # 便捷封装：带工具调用（返回 assistant message dict）

@@ -30,6 +30,61 @@ ISSUE_FAILED = "failed"      # 构建失败且超出重试
 ISSUE_REJECTED = "rejected"  # 用户拒绝
 
 
+# ---------------------------------------------------------------------------
+# 统一提 Issue：所有场景/world（chat / mc / pvz / pc / bilibili …）的 AI 调用失败时，
+# 经此统一入口提自编程 Issue。默认关闭（BOT_SELF_CODING_ENABLED=False）时不触发。
+# ---------------------------------------------------------------------------
+import contextvars
+import traceback as _tb_mod
+
+# 当前场景/world 标签：各 world 在循环入口 set_world("mc")，用于 Issue 定位。
+SC_WORLD = contextvars.ContextVar("sc_world", default="general")
+_WORLD_DEFAULT = "general"
+_LAST_REPORT = {}                 # (world, err_type, hint) -> 时间戳，冷却去重
+_REPORT_COOLDOWN = 600.0          # 同一世界+异常类型 10 分钟内只提一次
+
+
+def set_world(name: str):
+    """由各 world/brain 在循环入口设置当前场景标签（chat/mc/pvz/...），用于 Issue 定位。"""
+    try:
+        SC_WORLD.set(str(name or _WORLD_DEFAULT))
+    except Exception:
+        pass
+
+
+def report_ai_error(error, *, context: str = "", kind: str = "fix",
+                   title: str = "") -> Optional[Dict]:
+    """统一入口：任何 world 的 AI 调用失败时调用。
+
+    - 总开关关闭时不触发；
+    - 自编程构建过程内（world='self_coding'）不二次提 Issue，避免递归；
+    - 同一 world + 异常类型在冷却期内只提一次，避免刷屏；
+    - 永不抛异常（失败只打印，不影响主流程）。
+    """
+    try:
+        if not is_enabled():
+            return None
+        world = SC_WORLD.get() or _WORLD_DEFAULT
+        if world == "self_coding":
+            return None
+        err_type = type(error).__name__
+        key = (world, err_type, (title or context)[:40])
+        now = time.time()
+        if key in _LAST_REPORT and (now - _LAST_REPORT[key]) < _REPORT_COOLDOWN:
+            return None
+        _LAST_REPORT[key] = now
+        tb = _tb_mod.format_exc()
+        t = title or f"[{world}] AI 调用失败：{err_type}"
+        body = f"场景/world：{world}\n"
+        if context:
+            body += context + "\n"
+        body += f"异常：{error}"
+        return file_issue(title=t, body=body, kind=kind, traceback_text=tb)
+    except Exception as e:
+        print(f"[SELF_CODING] report_ai_error 失败（不影响主流程）: {e}")
+        return None
+
+
 def _ensure_dir():
     try:
         os.makedirs(SELF_CODING_DIR, exist_ok=True)
@@ -143,11 +198,9 @@ def file_issue(title: str, body: str = "", kind: str = "feature",
     if auto:
         issue["state"] = ISSUE_OPEN
         _append_issue(issue)
-        # 自动派发：异步交给构建助手（不阻塞提 Issue 的调用方）
+        # 自动派发：交给构建助手（异步上下文下作为后台任务，不阻塞调用方）
         try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            loop.run_until_complete(_dispatch(issue_id))
+            _launch_dispatch(issue_id)
         except Exception as e:
             degrade("libs/qq_bot_runtime/self_coding.py:file_issue", e,
                     "降级：自动派发 issue 失败，转为待用户同意")
@@ -156,6 +209,28 @@ def file_issue(title: str, body: str = "", kind: str = "feature",
     else:
         _append_issue(issue)
     return {"ok": True, "issue_id": issue_id, "auto": auto, "state": issue["state"]}
+
+
+def _launch_dispatch(issue_id: str):
+    """派发 Issue 给构建助手（兼容同步与异步上下文）。
+
+    - 若当前已有运行中的事件循环（如在 async chat() 内被 report_ai_error 调用），
+      作为后台任务提交，不阻塞调用方、也不破坏外层循环；
+    - 否则新建一个事件循环同步跑完（兼容命令触发的同步路径）。
+    """
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        loop.create_task(_dispatch(issue_id))
+        return
+    new_loop = asyncio.new_event_loop()
+    try:
+        new_loop.run_until_complete(_dispatch(issue_id))
+    finally:
+        new_loop.close()
 
 
 def _rewrite_one(issue: Dict):
@@ -180,9 +255,7 @@ def approve_issue(issue_id: str) -> Dict:
             it["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
             _rewrite_issues(issues)
             try:
-                import asyncio
-                loop = asyncio.get_event_loop()
-                loop.run_until_complete(_dispatch(issue_id))
+                _launch_dispatch(issue_id)
             except Exception as e:
                 degrade("libs/qq_bot_runtime/self_coding.py:approve_issue", e,
                         "降级：派发 issue 失败")
@@ -206,51 +279,57 @@ def reject_issue(issue_id: str) -> Dict:
 # ---------------------------------------------------------------------------
 async def _dispatch(issue_id: str, max_rounds: int = 4) -> Dict:
     """把 Issue 派给构建助手：多轮协作，bug 回传 traceback 直到通过。"""
-    issues = _read_issues()
-    issue = next((i for i in issues if i.get("id") == issue_id), None)
-    if not issue:
-        return {"ok": False, "error": "issue 不存在"}
-    issue["state"] = ISSUE_OPEN
-    issue["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    _rewrite_issues(issues)
-
-    prompt = _build_prompt(issue)
-    last_err = ""
-    for rnd in range(1, max_rounds + 1):
-        issue["rounds"] = rnd
+    # 标记当前处于自编程构建过程：期间 LLM 失败不二次提 Issue，避免递归
+    tok = SC_WORLD.set("self_coding")
+    try:
+        issues = _read_issues()
+        issue = next((i for i in issues if i.get("id") == issue_id), None)
+        if not issue:
+            return {"ok": False, "error": "issue 不存在"}
+        issue["state"] = ISSUE_OPEN
         issue["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
         _rewrite_issues(issues)
-        # 第一轮给需求；后续轮把上一轮的 bug+回传 traceback 交回构建助手
-        if rnd == 1:
-            turn = prompt
-        else:
-            turn = (f"上一次构建后运行报错，请修复。\n"
-                    f"错误/失败信息：\n{last_err}\n"
-                    f"请定位并修正后重新给出可装载的产物。")
-        res = await _run_builder(turn)
-        if not res.get("ok"):
-            last_err = res.get("error", "未知错误")
+
+        prompt = _build_prompt(issue)
+        last_err = ""
+        for rnd in range(1, max_rounds + 1):
+            issue["rounds"] = rnd
+            issue["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            _rewrite_issues(issues)
+            # 第一轮给需求；后续轮把上一轮的 bug+回传 traceback 交回构建助手
+            if rnd == 1:
+                turn = prompt
+            else:
+                turn = (f"上一次构建后运行报错，请修复。\n"
+                        f"错误/失败信息：\n{last_err}\n"
+                        f"请定位并修正后重新给出可装载的产物。")
+            res = await _run_builder(turn)
+            if not res.get("ok"):
+                last_err = res.get("error", "未知错误")
+                issue["result"] = last_err
+                issue["state"] = ISSUE_FAILED
+                _rewrite_issues(issues)
+                continue
+            # 构建助手产出了草稿；尝试装载（自动装载开启时）
+            load_res = await _try_load(res, issue)
+            if load_res.get("ok"):
+                issue["state"] = ISSUE_DONE
+                issue["result"] = load_res.get("detail", "构建并装载完成")
+                issue["loaded_name"] = load_res.get("name")
+                _rewrite_issues(issues)
+                return {"ok": True, "issue_id": issue_id, "round": rnd,
+                        "loaded": load_res.get("name")}
+            # 装载失败：把 traceback 回传构建助手再修
+            last_err = load_res.get("error", "装载失败")
             issue["result"] = last_err
-            issue["state"] = ISSUE_FAILED
             _rewrite_issues(issues)
-            continue
-        # 构建助手产出了草稿；尝试装载（自动装载开启时）
-        load_res = await _try_load(res, issue)
-        if load_res.get("ok"):
-            issue["state"] = ISSUE_DONE
-            issue["result"] = load_res.get("detail", "构建并装载完成")
-            issue["loaded_name"] = load_res.get("name")
-            _rewrite_issues(issues)
-            return {"ok": True, "issue_id": issue_id, "round": rnd,
-                    "loaded": load_res.get("name")}
-        # 装载失败：把 traceback 回传构建助手再修
-        last_err = load_res.get("error", "装载失败")
-        issue["result"] = last_err
+        issue["state"] = ISSUE_FAILED
+        issue["result"] = last_err or "超出最大重试轮数"
         _rewrite_issues(issues)
-    issue["state"] = ISSUE_FAILED
-    issue["result"] = last_err or "超出最大重试轮数"
-    _rewrite_issues(issues)
-    return {"ok": False, "issue_id": issue_id, "error": issue["result"]}
+        return {"ok": False, "issue_id": issue_id, "error": issue["result"]}
+    finally:
+        # 无论成功/失败/异常，复位 world 标签，避免泄漏到外层上下文
+        SC_WORLD.reset(tok)
 
 
 def _build_prompt(issue: Dict) -> str:
