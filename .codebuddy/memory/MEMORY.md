@@ -64,7 +64,7 @@
 - `scan_packages()`/`read_manifest()`/状态轮询改用去重打印（`_log_manifest_issues` 按 mtime+签名；schema 缺失跨包聚合 `_flush_schema_notice`）。实例级事件改模块级标志（如 `_BUVID_NOTICE_DONE`）。启动日志目标 ~40 行。统计用 `sys.stdout.reconfigure(encoding="utf-8",errors="replace")`。
 
 ## 9. git 提交规范 / 工程
-- PowerShell 中文 commit 乱码 → **UTF-8 message 文件 + `git commit -F <file>`**（勿 `-m`，括号会被解析错）。验证 `chcp 65001; git --no-pager log -1 --format=%B`。
+- 中文提交信息编码坑（重要）：本环境 PowerShell 控制台为 GBK，`python -c "...中文..."` 或 `$msg=@'...'@` heredoc + `Set-Content -Encoding utf8` 写入的信息文件，**中文会被双重编码成乱码**（UTF-8 字节按 GBK 误读再 UTF-8；`git config i18n.commitEncoding` 默认 utf-8 仍中招）。**正确做法：用 `write_to_file` 工具直接写 `.git/CMSG.txt`（可靠 UTF-8，字节应为 `e6 9e 84`=构），再 `git -c i18n.commitEncoding=utf-8 commit --amend -F .git/CMSG.txt`，然后 `git push --force-with-lease origin main`（仅修正刚推送的 tip 提交）。** 校验：读提交对象字节 `b=subprocess.check_output(['git','log','-1','--format=%B']); b.decode('utf-8')` 应为正常中文（勿用 `git log` 直接看，GBK 控制台会误判为乱码）。
 - 静默异常治理（已完成全量）：`libs/qq_bot_runtime/quiet.py`(degrade/attention)+`tests/audit_silent_except.py`(AST 扫描分桶 A/B/C→DEGRADE_AUDIT.md)；生产代码静默 except 已清零。**坑：`app.py` 不能模块级 import quiet**（路径 bootstrap 后才就绪）。
 - 两层测试：引擎 `libs/qq_bot_runtime/tests/` + App `tests/`(57 项，`python -m unittest discover -s tests -v`，纯标准库)。改 bridge 后跑后者。新增测试用 `_IsolatedDataMixin`(落 tempfile 不污染 data/)。
 - 真正裸 `except:`=0；`except Exception:`=692(bridge 159/engine 500)。工作副本 ~30GB 但 git 只跟踪 ~1520 文件/60MB（dist/ 已 gitignore）。**LICENSE=MIT**。
