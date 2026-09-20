@@ -15,6 +15,7 @@
 import argparse
 import os
 import sys
+import threading
 import time
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -166,15 +167,20 @@ def main():
     print(f"[APP] 肥鱼娘 App 服务已就绪: {url}  (核心: {'已运行' if bridge.is_running() else '待启动'})")
 
     if args.with_core:
-        print("[APP] 正在启动智能体核心...")
-        r = bridge.start(wait=True)
-        if r.get("ok"):
-            started = pkg.ensure_sidecars()
-            if started:
-                print(f"[APP] sidecar 服务已启动: {', '.join(started)}")
-            print("[APP] 智能体核心已启动")
-        else:
-            print(f"[APP] 核心启动失败: {r.get('error')}（可在界面重试）")
+        # 先弹出 UI（splash 随 HTTP 就绪即淡出），核心在后台线程加载，
+        # 满足「先启动 UI、依赖/核心后台装载」：窗口立即可见，核心就绪后自动接管。
+        print("[APP] 正在后台启动智能体核心（UI 先显示，核心就绪后自动接管）...")
+        def _bg_start_core():
+            r = bridge.start(wait=True)
+            if r.get("ok"):
+                started = pkg.ensure_sidecars()
+                if started:
+                    print(f"[APP] sidecar 服务已启动: {', '.join(started)}")
+                print("[APP] 智能体核心已启动（后台完成）")
+            else:
+                print(f"[APP] 核心启动失败: {r.get('error')}（可在界面重试）")
+        threading.Thread(target=_bg_start_core, name="feiyu-core-boot",
+                         daemon=True).start()
 
     exit_code = 0
     try:
