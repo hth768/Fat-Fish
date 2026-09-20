@@ -316,6 +316,23 @@ class CoreBridge:
                 bridge.push(self._session, {"type": "audio", "path": str(path)})
                 return True
 
+            async def fetch_image(self, ref) -> bytes:
+                """取回图片二进制：App 端图片已落盘到 data/media，ref 即绝对路径。"""
+                import os
+                p = str(ref or "")
+                if p and os.path.isfile(p):
+                    with open(p, "rb") as f:
+                        return f.read()
+                raise RuntimeError("图片文件不存在: " + p)
+
+            async def fetch_video(self, ref) -> str:
+                """取回视频本地路径：App 端视频已落盘到 data/media，ref 即绝对路径。"""
+                import os
+                p = str(ref or "")
+                if p and os.path.isfile(p):
+                    return p
+                raise RuntimeError("视频文件不存在: " + p)
+
             async def tts(self, text, **kw):
                 bridge.push(self._session, {"type": "tts", "text": str(text)})
                 return True
@@ -335,10 +352,17 @@ class CoreBridge:
         return self._msg_classes
 
     def submit_chat(self, text: str, session: str = "web", user_id: str = OWNER_ID,
-                    name: str = OWNER_NAME, bot_id: str = None) -> dict:
-        """提交一条用户消息到指定 bot 的 ChatService（异步执行，回复走 SSE）。"""
+                    name: str = OWNER_NAME, bot_id: str = None,
+                    image_paths: list = None, video_path: str = None,
+                    audio_wav: bytes = None) -> dict:
+        """提交一条用户消息到指定 bot 的 ChatService（异步执行，回复走 SSE）。
+
+        媒体经本地落盘路径传入：image_paths=图片绝对路径列表；video_path=视频路径；
+        audio_wav=已解码为 wav 的语音字节（浏览器录音由 server 经 ffmpeg 转码后传入）。
+        """
         text = (text or "").strip()
-        if not text:
+        image_paths = [p for p in (image_paths or []) if p]
+        if not text and not image_paths and not video_path and not audio_wav:
             return {"ok": False, "error": "消息为空"}
         core = self.bot_manager.core_for(bot_id)
         if core is None or not getattr(core, "running", False):
@@ -352,6 +376,10 @@ class CoreBridge:
             user_name=name,
             message_id=str(uuid.uuid4()),
             text=text,
+            image_refs=image_paths,
+            audio_wav=audio_wav or b"",
+            has_video=bool(video_path),
+            video_ref=video_path,
             mentioned=True,
             raw={"session": session, "source": "app", "bot_id": bot_id or ""},
         )

@@ -266,19 +266,55 @@ function addChatMsg(role, text, local) {
   log.scrollTop = log.scrollHeight;
 }
 
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s == null ? "" : s;
+  return d.innerHTML;
+}
+
+function addChatMsgHtml(role, html) {
+  const log = $("#chatLog");
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.innerHTML = html;
+  if (role !== "user") {
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = fmtTime(Date.now() / 1000);
+    div.appendChild(meta);
+  }
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
 async function sendChat() {
   const input = $("#chatInput");
   const text = input.value.trim();
-  if (!text) return;
+  const hasMedia = pendingImages.length || pendingVideo || pendingAudio;
+  if (!text && !hasMedia) return;
   if (state.chatBusy) { toast("她还在思考中，稍等一下…"); return; }
   input.value = "";
   // 乐观锁：立即置忙，不等 SSE status 回包（防快速双击导致重复提交/重复回复）
   state.chatBusy = true;
   const chip = $("#chatState");
   chip.textContent = "思考中…"; chip.classList.add("busy");
-  addChatMsg("user", text, true);
+  // 本地乐观渲染用户消息（含附件缩略）
+  let userHtml = "";
+  if (text) userHtml += escapeHtml(text);
+  pendingImages.forEach(it => { userHtml += `<br><img class="chat-att" src="${it.dataUrl}">`; });
+  if (pendingVideo) userHtml += `<br><span class="chat-att-tag">🎬 视频</span>`;
+  if (pendingAudio) userHtml += `<br><span class="chat-att-tag">🎤 语音</span>`;
+  addChatMsgHtml("user", userHtml);
+  // 组装并清空待发附件
+  const payload = {
+    text, session: SESSION,
+    images: pendingImages.map(it => it.dataUrl),
+    video: pendingVideo ? pendingVideo.dataUrl : null,
+    audio: pendingAudio ? pendingAudio.dataUrl : null,
+  };
+  pendingImages = []; pendingVideo = null; pendingAudio = null; renderPending();
   try {
-    const r = await POST("/api/chat", { text, session: SESSION });
+    const r = await POST("/api/chat", payload);
     if (!r.ok) {
       addChatMsg("error", r.error || "发送失败");
       state.chatBusy = false;
@@ -295,6 +331,72 @@ $("#chatInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
 $("#btnClearChat").addEventListener("click", () => { $("#chatLog").innerHTML = ""; });
+
+// ---------------- 聊天附件：图片 / 视频 / 语音 ----------------
+let pendingImages = [];   // [{dataUrl, mime, name}]
+let pendingVideo = null; // {dataUrl, mime, name} | null
+let pendingAudio = null; // {dataUrl, mime} | null
+let mediaRecorder = null, recChunks = [];
+
+function fileToDataURL(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+function renderPending() {
+  const box = $("#chatPreview");
+  if (!box) return;
+  box.innerHTML = "";
+  const add = (label, thumb, remove) => {
+    const d = document.createElement("div");
+    d.className = "prev-item";
+    if (thumb) { const i = document.createElement("img"); i.src = thumb; d.appendChild(i); }
+    else { const s = document.createElement("span"); s.textContent = label; d.appendChild(s); }
+    const x = document.createElement("button");
+    x.className = "prev-x"; x.type = "button"; x.textContent = "×";
+    x.onclick = remove; d.appendChild(x);
+    box.appendChild(d);
+  };
+  pendingImages.forEach((it, i) => add("图片", it.dataUrl, () => { pendingImages.splice(i, 1); renderPending(); }));
+  if (pendingVideo) add("视频", null, () => { pendingVideo = null; renderPending(); });
+  if (pendingAudio) add("语音", null, () => { pendingAudio = null; renderPending(); });
+}
+$("#btnImg").addEventListener("click", () => $("#fileImg").click());
+$("#fileImg").addEventListener("change", async (e) => {
+  for (const f of e.target.files) {
+    pendingImages.push({ dataUrl: await fileToDataURL(f), mime: f.type, name: f.name });
+  }
+  e.target.value = ""; renderPending();
+});
+$("#btnVideo").addEventListener("click", () => $("#fileVideo").click());
+$("#fileVideo").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (f) pendingVideo = { dataUrl: await fileToDataURL(f), mime: f.type, name: f.name };
+  e.target.value = ""; renderPending();
+});
+$("#btnVoice").addEventListener("click", async () => {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") { mediaRecorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    recChunks = [];
+    mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) recChunks.push(ev.data); };
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      pendingAudio = { dataUrl: await fileToDataURL(blob), mime: blob.type || "audio/webm" };
+      renderPending();
+      stream.getTracks().forEach(t => t.stop());
+      const b = $("#btnVoice"); b.classList.remove("rec"); b.textContent = "🎤";
+    };
+    mediaRecorder.start();
+    const b = $("#btnVoice"); b.classList.add("rec"); b.textContent = "⏹";
+  } catch (err) {
+    toast("无法访问麦克风：" + (err && err.message ? err.message : err));
+  }
+});
 
 /* ---------------- 记忆中心 ---------------- */
 $$(".tab").forEach(t => t.addEventListener("click", () => {

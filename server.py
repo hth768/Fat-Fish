@@ -6,7 +6,9 @@ import os
 import socket
 import subprocess
 import sys
+import base64
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -20,6 +22,84 @@ if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
 from bridge import appearance_api, builder_api, config_api, memory_api, plugins_api, provider_api, summary_api  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# 聊天媒体附件：data URL 解码落盘 + 语音转码
+# ---------------------------------------------------------------------------
+_MEDIA_EXT = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
+    "image/gif": ".gif", "image/webp": ".webp", "image/bmp": ".bmp",
+    "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov",
+    "video/x-matroska": ".mkv",
+    "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mpeg": ".mp3",
+    "audio/webm": ".weba", "audio/ogg": ".ogg", "audio/mp4": ".m4a",
+    "audio/aac": ".aac", "audio/flac": ".flac",
+}
+
+
+def _decode_data_url(data_url):
+    """data:[mime];base64,xxxx -> (bytes, mime)；非 data URL 按裸 base64 尝试。"""
+    if not isinstance(data_url, str):
+        return None, ""
+    if data_url.startswith("data:"):
+        try:
+            head, b64 = data_url.split(",", 1)
+            mime = head[5:].split(";")[0] or "application/octet-stream"
+            return base64.b64decode(b64), mime
+        except Exception:
+            return None, ""
+    try:
+        return base64.b64decode(data_url), "application/octet-stream"
+    except Exception:
+        return None, ""
+
+
+def _media_dir():
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "media")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _save_media_file(data_url, prefix):
+    """data URL -> 落盘 data/media，返回绝对路径；无效返回 None。"""
+    raw, mime = _decode_data_url(data_url)
+    if not raw:
+        return None
+    ext = _MEDIA_EXT.get(mime, ".bin")
+    path = os.path.join(_media_dir(), f"{prefix}_{uuid.uuid4().hex}{ext}")
+    with open(path, "wb") as f:
+        f.write(raw)
+    return path
+
+
+def _audio_to_wav(data_url):
+    """语音 data URL -> (wav_bytes, error)。wav/mp3 直接返回；webm/ogg 经 ffmpeg 转 16k 单声道 wav。
+
+    浏览器 MediaRecorder 产出 webm/opus，引擎 ASR 需要 wav；转码复用视频处理共用的 ffmpeg
+    （config.FFMPEG_PATH，未配置则尝试 PATH 中的 ffmpeg）。
+    """
+    raw, mime = _decode_data_url(data_url)
+    if not raw:
+        return None, "语音数据无效"
+    if mime in ("audio/wav", "audio/x-wav", "audio/mpeg"):
+        return raw, ""
+    try:
+        from config import FFMPEG_PATH
+    except Exception:
+        FFMPEG_PATH = ""
+    ff = FFMPEG_PATH or "ffmpeg"
+    try:
+        p = subprocess.run(
+            [ff, "-y", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
+            input=raw, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        if p.returncode != 0 or not p.stdout:
+            return None, "语音转码失败（ffmpeg 不可用或格式不支持）"
+        return p.stdout, ""
+    except FileNotFoundError:
+        return None, "未安装 ffmpeg，无法处理该格式语音（请在「本地 AI 依赖」安装 ffmpeg）"
+    except Exception as e:  # noqa: BLE001
+        return None, f"语音转码异常：{e}"
 
 
 class QuietServer(ThreadingHTTPServer):
@@ -449,12 +529,32 @@ def make_handler(bridge):
                     ok = _local_installer.start(cuda=(mode == "cuda"))
                     return self._json({"ok": ok, "status": _local_installer.status()})
                 if path == "/api/chat":
+                    body_text = body.get("text", "") or ""
+                    images = [u for u in (body.get("images") or []) if isinstance(u, str)]
+                    video = body.get("video") or None
+                    audio = body.get("audio") or None
+                    image_paths, video_path, audio_wav, audio_err = [], None, None, None
+                    for u in images:
+                        p = _save_media_file(u, "img")
+                        if p:
+                            image_paths.append(p)
+                    if video:
+                        video_path = _save_media_file(video, "vid")
+                    if audio:
+                        audio_wav, audio_err = _audio_to_wav(audio)
+                    if audio and audio_err:
+                        return self._json({"ok": False, "error": audio_err})
+                    if not body_text.strip() and not image_paths and not video_path and not audio_wav:
+                        return self._json({"ok": False, "error": "消息为空"})
                     return self._json(bridge.submit_chat(
-                        text=body.get("text", ""),
+                        text=body_text,
                         session=body.get("session", "web"),
                         user_id=body.get("user_id", "app_owner"),
                         name=body.get("name", "主人"),
-                        bot_id=body.get("bot_id")))
+                        bot_id=body.get("bot_id"),
+                        image_paths=image_paths,
+                        video_path=video_path,
+                        audio_wav=audio_wav))
                 if path == "/api/core/start":
                     return self._json(bridge.start(wait=True))
                 if path == "/api/core/stop":

@@ -90,7 +90,15 @@
       <div class="chat-wrap">
         <div class="chat-log" id="chatLog"></div>
         <div class="chat-input-row">
-          <textarea id="chatInput" rows="2" placeholder="和肥鱼娘说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <div class="chat-toolbar">
+            <button class="icon-btn" id="btnImg" type="button" title="发送图片">🖼️</button>
+            <button class="icon-btn" id="btnVideo" type="button" title="发送视频">🎬</button>
+            <button class="icon-btn" id="btnVoice" type="button" title="点击录音，再点一次停止">🎤</button>
+            <input type="file" id="fileImg" accept="image/*" multiple hidden>
+            <input type="file" id="fileVideo" accept="video/*" hidden>
+          </div>
+          <div class="chat-preview" id="chatPreview"></div>
+          <textarea id="chatInput" rows="2" placeholder="和肥鱼娘说点什么…（Enter 发送，Shift+Enter 换行；可附图片/视频/语音）"></textarea>
           <button class="btn primary" id="btnSend">发送</button>
         </div>
       </div>
