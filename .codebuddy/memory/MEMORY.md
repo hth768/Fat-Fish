@@ -13,6 +13,9 @@
 - **同步方向铁律（2026-09-19 纠正）**：部署副本（`e:\qq_bot`/`E:\feiyu_app`）是仓库**下游**，仓库是唯一真相源。漂移修复一律 **仓库→部署**（复制/新增、**绝不删除**部署副本独有文件）。曾误判为部署→仓库：部署的 `codebuddy_cli.py` + `config.CODEBUDDY_*` + plugin_registry 4 个 brain 注册是**被仓库 `self_coding.py`/构建助手 + 插件化大脑取代的旧方案**，部署副本只是没同步而陈旧——**切勿把 codebuddy_cli 合回仓库**（会回退架构）。
 - `e:\qq_bot` 引擎比仓库 `libs/qq_bot_runtime` **多 27 个 .py**（游戏自动化 `mc_*`/`pc_*`/`pvz_*` + 陈旧 `codebuddy_cli.py`），这些不在仓库、同步时**须保留不删**；仓库捆绑引擎 = 核心，游戏模块是部署副本额外层。
 - 自编程架构（当前）：`libs/qq_bot_runtime/self_coding.py`（Issue 机制 `/同意issue` `/拒绝issue`，复用构建助手 `builder_api`）+ `config.BOT_SELF_CODING_*` 开关。旧 `codebuddy_cli.py`（外部 CLI 方案）已弃用，部署副本残留为孤立文件（无导入、无害）。
+  - **提交 Issue 的两种情况**：(1) 被动自动报障——`ai_provider.UnifiedLLM.chat` 在 AI 调用失败时统一调 `self_coding.report_ai_error` → 提 `kind="fix"` Issue（含 traceback）；(2) 用户显式 `/提issue <需求>` 或 `/提需求 <需求>` → 提 `kind="feature"` Issue（用户发起，非智能体自发）。`/同意issue <id>` `/拒绝issue <id>` 控制执行。
+  - **`report_ai_error` 触发闸门**（self_coding.py）：①总开关 `BOT_SELF_CODING_ENABLED=True`（默认 False，需 `/开启自我编程`，关闭则完全不触发）；②`world != "self_coding"`（构建过程内不二次提、防递归）；③同一 `(world, 异常类型, 上下文前40字)` 10 分钟冷却去重（`_REPORT_COOLDOWN=600s`，防刷屏）；④永不抛异常。
+  - 开关默认值（config.py）：`BOT_SELF_CODING_ENABLED=False`、PERM="full"、`ISSUE_AUTO=True`（提了自动派构建助手做；False 需用户同意）、`AUTO_LOAD=True`（做完自动装载+启动）、WORKSPACE=应用根目录。开关命令：`/开启自我编程` `/关闭自我编程`，权限 `/权限 <档>`。
 - 游戏大脑（McBotBrain/McModBrain/PcBrain/PvzBrain）**不在** `agent_core.py`，而在 `E:\feiyu_app\plugins/brain_*` 插件包；`plugin_registry` 仅内置注册 `chat` 大脑，其余由 brain_* 插件包自带（`module="agent_core"` 旧写法已废弃）。
 - 模型注册表：`config.py` 的 `AI_PROVIDERS={}`/`AI_CAPABILITY_ROUTING` 置空；真实 Key 在同目录 `ai_providers.json`（覆盖层，热重载）。**Key 勿写 config.py/勿提交**；`GLM_API_KEY` 等顶层变量（语音用）保留。
 - 端点约定：`/api/appearance/icon`(+reset) 是 POST；`/api/memory/export` 是 GET；`/api/builder/*` 只读查询在 do_GET(query 传参)，do_POST 只放写。

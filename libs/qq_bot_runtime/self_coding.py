@@ -385,8 +385,21 @@ def _build_prompt(issue: Dict) -> str:
         parts.append("需求描述：\n" + issue["body"])
     if issue.get("traceback"):
         parts.append("相关报错/traceback：\n" + issue["traceback"])
-    parts.append("请生成或改进对应的智能体/插件代码，产出可保存的产物草稿，"
-                 "并尽量让产物能通过语法检查与基本导入。")
+    parts.append(
+        "你是一个内置构建助手。请直接动手实现一个【可被装载的插件(plugin)包】，"
+        "不要只停留在分析/阅读代码。\n\n"
+        "硬性要求：\n"
+        "1) 产物必须以插件包形式落到 `plugins/<包名>/` 目录：至少含 `plugin.py` 与 "
+        "MANIFEST（含 name/title/version/kind=feature 或 platform/sidecar/local/description）。\n"
+        "2) 必须调用工具 `save_plugin`（或在 `plugins/<包名>/` 下用 `write_file`）把产物真正"
+        "保存下来，不能只输出代码片段。\n"
+        "3) 工作区仅允许写入 plugins/agents/bridge/libs/webui/config；"
+        "**不要**尝试修改 app.py / server.py / settings_store.py 等核心入口（它们不在允许根内）。"
+        "若功能需要核心改动，请用插件方式扩展（如 brain/sidecar/local 类型插件，或 hook 进现有 bridge）。\n"
+        "4) 包名用简短英文小写+下划线，由需求推导（例：「定时提醒」-> reminder_plugin）。\n"
+        "5) 完成后确保包能通过 Python 语法检查（import 不报错）。\n\n"
+        "请开始调查并产出可保存的插件包。"
+    )
     return "\n\n".join(parts)
 
 
@@ -443,7 +456,16 @@ async def _run_builder(turn: str, issue: Optional[Dict] = None,
             use_history=True,
             stream=True,
             emit=_emit,
+            max_steps=22,
         )
+        # 记录构建产物识别到的包名，便于排错/重提
+        if issue is not None:
+            try:
+                nm = _extract_pkg_name(res)
+                if nm:
+                    issue["built_name"] = nm
+            except Exception:
+                pass
         # 确保最终状态落盘（避免末尾 delta 被节流丢弃）
         try:
             _rewrite_issues(issues)
@@ -469,10 +491,46 @@ def _get_core():
         return None
 
 
+def _newest_plugin_since(issue: Dict) -> Optional[str]:
+    """兜底：扫描 plugins/ 下构建期间（晚于 issue 创建时间）新建/改动过的插件目录，
+    返回其包名。用于构建助手用 write_file 落到 plugins/<name>/ 但未显式 save_plugin 的场景。
+    """
+    import os
+    try:
+        import time as _t
+        import bridge.pkg_manager as pm
+        root = getattr(pm, "PACKAGE_DIR", None) or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(pm.__file__))), "plugins")
+        if not os.path.isdir(root):
+            return None
+        created = 0.0
+        cs = issue.get("created")
+        if cs:
+            try:
+                created = _t.mktime(_t.strptime(cs, "%Y-%m-%d %H:%M:%S"))
+            except Exception:
+                created = 0.0
+        best, best_m = None, 0.0
+        for d in os.listdir(root):
+            dp = os.path.join(root, d)
+            if not (os.path.isdir(dp) and os.path.exists(os.path.join(dp, "plugin.py"))):
+                continue
+            m = os.path.getmtime(dp)
+            if m > best_m:
+                best_m, best = m, d
+        # 仅在确实晚于 issue 创建时才信任（排除历史插件）
+        if best and best_m >= created:
+            return best
+    except Exception:
+        pass
+    return None
+
+
 async def _try_load(build_res: Dict, issue: Dict) -> Dict:
     """尝试把构建产物装载进核心；自动装载关闭时只返回「建议装载」不实际装载。"""
     # 构建助手生成的产物可能含 manifest 包；这里根据产物名尝试 pkg_manager.load
-    name = _extract_pkg_name(build_res) or issue.get("loaded_name")
+    name = (_extract_pkg_name(build_res) or issue.get("loaded_name")
+            or _newest_plugin_since(issue))
     if not name:
         return {"ok": False, "error": "未能从产物识别包名，无法装载"}
     auto = bool(getattr(config, "BOT_SELF_CODING_AUTO_LOAD", True))
@@ -480,21 +538,23 @@ async def _try_load(build_res: Dict, issue: Dict) -> Dict:
         return {"ok": False, "error": f"自动装载已关闭，请用户允许或手动 /装载 {name}",
                 "suggest_load": name}
     try:
-        import bridge.pkg_manager as pm
-        core = _get_core()
-        if core is None:
-            return {"ok": False, "error": "核心未运行，无法装载"}
-        ok = pm.load(name, core)
-        if ok:
+        from bridge.plugins_api import manager as _pm_manager
+        pm = _pm_manager()
+        if pm is None:
+            return {"ok": False, "error": "插件管理器未初始化"}
+        res = pm.load(name)
+        if res.get("ok"):
             # 对新 brain/world 类型尝试启动
             try:
-                br = core.brains.get(name)
-                if br is not None and getattr(br, "auto_start_on_core", False):
-                    await br.start()
+                core = _get_core()
+                if core is not None:
+                    br = core.brains.get(name)
+                    if br is not None and getattr(br, "auto_start_on_core", False):
+                        await br.start()
             except Exception:
                 pass
             return {"ok": True, "name": name, "detail": f"已自动装载并启动 {name}"}
-        return {"ok": False, "error": f"pkg_manager.load({name}) 失败"}
+        return {"ok": False, "error": res.get("error", f"pkg_manager.load({name}) 失败")}
     except Exception as e:
         return {"ok": False, "error": f"装载异常：{e!r}"}
 
