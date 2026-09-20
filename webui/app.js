@@ -140,6 +140,10 @@ function handleEvent(ev) {
     chip.classList.toggle("busy", state.chatBusy);
   } else if (ev.type === "error") {
     addChatMsg("error", "出错了: " + ev.text);
+  } else if (ev.type === "plugins_updated") {
+    // 构建成功后插件自动加入并启动：若正停留在插件页则立即刷新
+    if (!$("#page-plugins").classList.contains("hidden")) loadPlugins();
+    refreshCorePill();
   }
   refreshCorePill();
 }

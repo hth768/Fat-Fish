@@ -1729,6 +1729,11 @@ class ChatService:
         except Exception as e:
             print(f"[WARN] 说话人标签注入失败（不影响主流程）: {e}")
 
+        # 注入自身能力提示：已装载插件 + 自我编程能力，避免对插件能做的/可自建的需求回答「做不到了」
+        cap_hint = _build_self_capability_hint()
+        if cap_hint:
+            messages.append({"role": "system", "content": cap_hint})
+
         # 调用模型（统一供应商：推理走 reasoning，否则 chat）
         # 若当前 bot 在 AgentCore 上设置了 _model_override，则覆盖主聊天模型（不改变推理模型）
         _model_override = getattr(getattr(self, "core", None), "_model_override", None)
@@ -2346,6 +2351,60 @@ async def _judge_capabilities(text: str, judge_search: bool, judge_reason: bool,
 
 
 _FEATURE_ISSUE_COOLDOWN: Dict[str, float] = {}
+
+
+def _build_self_capability_hint() -> str:
+    """构造注入主聊天的「自身能力」提示：让模型知道当前已装载启用的插件，以及具备自我编程
+    （可自主提 issue 构建新插件）的能力，从而避免对「插件能做的」或「可自建的」需求
+    回答「做不到了 / 我做不到 / 不支持」。"""
+    try:
+        enabled_self = bool(getattr(config, "BOT_SELF_CODING_ENABLED", False))
+    except Exception:
+        enabled_self = False
+
+    parts = []
+
+    # 当前已装载启用的插件清单
+    try:
+        from bridge import plugins_api  # type: ignore
+    except Exception:
+        try:
+            import plugins_api  # type: ignore
+        except Exception:
+            plugins_api = None
+    plug_lines = []
+    if plugins_api is not None:
+        pm = plugins_api.manager()
+        if pm is not None:
+            try:
+                data = pm.list_all()
+                for it in data.get("items", []):
+                    if not it.get("enabled"):
+                        continue
+                    if it.get("kind") in ("invalid",):
+                        continue
+                    desc = (it.get("description") or "").strip() or "（无描述）"
+                    title = it.get("title") or it.get("name")
+                    status = "（运行中）" if it.get("running") else "（已启用，未运行）"
+                    plug_lines.append(f"- {title}（{it.get('name')}，{it.get('kind')}）{status}：{desc}")
+            except Exception:
+                pass
+    if plug_lines:
+        parts.append("【你当前已装载并启用的插件】当主人提出的需求能被下列插件覆盖时，"
+                     "优先调用这些插件的能力，而不是说自己做不到：\n" + "\n".join(plug_lines))
+
+    if enabled_self:
+        parts.append(
+            "【你的自我编程（自主扩展）能力】你具备自主扩展能力：当主人提出的功能你当前"
+            "无法直接用内置能力或上面列出的插件实现时，系统会自动为你创建一个开发任务"
+            "（issue）并自主构建对应的插件/功能，构建完成后会自动装载、启用并启动。\n"
+            "因此，遇到暂时做不到的需求，不要回答「做不到了」「我做不到」「目前还不支持」之类"
+            "的话；应主动说明你打算为它构建/扩展一个插件，并让系统去实现，例如："
+            "「这个我暂时没有现成能力，不过我可以自动做一个插件来实现，已经帮你提交开发任务了，"
+            "完成后会自动启用。」"
+        )
+
+    return "\n\n".join(parts)
 
 
 def _build_capability_catalog() -> str:

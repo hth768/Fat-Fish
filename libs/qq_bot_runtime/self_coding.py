@@ -553,6 +553,15 @@ async def _try_load(build_res: Dict, issue: Dict) -> Dict:
                         await br.start()
             except Exception:
                 pass
+            # 通知 UI/用户：插件已自动加入插件页并启动
+            try:
+                b = getattr(pm, "bridge", None)
+                if b is not None:
+                    b.push(None, {"type": "plugins_updated", "name": name})
+                    b.push(None, {"type": "message", "role": "assistant",
+                                  "text": f"✅ 已自动装载并启动插件「{name}」，可在「插件」页查看。"})
+            except Exception:
+                pass
             return {"ok": True, "name": name, "detail": f"已自动装载并启动 {name}"}
         return {"ok": False, "error": res.get("error", f"pkg_manager.load({name}) 失败")}
     except Exception as e:
