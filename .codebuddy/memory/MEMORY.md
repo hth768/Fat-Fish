@@ -7,6 +7,7 @@
   - `e:\feiyu_standalone`：**唯一 git 提交目标**（含捆绑引擎 `libs/qq_bot_runtime`）。
   - `e:\qq_bot`：独立引擎版，只有引擎无 App 层（无 bridge/server/app/plugins），自带 webui 是引擎控制台。非 git。
   - `E:\feiyu_app`：第二份 App 部署（有 App 层无 libs），复用 `e:\qq_bot` 引擎，靠 `FEIYU_QQ_BOT=E:\qq_bot`。非 git，**部署副本一律不提交**。
+  - `D:\testing\Fat-Fish`：D 盘完整克隆（2026-09-20，D 盘根目录无写权限故在 testing 子目录）。用户实际运行此副本：`"E:\qq_bot\venv\Scripts\python.exe" D:\testing\Fat-Fish\app.py --with-core`（detached，日志 `data\app.log`）；读 `E:/feiyu_standalone/data/app_settings.json` 覆盖层。同步修复时**三处副本都要同步**（e:\qq_bot 引擎 / E:\feiyu_app / D:\testing\Fat-Fish 全量）。`--with-core` 同名两 python 进程 = 正常父子结构。
 - **重启部署**：`Get-CimInstance Win32_Process` 找命令行含 `feiyu_app\app.py` 的 PID → `Stop-Process -Force`；再 `Start-Process cmd.exe -ArgumentList '/c','set FEIYU_QQ_BOT=E:\qq_bot&& E:\qq_bot\venv\Scripts\python.exe E:\feiyu_app\app.py --with-core > E:\feiyu_app\data\<log> 2>&1'`（detached，**勿 `-NoNewWindow`** 会阻塞）。会短暂关窗口后自动重开。
 - **同步规则**：App 层→`E:/feiyu_app`：`bridge/* webui/* server.py app.py settings_store.py plugins/groups.json README.md OVERVIEW.md PLUGINS.md tests/*`（先 Get-FileHash 比对落后文件；改 webui 必须重启=WebView2 缓存）。引擎层→`e:\qq_bot`：**必须连带复制全部依赖模块**（逐核对顶层 import + Test-Path），否则"启动能、来消息崩"。
 - **同步方向铁律（2026-09-19 纠正）**：部署副本（`e:\qq_bot`/`E:\feiyu_app`）是仓库**下游**，仓库是唯一真相源。漂移修复一律 **仓库→部署**（复制/新增、**绝不删除**部署副本独有文件）。曾误判为部署→仓库：部署的 `codebuddy_cli.py` + `config.CODEBUDDY_*` + plugin_registry 4 个 brain 注册是**被仓库 `self_coding.py`/构建助手 + 插件化大脑取代的旧方案**，部署副本只是没同步而陈旧——**切勿把 codebuddy_cli 合回仓库**（会回退架构）。

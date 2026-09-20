@@ -1387,6 +1387,7 @@ class ChatService:
 
         # 说话人标识（防串台降级）：优先真实称呼，其次 user_name，再次 channel 兜底，最后 "用户"
         # 既用于下方记忆注入的身份锚点，也用于待会儿给每条 user 消息打标签。
+        user_name = getattr(msg, "user_name", "") or ""
         try:
             from emotion import resolve_display_name
             speaker_label = (resolve_display_name(user_id) or user_name or user_id

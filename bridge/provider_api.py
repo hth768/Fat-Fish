@@ -146,6 +146,8 @@ def save_provider(slot: str, payload: dict) -> dict:
     # 前端若只回传掩码（未改动），保留原密钥
     if is_masked(api_key) and existing.get("api_key"):
         api_key = existing["api_key"]
+    if not api_key and existing.get("api_key"):
+        api_key = existing["api_key"]
     if not api_key:
         return {"ok": False, "error": "请填写 API Key"}
     if not base_url:
@@ -268,17 +270,21 @@ def save_model(payload: dict) -> dict:
         api_style = pinfo.get("api_style", "openai")
     if not base_url:
         base_url = pinfo.get("base_url", "")
-    if not api_key and preset:
+    cfg = load_provider_config()
+    existing = cfg["providers"].get(name, {})
+    # 掩码还原：前端未改动密钥时回传 "****"，应沿用已有密钥而非报错
+    if is_masked(api_key) and existing.get("api_key"):
+        api_key = existing["api_key"]
+    # 留空且已有密钥：视为不修改，保留原密钥（编辑模型时常见）
+    if not api_key and existing.get("api_key"):
+        api_key = existing["api_key"]
+
+    if not api_key:
         return {"ok": False, "error": "请填写 API Key"}
     if not base_url:
         return {"ok": False, "error": "请填写 Base URL"}
     if not model:
         return {"ok": False, "error": "请选择或填写模型名"}
-
-    cfg = load_provider_config()
-    existing = cfg["providers"].get(name, {})
-    if is_masked(api_key) and existing.get("api_key"):
-        api_key = existing["api_key"]
 
     provider = {
         "api_key": api_key,

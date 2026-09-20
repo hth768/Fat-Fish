@@ -18,6 +18,8 @@ from quiet import degrade
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WINDOW_TITLE = "肥鱼娘 · App 控制台"
+# Edge --app 子进程句柄：窗口关闭需由主进程感知（否则主进程常驻不退出）。
+_edge_proc = None
 # pywebview 模块对象（导入成功后由 try_app_window 填）：js_api 需要它访问 windows / 常量。
 # 注意：不能在 try_app_window 里 `import webview` 后就让 js_api 直接引用 —— 那是函数局部名，
 # js_api 里会 NameError 并被 except 静默吞掉（set_title 曾因此长期无效）。
@@ -108,10 +110,11 @@ def _edge_candidates() -> list:
 
 def _open_edge_app(url: str) -> bool:
     """用 Edge --app 模式打开无地址栏独立窗口。"""
+    global _edge_proc
     for exe in _edge_candidates():
         if os.path.isfile(exe):
             try:
-                subprocess.Popen(
+                _edge_proc = subprocess.Popen(
                     [exe, f"--app={url}",
                      f"--window-size={WIDTH},{HEIGHT}"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -120,6 +123,7 @@ def _open_edge_app(url: str) -> bool:
                 print(f"[WINDOW] 已用 Edge App 窗口打开: {url}")
                 return True
             except Exception as e:
+                _edge_proc = None
                 print(f"[WINDOW][WARN] Edge 启动失败: {e!r}")
     return False
 
@@ -180,11 +184,15 @@ def try_app_window(url: str, title: str = WINDOW_TITLE) -> str | None:
 
 
 def _wait_for_close(url: str):
-    """Edge/浏览器模式下等待退出信号（Ctrl+C 或窗口关闭后无法感知，Ctrl+C 退出）。"""
+    """Edge/浏览器模式下等待退出信号：Edge --app 窗口关闭即退出（否则需 Ctrl+C）。"""
     import time
-    print("[WINDOW] 提示：关闭服务请在本控制台按 Ctrl+C（或直接关闭本窗口进程）")
+    print("[WINDOW] 提示：关闭 Edge 窗口即可退出，或在本控制台按 Ctrl+C")
     try:
         while True:
-            time.sleep(3600)
+            # 感知 Edge 子进程退出：用户关闭窗口 -> msedge 进程结束 -> 主进程随之退出
+            if _edge_proc is not None and _edge_proc.poll() is not None:
+                _diag("Edge 窗口已关闭，主进程退出")
+                return
+            time.sleep(0.5)
     except KeyboardInterrupt as e:
         degrade("bridge/app_window.py:189 _wait_for_close", e, "降级：while True")

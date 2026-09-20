@@ -273,7 +273,13 @@ class AgentCore:
         self.running = True
         # 注册表自检：清单与已注册插件是否一致（版本/依赖/漂移），发现问题仅告警不阻塞
         try:
-            self.plugins.validate_registry(log=True, platforms=self._platforms_from_config())
+            # App 模式下核心以库方式嵌入（core.app_bridge 已挂载），App 自身即平台、
+            # 不注册引擎平台插件（WebPlugin 等由 App 自己的 WebUI 提供），故跳过
+            # 「平台插件漂移」判定（validate_registry(platforms=None) 即不检查平台）。
+            # 引擎独立运行（main.py / web_plugin.py）不挂 app_bridge，仍按 config 全量校验。
+            platforms = None if getattr(self, "app_bridge", None) is not None \
+                else self._platforms_from_config()
+            self.plugins.validate_registry(log=True, platforms=platforms)
         except Exception as e:
             print(f"[CORE][WARN] 注册表校验异常: {e}")
         await self.plugins.start_all()
