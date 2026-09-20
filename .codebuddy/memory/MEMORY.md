@@ -3,68 +3,62 @@
 *逐日细节见同目录 `YYYY-MM-DD.md`。本文件只存跨会话稳定、高频复用的要点。*
 
 ## 1. 项目结构与部署副本
-- 仓库 `e:\feiyu_standalone`（GitHub `hth768/Fat-Fish`）= Python HTTP 后端 + pywebview/Edge 窗口 + 原生 JS WebUI（`webui/`）。
-  - `e:\feiyu_standalone`：**唯一 git 提交目标**（含捆绑引擎 `libs/qq_bot_runtime`）。
-  - `e:\qq_bot`：独立引擎版，只有引擎无 App 层（无 bridge/server/app/plugins），自带 webui 是引擎控制台。非 git。
-  - `E:\feiyu_app`：第二份 App 部署（有 App 层无 libs），复用 `e:\qq_bot` 引擎，靠 `FEIYU_QQ_BOT=E:\qq_bot`。非 git，**部署副本一律不提交**。
-  - `D:\testing\Fat-Fish`：D 盘完整克隆（2026-09-20，D 盘根目录无写权限故在 testing 子目录）。用户实际运行此副本：`"E:\qq_bot\venv\Scripts\python.exe" D:\testing\Fat-Fish\app.py --with-core`（detached，日志 `data\app.log`）；读 `E:/feiyu_standalone/data/app_settings.json` 覆盖层。同步修复时**三处副本都要同步**（e:\qq_bot 引擎 / E:\feiyu_app / D:\testing\Fat-Fish 全量）。`--with-core` 同名两 python 进程 = 正常父子结构。
-- **重启部署**：`Get-CimInstance Win32_Process` 找命令行含 `Fat-Fish\app.py`（或 `feiyu_app\app.py`）的 PID → `Stop-Process -Force`；再 `Start-Process cmd.exe -ArgumentList '/c','set FEIYU_QQ_BOT=E:\qq_bot&& E:\qq_bot\venv\Scripts\python.exe D:\testing\Fat-Fish\app.py --with-core > D:\testing\Fat-Fish\data\app.log 2>&1'`（detached，**勿 `-NoNewWindow`** 会阻塞）。会短暂关窗口后自动重开。`--with-core` 同名两 python 进程 = 正常父子结构。
-- **同步规则**：App 层→`E:/feiyu_app`：`bridge/* webui/* server.py app.py settings_store.py plugins/groups.json README.md OVERVIEW.md PLUGINS.md tests/*`（先 Get-FileHash 比对落后文件；改 webui 必须重启=WebView2 缓存）。引擎层→`e:\qq_bot`：**必须连带复制全部依赖模块**（逐核对顶层 import + Test-Path），否则"启动能、来消息崩"。
-- **同步方向铁律（2026-09-19 纠正）**：部署副本（`e:\qq_bot`/`E:\feiyu_app`）是仓库**下游**，仓库是唯一真相源。漂移修复一律 **仓库→部署**（复制/新增、**绝不删除**部署副本独有文件）。曾误判为部署→仓库：部署的 `codebuddy_cli.py` + `config.CODEBUDDY_*` + plugin_registry 4 个 brain 注册是**被仓库 `self_coding.py`/构建助手 + 插件化大脑取代的旧方案**，部署副本只是没同步而陈旧——**切勿把 codebuddy_cli 合回仓库**（会回退架构）。
-- `e:\qq_bot` 引擎比仓库 `libs/qq_bot_runtime` **多 27 个 .py**（游戏自动化 `mc_*`/`pc_*`/`pvz_*` + 陈旧 `codebuddy_cli.py`），这些不在仓库、同步时**须保留不删**；仓库捆绑引擎 = 核心，游戏模块是部署副本额外层。
-- 自编程架构（当前）：`libs/qq_bot_runtime/self_coding.py`（Issue 机制 `/同意issue` `/拒绝issue`，复用构建助手 `builder_api`）+ `config.BOT_SELF_CODING_*` 开关。旧 `codebuddy_cli.py`（外部 CLI 方案）已弃用，部署副本残留为孤立文件（无导入、无害）。
-  - **提交 Issue 的两种情况**：(1) 被动自动报障——`ai_provider.UnifiedLLM.chat` 在 AI 调用失败时统一调 `self_coding.report_ai_error` → 提 `kind="fix"` Issue（含 traceback）；(2) 用户显式 `/提issue <需求>` 或 `/提需求 <需求>` → 提 `kind="feature"` Issue（用户发起，非智能体自发）。`/同意issue <id>` `/拒绝issue <id>` 控制执行。
-  - **`report_ai_error` 触发闸门**（self_coding.py）：①总开关 `BOT_SELF_CODING_ENABLED=True`（默认 False，需 `/开启自我编程`，关闭则完全不触发）；②`world != "self_coding"`（构建过程内不二次提、防递归）；③同一 `(world, 异常类型, 上下文前40字)` 10 分钟冷却去重（`_REPORT_COOLDOWN=600s`，防刷屏）；④永不抛异常。
-  - 开关默认值（config.py）：`BOT_SELF_CODING_ENABLED=False`、PERM="full"、`ISSUE_AUTO=True`（提了自动派构建助手做；False 需用户同意）、`AUTO_LOAD=True`（做完自动装载+启动）、WORKSPACE=应用根目录。开关命令：`/开启自我编程` `/关闭自我编程`，权限 `/权限 <档>`。
-  - **构建后自动入插件页**：`_try_load` 在 `pm.load(name)` 成功后 `pm.bridge.push(None, {"type":"plugins_updated","name":name})` 广播 UI 刷新 + 推送 assistant 消息「已自动装载并启动」。前端 `app.js` `handleEvent` 收 `plugins_updated` 刷新插件页（`loadPlugins`+`refreshCorePill`）。
-  - **能力提示防“做不到了”**：`chat_service._build_self_capability_hint()` 在 `_chat_pipeline` 调模型前注入 system 消息——列出 `plugins_api.manager().list_all()` 中**已启用**插件，且 `BOT_SELF_CODING_ENABLED` 为真时附「自我编程能力」说明（遇到做不到的需求应主动声明要为其构建插件而非回答“做不到了”）。无已启用插件且自编程关闭时返回空串不注入。
-- 游戏大脑（McBotBrain/McModBrain/PcBrain/PvzBrain）**不在** `agent_core.py`，而在 `E:\feiyu_app\plugins/brain_*` 插件包；`plugin_registry` 仅内置注册 `chat` 大脑，其余由 brain_* 插件包自带（`module="agent_core"` 旧写法已废弃）。
-- 模型注册表：`config.py` 的 `AI_PROVIDERS={}`/`AI_CAPABILITY_ROUTING` 置空；真实 Key 在同目录 `ai_providers.json`（覆盖层，热重载）。**Key 勿写 config.py/勿提交**；`GLM_API_KEY` 等顶层变量（语音用）保留。
-- 端点约定：`/api/appearance/icon`(+reset) 是 POST；`/api/memory/export` 是 GET；`/api/builder/*` 只读查询在 do_GET(query 传参)，do_POST 只放写。
-- 捆绑 Python：`libs\qq_bot_runtime\runtime\python\python.exe`（`-m py_compile` 校验）。盘符漂移排错：本机无 F: 盘，绝对路径先 Test-Path 再 where。
+- 仓库 `e:\feiyu_standalone`（GitHub `hth768/Fat-Fish`）= Python HTTP 后端 + pywebview/Edge 窗口 + 原生 JS WebUI。含捆绑引擎 `libs/qq_bot_runtime`，**唯一 git 提交目标**。
+- 部署副本（均非 git，一律不提交）：
+  - `e:\qq_bot`：纯引擎（无 App 层；比仓库多 ~27 个游戏自动化 `mc_*`/`pc_*`/`pvz_*` + 陈旧孤立 `codebuddy_cli.py`，同步时须保留不删）。
+  - `E:\feiyu_app`：App 层（无 libs），靠 `FEIYU_QQ_BOT=E:\qq_bot` 复用引擎。
+  - `D:\testing\Fat-Fish`：完整克隆（D 盘根无写权限，放 testing 子目录），**用户实际运行**：`"E:\qq_bot\venv\Scripts\python.exe" D:\testing\Fat-Fish\app.py --with-core`，日志 `data\app.log`，读 `E:/feiyu_standalone/data/app_settings.json` 覆盖层。`--with-core` 同名两 python 进程 = 正常父子。
+- **同步方向铁律**：仓库是唯一真相源，漂移修复一律 **仓库→部署**（复制/新增、**绝不删除**部署副本独有文件）。部署残留的 `codebuddy_cli.py`/`CODEBUDDY_*` 是已被 `self_coding.py`/构建助手取代的旧方案，**切勿合回仓库**。
+- **三处副本都要同步**：引擎层→`e:\qq_bot`（须连带依赖模块，否则"启动能、来消息崩"）；App 层→`E:\feiyu_app`（改 webui 必重启=WebView2 缓存）；全量→`D:\testing\Fat-Fish`。先 `Get-FileHash` 比对落后文件。
+- **重启**：`Get-CimInstance Win32_Process` 找命令行含 `Fat-Fish\app.py` 的 PID → `Stop-Process -Force`；再 `Start-Process cmd.exe -ArgumentList '/c','set FEIYU_QQ_BOT=E:\qq_bot&& E:\qq_bot\venv\Scripts\python.exe D:\testing\Fat-Fish\app.py --with-core > D:\testing\Fat-Fish\data\app.log 2>&1'`（detached，**勿 `-NoNewWindow`** 会阻塞）。
+- 模型 Key：真实值在同目录 `ai_providers.json`（覆盖层、热重载），**勿写 config.py/勿提交**；`config.AI_PROVIDERS={}`/`AI_CAPABILITY_ROUTING` 置空。`GLM_API_KEY` 等顶层变量（语音用）保留。
+- 端点约定：`/api/appearance/icon`(+reset) POST；`/api/memory/export` GET；`/api/builder/*` 只读在 do_GET、写只在 do_POST。
+- 捆绑 Python：`libs\qq_bot_runtime\runtime\python\python.exe`（`-m py_compile` 校验）。本机无 F: 盘，绝对路径先 `Test-Path`。
 
-## 2. bot 记忆子系统（qq_bot_runtime）
-- `long_term_memory.py` 用户档案（新覆盖旧）；`persona_memory.py` AI 人格（旧优先）；`reflection_memory.py` 交互规则（按 user_id；空=全局共享）；`important_notes.py` 一次性信息。均由 `chat_service.py` 调用。
-- 避坑：档案/反思须区分主体是"用户"还是"AI"，否则模型把 AI 特征写进用户档案。
-- **防串台**：每条发往 AI 的消息带 `[当前用户称呼]` 前缀（`chat_service._chat_pipeline` 给每条 user 消息加，构建新列表不改持久历史）。`build_memory_messages` 的 profile/notes/persona 注入有 `if user_id` 守卫，空 user_id 整段跳过（靠消息打标签兜底）。
-- **QQ 群白名单**（提交 c9404de）：`config.QQ_GROUP_WHITELIST=[]`（空=关闭=所有群；非空=仅列表内群号）。`qq_plugin.py` 群分发入口不在白名单则 continue。`e:\qq_bot\config.py` 填群号生效。
+## 2. 自编程（BOT Self Coding）
+- 当前架构：`libs/qq_bot_runtime/self_coding.py`（Issue 机制 `/同意issue` `/拒绝issue`，复用 `bridge/builder_api`）+ `config.BOT_SELF_CODING_*` 开关。旧 `codebuddy_cli.py`（外部 CLI）已弃用。
+- Issue 两类：①被动报障——`ai_provider.UnifiedLLM.chat` 失败时调 `report_ai_error` 提 `kind="fix"`（含 traceback）；②用户显式 `/提issue` `/提需求` 提 `kind="feature"`。
+- `report_ai_error` 闸门：①`BOT_SELF_CODING_ENABLED=True`（默认 False，需 `/开启自我编程`）；②`world!="self_coding"`（防递归）；③同 `(world,异常类型,上下文前40字)` 10 分钟冷却（`_REPORT_COOLDOWN=600s`）；④永不抛异常。
+- 开关默认：`BOT_SELF_CODING_ENABLED=False`、PERM="full"、`ISSUE_AUTO=True`（自动派构建助手）、`AUTO_LOAD=True`（自动装载+启动）。命令 `/开启自我编程` `/关闭自我编程` `/权限 <档>`。
+- **构建后自动上架插件页**：`_try_load` 在 `pm.load(name)` 成功后 `pm.bridge.push(None,{"type":"plugins_updated","name":name})` 广播 UI 刷新 + 推送「✅ 已自动装载并启动」；前端 `app.js` `handleEvent` 收 `plugins_updated`→`loadPlugins()`+`refreshCorePill()`。
+- **能力提示防"做不到了"**：`chat_service._build_self_capability_hint()` 在 `_chat_pipeline` 调模型前注入 system——列出 `plugins_api.manager().list_all()` **已启用**插件，且 `BOT_SELF_CODING_ENABLED` 真时附「自我编程能力」说明。无已启用插件且自编程关时返回空串不注入（零开销）。
+- 游戏大脑（McBotBrain/PcBrain/PvzBrain）在 `E:\feiyu_app\plugins/brain_*` 插件包，`plugin_registry` 仅内置 `chat`。
+- 端点/群白名单见下；QQ 群白名单 `config.QQ_GROUP_WHITELIST=[]`（空=所有群；`e:\qq_bot\config.py` 填群号）。
 
-## 3. 外观自定义 / 侧边栏（提交 7c68046 + 后续）
-- `bridge/appearance_api.py`：THEMES 8 套、存 `data/appearance.json`、背景图经 `server.py._serve_raw`。**静态资源必须 `Cache-Control: no-store`** 否则 WebView2 旧缓存。
-- 侧边栏折叠：`#sidebarToggle` → `body.sidebar-collapsed` + CSS `margin-left:-216px`；状态 `localStorage`。
+## 3. 记忆子系统 / 防串台
+- `long_term_memory`(用户档案,新覆盖旧) / `persona_memory`(AI 人格,旧优先) / `reflection_memory`(交互规则,按 user_id,空=全局) / `important_notes`(一次性)，均由 `chat_service` 调用。
+- 避坑：档案/反思须区分主体"用户"vs"AI"，否则 AI 特征写进用户档案。
+- 防串台：每条发 AI 的 user 消息带 `[称呼]` 前缀（`_chat_pipeline` 构建新列表不改持久历史）；`build_memory_messages` 注入有 `if user_id` 守卫，空则整段跳过（靠消息标签兜底）。
 
-## 4. 安卓版（feiyu-android）：不进仓库，只发 Release
-- `feiyu-android/` 整目录 gitignore，**勿 git add**；分发=GitHub Release（tag `android-v1.0.x`，附件 apk）。已发至 v1.0.4（含语音播报）。
-- 构建环境全在 E 盘：**JDK17** `E:\jdk17\...`（Android Studio 自带 JBR Java25 不兼容）、Gradle 8.9 `E:\gradle-dist\gradle-8.9`、`GRADLE_USER_HOME=E:\gradle-home`、SDK `E:\AndroidSDK`。构建加 `--max-workers=2 -Xmx1024m` 防 OOM。
-- Release：token 须**文件喂 stdin**（管道被吞）→ `POST releases`(body 用 JSON 文件 `--data-binary @file`)→ `POST uploads.../assets`。
+## 4. 外观 / 侧边栏（提交 7c68046+）
+- `bridge/appearance_api.py`：8 套主题、存 `data/appearance.json`、背景图经 `server.py._serve_raw`。**静态资源必须 `Cache-Control: no-store`** 否则 WebView2 旧缓存。侧边栏 `#sidebarToggle`→`body.sidebar-collapsed`+`margin-left:-216px`，状态 `localStorage`。
 
-## 5. 构建助手（bridge/builder_api.py）——改它必读
-- 能力：上下文文件读写、构建历史、生成/改进/保存 agent+plugin、工作区源码读写 diff、plugin/files。每次写入前自动备份 `data/builder_bak/<rel>.<ts>`（留 20 份）。
-- 工作区安全：`_WORKSPACE_ROOTS=(plugins,libs,bridge,webui,agents,config)` + `_WORKSPACE_DENY`(.codebuddy/.git/.env/__pycache__/settings_store.py/ai_providers.json/data/user_profiles.json)；`_resolve_rooted` realpath 越界校验；`_is_text_file` 拒二进制；单文件 512KB。**统一入口 `workspace_root()`**（自定义工作区看 `is_custom_workspace()`），所有文件 API 基于它，**勿直接用 APP_DIR**。路径前缀匹配（`rel.startswith("libs/")`）。
-- 设置 `data/builder_settings.json`：workspace/permission_mode/confirm_*/auto_backup/remember_approvals/max_steps/deny_extra/web_*。权限 5 档 plan/default/acceptEdits/full/bypassPermissions；闸门 `_gate_operation` 在 `_exec_tool` 开头，仅 WRITE_TOOLS 受管；`classify_operation` 双字段 level(low/high)+kind，两字段都要维护。中文标签 `_MODE_LABEL`，下拉 value 用英文 id。
-- 批准：`_queue_approval`→`data/builder_approvals.json`，返回 `{"pending":True,"approval_id","message":"不要重复提交"}`；真执行只在 `approve_approval_sync`/`approve_all_sync`。结果以 `[系统通知]` user 消息写回。规则 `data/builder_rules.json`，`RULE_SCOPES=(file,dir,all)`。
-- `capability="tools"` 无路由→`_chat_with_tools()` 先试 tools，异常含 tools/无可用供应商/不支持能力 时回退 `capability="chat"`。
-- 主循环 `run_chat()`：多轮 tool-calling（上限 max_steps 默认 14）；生成类只写 drafts，点保存/模型调 save_* 才落盘。流式 `run_chat(stream=True,emit=cb)`。`_reasoning` 是本地元数据键，回传 API 前 `_strip_meta()` 剔除（新增下划线键同步它）。写回历史 `base_idx=len(convo)-1`（off-by-one 坑）。
-- 引擎 `ai_provider.py` 改动**必须同步 `e:\qq_bot\ai_provider.py`**（否则 `TypeError: chat() got unexpected kw`），`chat()` 有 `keep_reasoning`/`stream`/`on_delta`。
-- 流式端点 `POST /api/builder/chat/stream`：`server.py` 手写 chunked 帧（`b"%x\r\n"+payload+b"\r\n"`，结束 `b"0\r\n\r\n"`），勿复用 do_GET 的 `_serve_sse`。
-- 联网工具 `WEB_TOOLS`：搜索双后端 DeepSeek Responses API 主 → GLM 回退；凭据只在 `e:\qq_bot\config.py`，**本地测联网须把 `e:\qq_bot` 插 sys.path 前**。
-- 前端 `webui/app.js`（状态 `bchat`，前缀 `_bc*`）：三栏布局、`bcModel/bcThink/bcPerm/bcWs` 等控件。改 UI 后 `node --check webui/app.js`。
-- 测试红线：写操作目标必须是不存在的临时文件；直接 POST workspace/write 立即覆盖磁盘；测完恢复 mode=default/workspace=""。
+## 5. 安卓版（feiyu-android，不进仓库只发 Release）
+- 整目录 gitignore，**勿 git add**；分发=GitHub Release（tag `android-v1.0.x` 附件 apk），已 v1.0.4（含语音播报）。
+- 构建全在 E 盘：JDK17 `E:\jdk17`、Gradle 8.9 `E:\gradle-dist\gradle-8.9`、`GRADLE_USER_HOME=E:\gradle-home`、SDK `E:\AndroidSDK`，加 `--max-workers=2 -Xmx1024m` 防 OOM。
+- Release：token **文件喂 stdin**（管道被吞）→ `POST releases`(`--data-binary @file`)→ `POST uploads.../assets`。
 
-## 6. 插件协议与加固（提交 84527b3）
-- 官方 UI 事件通道 `core.app_bridge`：`core_bridge.build_engine()` 设 `core.app_bridge=self`；插件用 `getattr(self.core,"app_bridge",None)`（纯引擎 None 静默跳过）→ `bridge.push(session,{...})`，`session=None`=全局广播，线程安全。禁止 sys.modules hack。
-- manifest(`MANIFEST_SCHEMA_VERSION=2`)：必填 name(=目录名)/title/version/kind(platform/feature/brain/sidecar/local)；`scan_packages()` 跳过 `_` 开头目录。装载前静态校验，不通过以 kind="invalid"+manifest_errors 出现（不静默消失）。`purge_wrapper_modules(name)` 三处清理 sys.modules。sidecar 日志 `<qq_bot>/logs/sidecar_<name>.log`。
-- 示例包 `plugins/greeting_demo/`（自包含、官方通道、config_schema+on_config 热生效）；`plugins/` 进版本控制。
+## 6. 构建助手（bridge/builder_api.py）——改它必读
+- 能力：上下文/构建历史/生成·改进·保存 agent+plugin/工作区源码读写 diff。写入前自动备份 `data/builder_bak/<rel>.<ts>`（留 20 份）。
+- 工作区安全：`_WORKSPACE_ROOTS=(plugins,libs,bridge,webui,agents,config)`+`_WORKSPACE_DENY`(.codebuddy/.git/.env/__pycache__/settings_store.py/ai_providers.json/data/user_profiles.json)；`_resolve_rooted` realpath 越界校验；`_is_text_file` 拒二进制；单文件 512KB。**统一入口 `workspace_root()`**（自定义看 `is_custom_workspace()`），**勿直接用 APP_DIR**。
+- 权限 5 档 plan/default/acceptEdits/full/bypassPermissions；闸门 `_gate_operation` 在 `_exec_tool` 开头仅管 WRITE_TOOLS；`classify_operation` 双字段 level+kind 都要维护，中文标签 `_MODE_LABEL` 但下拉 value 用英文 id。
+- 批准 `_queue_approval`→`data/builder_approvals.json` 返回 `{"pending":True,"approval_id"}`；真执行只在 `approve_approval_sync`/`approve_all_sync`。规则 `data/builder_rules.json`，`RULE_SCOPES=(file,dir,all)`。
+- 主循环 `run_chat()`：多轮 tool-calling（上限 max_steps 默认 14）；生成类只写 drafts，点保存才落盘；`_reasoning` 本地元数据进行前 `_strip_meta()` 剔除；写回历史 `base_idx=len(convo)-1`（off-by-one 坑）。`capability="tools"` 无路由回退 `"chat"`。
+- 引擎 `ai_provider.py` 改动**必须同步 `e:\qq_bot\ai_provider.py`**（`chat()` 有 `keep_reasoning`/`stream`/`on_delta`，否则 `TypeError`）。流式端点 `POST /api/builder/chat/stream`（`server.py` 手写 chunked 帧，勿复用 `_serve_sse`）。联网 `WEB_TOOLS` 双后端 DeepSeek→GLM 回退，凭据只在 `e:\qq_bot\config.py`。
+- 前端 `webui/app.js`（状态 `bchat`，前缀 `_bc*`），改 UI 后 `node --check webui/app.js`。测试红线：写目标须不存在临时文件；测完恢复 mode=default/workspace=""。
 
-## 7. 浏览器自动化 / 视觉验证
-- 起 msedge headless `--remote-debugging-port=9222 --user-data-dir=E:\edge-cdp-profile`；`agent-browser connect 9222`→`open http://127.0.0.1:8900`→screenshot/click/eval 断言。收尾杀 edge-cdp-profile 进程+删目录。
-- **铁律**：勿用 PowerShell 函数+splat 包装 agent-browser（退化打印 help），一行一命令直接调；CLI 传中文被 GBK 破坏→一律 CSS 选择器。
+## 7. 插件协议（提交 84527b3）
+- 官方 UI 事件通道 `core.app_bridge`：`getattr(self.core,"app_bridge",None)`（纯引擎 None 静默跳过）→ `bridge.push(session,{...})`，`session=None`=全局广播，线程安全。禁止 sys.modules hack。
+- manifest(`MANIFEST_SCHEMA_VERSION=2`)：必填 name(=目录名)/title/version/kind(platform/feature/brain/sidecar/local)；`scan_packages()` 跳过 `_` 开头；装载前静态校验，失败以 `kind:invalid`+`manifest_errors` 列出（不静默消失）。`purge_wrapper_modules(name)` 三处清理 sys.modules。sidecar 日志 `<qq_bot>/logs/sidecar_<name>.log`。范本 `plugins/greeting_demo/`（自包含、官方通道、config_schema+on_config 热生效）；`plugins/` 进版本控制。
 
-## 8. 日志噪音约定（cddf082）：高频函数禁止无条件 print
-- `scan_packages()`/`read_manifest()`/状态轮询改用去重打印（`_log_manifest_issues` 按 mtime+签名；schema 缺失跨包聚合 `_flush_schema_notice`）。实例级事件改模块级标志（如 `_BUVID_NOTICE_DONE`）。启动日志目标 ~40 行。统计用 `sys.stdout.reconfigure(encoding="utf-8",errors="replace")`。
+## 8. 浏览器自动化 / 视觉验证
+- msedge headless `--remote-debugging-port=9222 --user-data-dir=E:\edge-cdp-profile`；`agent-browser connect 9222`→`open http://127.0.0.1:8900`→screenshot/click/eval。收尾杀进程+删目录。
+- 铁律：勿用 PowerShell+splat 包装 agent-browser（退化打 help），一行一命令直调；CLI 传中文被 GBK 破坏→一律 CSS 选择器。
 
-## 9. git 提交规范 / 工程
-- 中文提交信息编码坑（重要）：本环境 PowerShell 控制台为 GBK，`python -c "...中文..."` 或 `$msg=@'...'@` heredoc + `Set-Content -Encoding utf8` 写入的信息文件，**中文会被双重编码成乱码**（UTF-8 字节按 GBK 误读再 UTF-8；`git config i18n.commitEncoding` 默认 utf-8 仍中招）。**正确做法：用 `write_to_file` 工具直接写 `.git/CMSG.txt`（可靠 UTF-8，字节应为 `e6 9e 84`=构），再 `git -c i18n.commitEncoding=utf-8 commit --amend -F .git/CMSG.txt`，然后 `git push --force-with-lease origin main`（仅修正刚推送的 tip 提交）。** 校验：读提交对象字节 `b=subprocess.check_output(['git','log','-1','--format=%B']); b.decode('utf-8')` 应为正常中文（勿用 `git log` 直接看，GBK 控制台会误判为乱码）。
-- 静默异常治理（已完成全量）：`libs/qq_bot_runtime/quiet.py`(degrade/attention)+`tests/audit_silent_except.py`(AST 扫描分桶 A/B/C→DEGRADE_AUDIT.md)；生产代码静默 except 已清零。**坑：`app.py` 不能模块级 import quiet**（路径 bootstrap 后才就绪）。
-- 两层测试：引擎 `libs/qq_bot_runtime/tests/` + App `tests/`(57 项，`python -m unittest discover -s tests -v`，纯标准库)。改 bridge 后跑后者。新增测试用 `_IsolatedDataMixin`(落 tempfile 不污染 data/)。
-- 真正裸 `except:`=0；`except Exception:`=692(bridge 159/engine 500)。工作副本 ~30GB 但 git 只跟踪 ~1520 文件/60MB（dist/ 已 gitignore）。**LICENSE=MIT**。
+## 9. 日志噪音 / 工程约定
+- 高频函数禁无条件 print（`scan_packages`/`read_manifest`/状态轮询改去重打印，实例级事件改模块级标志），启动日志目标 ~40 行。统计用 `sys.stdout.reconfigure(encoding="utf-8",errors="replace")`。
+- 静默异常治理：`libs/qq_bot_runtime/quiet.py`(degrade/attention)+`tests/audit_silent_except.py`(AST 扫描→DEGRADE_AUDIT.md)；生产裸 `except:`=0。**坑：`app.py` 不能模块级 import quiet**（路径 bootstrap 后才就绪）。
+- 两层测试：引擎 `libs/qq_bot_runtime/tests/` + App `tests/`(纯标准库 `python -m unittest discover -s tests -v`，改 bridge 后跑)。新增测试用 `_IsolatedDataMixin`(落 tempfile)。工作副本 ~30GB 但 git 跟踪 ~1520 文件/60MB（dist/ 已 gitignore）。**LICENSE=MIT**。
+
+## 10. git 提交规范（中文编码坑）
+- 本环境 PowerShell 为 GBK，`python -c "...中文..."` 或 heredoc 写的信息文件会被**双重编码成乱码**（`git config i18n.commitEncoding` 默认 utf-8 仍中招）。**正确做法：用 `write_to_file` 工具写 `.git/CMSG.txt`（可靠 UTF-8，字节 `e6 9e 84`=构），再 `git -c i18n.commitEncoding=utf-8 commit -F .git/CMSG.txt`，仅修正刚推送的 tip 用 `git push --force-with-lease origin main`**。`git log` 直看会误判（GBK 控制台），应以 `subprocess.check_output(['git','log','-1','--format=%B']).decode('utf-8')` 校验。
