@@ -472,6 +472,61 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
   padding: 10px 22px; border-radius: 12px; z-index: 99; box-shadow: 0 8px 30px rgba(0,0,0,.4);
 }
 .toast.err { border-color: var(--err); }
+
+/* ---------- 调试控制台 ---------- */
+.debug-console {
+  position: fixed; right: 16px; bottom: 16px; z-index: 140;
+  width: min(760px, 94vw); height: min(60vh, 560px);
+  display: flex; flex-direction: column;
+  background: var(--bg2); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 16px 50px rgba(0, 0, 0, .5); overflow: hidden;
+}
+.debug-head {
+  display: flex; align-items: center; gap: 10px; padding: 9px 12px;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.debug-title { font-weight: 700; font-size: 13px; }
+.debug-status { flex: 1; color: var(--muted); font-size: 12px; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis; }
+.debug-body {
+  flex: 1; overflow-y: auto; padding: 8px 10px;
+  font-family: ui-monospace, "Cascadia Code", Consolas, "Microsoft YaHei", monospace;
+  font-size: 12px; line-height: 1.55; background: #0a0f1c;
+}
+.dline { display: flex; gap: 8px; padding: 1px 0; border-bottom: 1px solid rgba(255,255,255,.03); }
+.dline .dts { color: #5f6f8c; flex-shrink: 0; }
+.dline .dlv { flex-shrink: 0; width: 64px; text-align: right; text-transform: uppercase; font-size: 10px; opacity: .8; }
+.dline .dtx { white-space: pre-wrap; word-break: break-word; flex: 1; color: var(--text); }
+.dline .dwh { color: var(--muted); font-size: 10px; }
+.dline.lv-status .dlv { color: var(--accent2); }
+.dline.lv-status .dtx { color: #aeb9d4; }
+.dline.lv-log .dlv { color: var(--muted); }
+.dline.lv-warn .dlv { color: var(--warn); }
+.dline.lv-warn .dtx { color: #f3d9a6; }
+.dline.lv-error .dlv { color: var(--err); }
+.dline.lv-error .dtx { color: #ffb3b3; }
+.dline.lv-traceback { background: rgba(245, 107, 107, .07); }
+.dline.lv-traceback .dlv { color: var(--err); }
+.dline.lv-traceback .dtx { color: #ffb3b3; }
+.debug-foot { display: flex; gap: 14px; padding: 6px 12px; background: var(--panel);
+  border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+.debug-legend { display: inline-flex; align-items: center; gap: 5px; }
+.debug-legend .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.debug-legend .dot.lv-status { background: var(--accent2); }
+.debug-legend .dot.lv-log { background: var(--muted); }
+.debug-legend .dot.lv-warn { background: var(--warn); }
+.debug-legend .dot.lv-error { background: var(--err); }
+.debug-legend .dot.lv-traceback { background: var(--err); }
+.debug-fab {
+  position: fixed; right: 16px; bottom: 16px; z-index: 139;
+  height: 38px; padding: 0 16px; border-radius: 20px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--panel2); color: var(--text);
+  font-size: 13px; font-weight: 600; box-shadow: 0 8px 24px rgba(0, 0, 0, .4);
+}
+.debug-fab:hover { background: var(--accent); color: #fff; }
+
+/* 配置页调试开关 */
+.cfg-check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
 .spin { display: inline-block; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

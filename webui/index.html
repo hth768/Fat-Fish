@@ -237,6 +237,19 @@
       <!-- 智能体自编程 · Issue 队列（简版，完整历史见侧栏「自编程 Issue」） -->
       <div id="issueMountConfig"></div>
 
+      <!-- 调试模式 -->
+      <div class="panel" id="debugPanel" style="margin-top:18px">
+        <div class="panel-title">调试模式</div>
+        <div class="hint wrap" style="margin-bottom:12px">
+          开启后可在「调试控制台」实时查看程序运行状态、traceback、warn、error 等日志；
+          关闭后界面保持清爽，仅作常规使用。开启会采集 stdout 输出与未捕获异常，仅建议排障时打开。
+        </div>
+        <label class="cfg-check"><input type="checkbox" id="debugToggle"> 启用调试模式</label>
+        <div class="row-actions" style="margin-top:10px">
+          <button class="btn ghost" id="btnOpenDebugConsole" type="button">打开调试控制台</button>
+        </div>
+      </div>
+
       <!-- AI 供应商 / 模型管理（原「AI 供应商」与「自定义模型供应商」合并） -->
       <div class="panel" id="provPanel" style="margin-top:18px">
         <div class="panel-title">AI 供应商（模型管理）</div>
@@ -596,6 +609,25 @@
 </div>
 <div class="modal hidden" id="botModal"></div>
 <div class="toast hidden" id="toast"></div>
+
+<!-- 调试控制台（仅调试模式开启时可见） -->
+<div id="debugConsole" class="debug-console hidden">
+  <div class="debug-head">
+    <span class="debug-title">调试控制台</span>
+    <span class="debug-status" id="debugStatus">未连接</span>
+    <button class="btn ghost sm" id="btnClearDebug" type="button">清空</button>
+    <button class="btn ghost sm" id="btnCloseDebug" type="button">✕</button>
+  </div>
+  <div class="debug-body" id="debugBody"></div>
+  <div class="debug-foot">
+    <span class="debug-legend"><i class="dot lv-status"></i>状态</span>
+    <span class="debug-legend"><i class="dot lv-log"></i>输出</span>
+    <span class="debug-legend"><i class="dot lv-warn"></i>warn</span>
+    <span class="debug-legend"><i class="dot lv-error"></i>error</span>
+    <span class="debug-legend"><i class="dot lv-traceback"></i>traceback</span>
+  </div>
+</div>
+<button id="debugFab" class="debug-fab hidden" type="button" title="打开调试控制台">🐞 调试</button>
 <script src="/static/app.js"></script>
 <script>
   // 启动遮罩：连上后端探针即淡出；9 秒兜底，避免后端异常时卡死

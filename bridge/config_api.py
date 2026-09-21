@@ -107,4 +107,15 @@ def config_save(values: dict) -> dict:
 
 
 def save_app_settings(patch: dict) -> dict:
-    return {"ok": True, "app": settings_store.set_app_settings(patch or {})}
+    patch = patch or {}
+    result = {"ok": True, "app": settings_store.set_app_settings(patch)}
+    # 调试模式开关：实时联动调试日志中枢（无需重启）
+    if "debug" in patch:
+        try:
+            from .core_bridge import get_bridge
+            b = get_bridge()
+            if b is not None:
+                b.set_debug(bool(patch["debug"]))
+        except Exception:
+            pass
+    return result

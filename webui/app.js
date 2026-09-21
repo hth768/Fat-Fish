@@ -16,6 +16,8 @@ const state = {
   botId: "feiyu",
   defaultBot: "feiyu",
   bots: [],
+  debug: false,          // 调试模式是否开启
+  debugLoaded: false,    // 本轮是否已从后端回灌日志
 };
 
 /* ---------------- 基础请求 ---------------- */
@@ -144,6 +146,9 @@ function handleEvent(ev) {
     // 构建成功后插件自动加入并启动：若正停留在插件页则立即刷新
     if (!$("#page-plugins").classList.contains("hidden")) loadPlugins();
     refreshCorePill();
+  } else if (ev.type === "debug") {
+    // 调试日志：仅控制台打开时实时渲染（关闭时后端缓冲已保留，打开会从 /api/debug/log 回灌）
+    if (!$("#debugConsole").classList.contains("hidden")) appendDebug(ev);
   }
   refreshCorePill();
 }
@@ -183,6 +188,72 @@ function appendEventLog(ev) {
   div.innerHTML = `<span class="t">${fmtTime(ev.ts)}</span>${esc(text)}`;
   log.prepend(div);
   while (log.children.length > 80) log.lastChild.remove();
+}
+
+/* ---------------- 调试控制台 ---------------- */
+async function loadDebug() {
+  try {
+    const d = await GET("/api/debug/log");
+    state.debug = !!d.enabled;
+    const tg = $("#debugToggle");
+    if (tg) tg.checked = state.debug;
+    updateDebugFab();
+    if (state.debug) renderDebugLog(d.log || []);
+    return d;
+  } catch (e) {
+    return { enabled: false, log: [] };
+  }
+}
+
+function renderDebugLog(list) {
+  const body = $("#debugBody");
+  if (!body) return;
+  body.innerHTML = "";
+  (list || []).slice(-2000).forEach(appendDebug);
+}
+
+function appendDebug(ev) {
+  const body = $("#debugBody");
+  if (!body) return;
+  // 仅当用户贴近底部时才自动滚动，避免翻看历史时被打断
+  const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
+  const line = document.createElement("div");
+  line.className = "dline lv-" + esc(ev.level || "log");
+  const t = fmtTime(ev.ts || Date.now() / 1000);
+  const where = ev.where ? ` <span class="dwh">[${esc(ev.where)}]</span>` : "";
+  line.innerHTML = `<span class="dts">${t}</span><span class="dlv">${esc(ev.level || "log")}</span><span class="dtx">${esc(ev.text)}${where}</span>`;
+  body.appendChild(line);
+  while (body.childElementCount > 2000) body.removeChild(body.firstChild);
+  if (ev.level === "status") {
+    const st = $("#debugStatus");
+    if (st) st.textContent = ev.text;
+  }
+  if (nearBottom) body.scrollTop = body.scrollHeight;
+}
+
+function openDebugConsole() {
+  const c = $("#debugConsole");
+  if (!c) return;
+  c.classList.remove("hidden");
+  if (!state.debugLoaded) {
+    loadDebug().catch(() => { });
+    state.debugLoaded = true;
+  }
+}
+
+function closeDebugConsole() {
+  const c = $("#debugConsole");
+  if (c) c.classList.add("hidden");
+}
+
+function clearDebugLog() {
+  const b = $("#debugBody");
+  if (b) b.innerHTML = "";
+}
+
+function updateDebugFab() {
+  const fab = $("#debugFab");
+  if (fab) fab.classList.toggle("hidden", !state.debug);
 }
 
 /* ---------------- 仪表盘 ---------------- */
@@ -2817,6 +2888,36 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // ----- 本地 AI 依赖按需后装（配置页） -----
   initLocalDeps();
+
+  // ===== 调试模式 =====
+  loadDebug().catch(() => { });
+  const debugToggle = $("#debugToggle");
+  if (debugToggle) debugToggle.addEventListener("change", async function () {
+    const on = this.checked;
+    try {
+      const r = await POST("/api/app/settings", { debug: on });
+      if (r && r.ok !== false) {
+        state.debug = on;
+        toast(on ? "调试模式已开启" : "调试模式已关闭");
+        updateDebugFab();
+        if (on) openDebugConsole(); else closeDebugConsole();
+      } else {
+        this.checked = !on;
+        toast("保存失败：" + ((r && r.error) || ""), true);
+      }
+    } catch (e) {
+      this.checked = !on;
+      toast("保存失败：" + e.message, true);
+    }
+  });
+  const btnOpenDbg = $("#btnOpenDebugConsole");
+  if (btnOpenDbg) btnOpenDbg.addEventListener("click", openDebugConsole);
+  const btnCloseDbg = $("#btnCloseDebug");
+  if (btnCloseDbg) btnCloseDbg.addEventListener("click", closeDebugConsole);
+  const btnClearDbg = $("#btnClearDebug");
+  if (btnClearDbg) btnClearDbg.addEventListener("click", clearDebugLog);
+  const fabDbg = $("#debugFab");
+  if (fabDbg) fabDbg.addEventListener("click", openDebugConsole);
 
   // ===== 记忆：导入 / 导出 =====
   $("#btnExportMem").addEventListener("click", async () => {

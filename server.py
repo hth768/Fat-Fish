@@ -499,6 +499,10 @@ def make_handler(bridge):
                 if path == "/api/appearance":
                     return self._json(appearance_api.get_appearance(
                         (q.get("theme") or [""])[0] or None))
+                # ----- 调试日志（开启调试模式时采集） -----
+                if path == "/api/debug/log":
+                    return self._json({"enabled": bridge.debug_enabled(),
+                                       "log": bridge.get_debug_log()})
                 if path.startswith("/api/appearance/bg"):
                     raw = appearance_api.read_bg()
                     if not raw:

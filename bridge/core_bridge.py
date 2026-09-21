@@ -8,8 +8,11 @@
 - 状态快照：core.status() + 应用层信息
 """
 import asyncio
+import sys
 import threading
 import time
+import traceback
+import warnings
 import uuid
 from collections import deque
 from typing import Dict, Optional
@@ -58,6 +61,15 @@ class CoreBridge:
         # 多 bot 生命周期管理器（默认主 bot 为 "feiyu"，其余运行时动态增删）
         from .bot_manager import BotManager
         self.bot_manager = BotManager(self)
+
+        # ===== 调试模式中枢 =====
+        # 开启时采集：stdout 输出、未捕获 traceback、警告、quiet 降级/告警，并周期推送核心运行状态。
+        self._debug = False
+        self._debug_buf = deque(maxlen=3000)   # 环形缓冲，供前端重新打开时回灌
+        self._debug_pending = []               # stdout tee 待刷新文本
+        self._debug_lock = threading.Lock()
+        self._debug_orig = {}                  # 安装 hook 前的原始对象，用于还原
+        self._debug_threads = []
 
     def set_build_hook(self, fn):
         """fn(core)：核心构建后、启动前调用（插件包预注册入口）。"""
@@ -233,6 +245,198 @@ class CoreBridge:
     def recent(self, n: int = 60) -> list:
         with self._lock:
             return list(self._log)[-n:]
+
+    # ------------------------------------------------------------------
+    # 调试模式中枢
+    # ------------------------------------------------------------------
+    def debug_enabled(self) -> bool:
+        return self._debug
+
+    def get_debug_log(self) -> list:
+        """返回环形缓冲中的调试日志快照（供前端打开控制台时回灌）。"""
+        with self._debug_lock:
+            return [dict(e) for e in self._debug_buf]
+
+    def push_debug(self, level: str, text: str, where: str = ""):
+        """向调试日志中枢追加一条记录并实时推送（仅调试模式开启时生效）。"""
+        if not self._debug:
+            return
+        entry = {"level": level, "text": str(text), "where": where, "ts": time.time()}
+        with self._debug_lock:
+            self._debug_buf.append(entry)
+        # 走通用 SSE 通道，前端按 type=="debug" 渲染
+        self.push(None, {"type": "debug", "level": level, "text": str(text), "where": where})
+
+    def set_debug(self, enabled: bool):
+        """开启/关闭调试模式（配置页开关联动；App 启动按设置预置）。"""
+        enabled = bool(enabled)
+        if enabled == self._debug:
+            return
+        self._debug = enabled
+        if enabled:
+            self._debug_install()
+            self.push_debug("status", "[调试] 已开启调试模式，开始采集运行日志（stdout / traceback / warn / error）")
+        else:
+            self._debug_uninstall()
+            self.push_debug("status", "[调试] 已关闭调试模式")
+
+    # ---- 模块级 hook（供 sys.excepthook / threading.excepthook / warnings 使用） ----
+    def _debug_hook_except(et, ev, tb):
+        b = get_bridge()
+        if b is not None:
+            try:
+                b.push_debug("traceback", "".join(traceback.format_exception(et, ev, tb)).rstrip(),
+                             where="sys.excepthook")
+            except Exception:
+                pass
+
+    def _debug_hook_thread_except(args):
+        b = get_bridge()
+        if b is not None:
+            try:
+                et, ev, tb = args.exc_type, args.exc_value, args.exc_traceback
+                b.push_debug("traceback",
+                             "".join(traceback.format_exception(et, ev, tb)).rstrip(),
+                             where="thread:%s" % getattr(args, "thread", None))
+            except Exception:
+                pass
+
+    def _debug_hook_warning(message, category, filename, lineno, file=None, line=None):
+        b = get_bridge()
+        if b is not None:
+            try:
+                name = getattr(category, "__name__", "Warning")
+                b.push_debug("warn", "[%s] %s (%s:%d)" % (name, message, filename, lineno),
+                             where="warnings")
+            except Exception:
+                pass
+
+    def _debug_hook_quiet(level, where, exc, note):
+        b = get_bridge()
+        if b is None:
+            return
+        try:
+            detail = ("%s: %s" % (type(exc).__name__, exc)) if exc is not None else ""
+            text = (note or "").strip()
+            if detail:
+                text = (text + "  " + detail).strip() if text else detail
+            # ATTENTION = 真问题 → error；DEGRADE = 刻意降级 → warn
+            b.push_debug("error" if level == "ATTENTION" else "warn",
+                         text or "(无详情)", where=where)
+        except Exception:
+            pass
+
+    class _DebugStream:
+        """包装 sys.stdout：原样写出，同时把文本喂给调试缓冲（批量刷新避免刷屏）。"""
+
+        def __init__(self, orig, hub):
+            self._orig = orig
+            self._hub = hub
+
+        def write(self, s):
+            r = self._orig.write(s)
+            if s:
+                self._hub._debug_feed(s)
+            return r
+
+        def flush(self):
+            return self._orig.flush()
+
+        def writelines(self, lines):
+            return self._orig.writelines(lines)
+
+        def __getattr__(self, name):
+            # 委托 encoding/fileno/closed 等给原对象
+            return getattr(self._orig, name)
+
+    def _debug_feed(self, s):
+        with self._debug_lock:
+            self._debug_pending.append(s)
+
+    def _debug_flush_loop(self):
+        while self._debug:
+            time.sleep(0.25)
+            with self._debug_lock:
+                buf = self._debug_pending
+                self._debug_pending = []
+            if buf:
+                text = "".join(buf).rstrip("\n")
+                if text:
+                    self.push_debug("log", text)
+
+    def _debug_heartbeat_loop(self):
+        while self._debug:
+            time.sleep(5)
+            try:
+                st = self.status()
+                running = st.get("core")
+                plugins = len(st.get("plugins") or [])
+                brains = len(st.get("brains") or [])
+                summary = "运行状态：核心 %s | 插件 %d | 大脑 %d | 端口 %s | %s" % (
+                    "运行中" if running else "未运行", plugins, brains,
+                    self.port, st.get("time"))
+                self.push_debug("status", summary)
+            except Exception:
+                pass
+
+    def _debug_install(self):
+        import sys as _sys
+        import warnings as _warnings
+        # 1) quiet 降级/告警 → 调试流
+        try:
+            from quiet import set_sink
+            set_sink(CoreBridge._debug_hook_quiet)
+        except Exception:
+            pass
+        # 2) 未捕获异常 hook
+        try:
+            self._debug_orig["excepthook"] = _sys.excepthook
+            _sys.excepthook = CoreBridge._debug_hook_except
+        except Exception:
+            pass
+        try:
+            self._debug_orig["thread_excepthook"] = threading.excepthook
+            threading.excepthook = CoreBridge._debug_hook_thread_except
+        except Exception:
+            pass
+        # 3) 警告 hook
+        try:
+            self._debug_orig["showwarning"] = _warnings.showwarning
+            _warnings.showwarning = CoreBridge._debug_hook_warning
+        except Exception:
+            pass
+        # 4) stdout 输出流 tee（捕捉 print 出来的运行状态）
+        try:
+            if _sys.stdout is not None and not isinstance(_sys.stdout, CoreBridge._DebugStream):
+                self._debug_orig["stdout"] = _sys.stdout
+                _sys.stdout = CoreBridge._DebugStream(_sys.stdout, self)
+        except Exception:
+            pass
+        # 5) 后台线程：批量刷新 stdout + 周期心跳
+        t1 = threading.Thread(target=self._debug_flush_loop, name="feiyu-debug-flush", daemon=True)
+        t2 = threading.Thread(target=self._debug_heartbeat_loop, name="feiyu-debug-heartbeat", daemon=True)
+        t1.start()
+        t2.start()
+        self._debug_threads = [t1, t2]
+
+    def _debug_uninstall(self):
+        import sys as _sys
+        import warnings as _warnings
+        try:
+            from quiet import set_sink
+            set_sink(None)
+        except Exception:
+            pass
+        o = self._debug_orig
+        if o.get("excepthook") is not None:
+            _sys.excepthook = o["excepthook"]
+        if o.get("thread_excepthook") is not None:
+            threading.excepthook = o["thread_excepthook"]
+        if o.get("showwarning") is not None:
+            _warnings.showwarning = o["showwarning"]
+        if o.get("stdout") is not None and isinstance(_sys.stdout, CoreBridge._DebugStream):
+            _sys.stdout = o["stdout"]
+        self._debug_orig = {}
 
     # ------------------------------------------------------------------
     # 聊天

@@ -87,6 +87,7 @@ def degrade(where: str, exc=None, note: str = "") -> None:
     需要看明细时：启动前设环境变量 `FEIYU_TRACE_DEGRADE=1`。
     """
     n = _record(where, exc, note, "degrade")
+    _emit("DEGRADE", where, exc, note)
     if not _TRACE:
         return
     key = str(where or "unknown")
@@ -100,6 +101,7 @@ def degrade(where: str, exc=None, note: str = "") -> None:
 def attention(where: str, exc=None, note: str = "") -> None:
     """登记一次**真问题**（不该发生的异常）。始终输出一行，同站点节流。"""
     n = _record(where, exc, note, "attention")
+    _emit("ATTENTION", where, exc, note)
     key = str(where or "unknown")
     if _should_print(key, _ATTENTION_THROTTLE, True, n):
         detail = ("%s: %s" % (type(exc).__name__, exc)) if exc is not None else ""
@@ -132,3 +134,26 @@ def reset() -> None:
 def tracing() -> bool:
     """当前是否开启降级明细输出。"""
     return _TRACE
+
+
+# ===== 调试输出 sink（供 App 的调试控制台订阅 warn/error/degrade 流） =====
+_sink = None
+
+
+def set_sink(fn):
+    """注册一个接收降级/告警事件的回调 (level, where, exc, note) -> None。
+
+    由 app 层在开启调试模式时注入，把 DEGRADE/ATTENTION 转发到调试日志中枢。
+    回调内已做异常保护，绝不影响主流程。传 None 可注销。
+    """
+    global _sink
+    _sink = fn
+
+
+def _emit(level, where, exc, note):
+    fn = _sink
+    if fn is not None:
+        try:
+            fn(level, where, exc, note)
+        except Exception:
+            pass
