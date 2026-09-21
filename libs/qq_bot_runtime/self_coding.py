@@ -580,12 +580,86 @@ def _newest_plugin_since(issue: Dict) -> Optional[str]:
     return None
 
 
+def _plugin_pkg_dir(name: str):
+    """返回 plugins/<name> 目录的绝对路径（与 pkg_manager 扫描根一致）。"""
+    try:
+        import bridge.pkg_manager as pm
+        root = getattr(pm, "PACKAGE_DIR", None) or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(pm.__file__))), "plugins")
+        return os.path.join(root, name)
+    except Exception:
+        return None
+
+
+def _diagnose_plugin_dir(name: str):
+    """装载失败时的定向诊断：缺 plugin.py / 缺 create_plugin 入口等。"""
+    dp = _plugin_pkg_dir(name)
+    if not dp or not os.path.isdir(dp):
+        return "插件目录不存在: plugins/%s" % name
+    has_manifest = os.path.isfile(os.path.join(dp, "manifest.json"))
+    pyp = os.path.join(dp, "plugin.py")
+    if os.path.isfile(pyp):
+        try:
+            src = open(pyp, "r", encoding="utf-8").read()
+        except Exception:
+            return "plugins/%s/plugin.py 存在但无法读取" % name
+        if "def create_plugin" not in src:
+            return ("plugins/%s/plugin.py 已存在，但未定义 create_plugin(bridge, cfg) 入口函数"
+                    % name)
+        return None
+    if has_manifest:
+        return "plugins/%s 仅有 manifest.json、缺少 plugin.py（主程序未写出），请补全代码" % name
+    return "plugins/%s 既无 manifest.json 也无 plugin.py" % name
+
+
+def _scan_plugin_dirs_since(issue: Dict):
+    """name 无法识别时兜底：扫描构建期间新建/改动过的插件目录（即便尚无 plugin.py），
+    给出精准提示，让「修复」环知道该补 plugin.py。"""
+    import time as _t
+    try:
+        import bridge.pkg_manager as pm
+        root = getattr(pm, "PACKAGE_DIR", None) or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(pm.__file__))), "plugins")
+        if not os.path.isdir(root):
+            return None
+        created = 0.0
+        cs = issue.get("created")
+        if cs:
+            try:
+                created = _t.mktime(_t.strptime(cs, "%Y-%m-%d %H:%M:%S"))
+            except Exception:
+                created = 0.0
+        cand = []
+        for d in os.listdir(root):
+            dp = os.path.join(root, d)
+            if not os.path.isdir(dp):
+                continue
+            m = os.path.getmtime(dp)
+            if m >= created and (os.path.isfile(os.path.join(dp, "manifest.json")) or m >= created):
+                cand.append((m, d))
+        if not cand:
+            return None
+        cand.sort(reverse=True)
+        name = cand[0][1]
+        if os.path.isfile(os.path.join(root, name, "plugin.py")):
+            return None
+        if os.path.isfile(os.path.join(root, name, "manifest.json")):
+            return "plugins/%s 仅有 manifest.json、缺少 plugin.py，请补全主程序后重试" % name
+        return "plugins/%s 目录存在但缺少 plugin.py 与 manifest.json" % name
+    except Exception:
+        return None
+
+
 async def _try_load(build_res: Dict, issue: Dict) -> Dict:
     """尝试把构建产物装载进核心；自动装载关闭时只返回「建议装载」不实际装载。"""
     # 构建助手生成的产物可能含 manifest 包；这里根据产物名尝试 pkg_manager.load
     name = (_extract_pkg_name(build_res) or issue.get("loaded_name")
             or _newest_plugin_since(issue))
     if not name:
+        # 兜底扫描：即便只写出 manifest 的残留目录也指出，避免笼统「无法识别包名」
+        diag = _scan_plugin_dirs_since(issue)
+        if diag:
+            return {"ok": False, "error": "未能从产物识别包名：%s" % diag, "retry_hint": diag}
         return {"ok": False, "error": "未能从产物识别包名，无法装载"}
     auto = bool(getattr(config, "BOT_SELF_CODING_AUTO_LOAD", True))
     if not auto:
@@ -617,9 +691,14 @@ async def _try_load(build_res: Dict, issue: Dict) -> Dict:
             except Exception:
                 pass
             return {"ok": True, "name": name, "detail": f"已自动装载并启动 {name}"}
-        return {"ok": False, "error": res.get("error", f"pkg_manager.load({name}) 失败")}
+        # 装载失败：附加定向诊断，便于「修复」环精准补文件
+        diag = _diagnose_plugin_dir(name)
+        msg = res.get("error", f"pkg_manager.load({name}) 失败")
+        if diag:
+            msg += "（诊断：%s）" % diag
+        return {"ok": False, "error": msg, "retry_hint": diag, "name": name}
     except Exception as e:
-        return {"ok": False, "error": f"装载异常：{e!r}"}
+        return {"ok": False, "error": f"装载异常：{e!r}", "name": name}
 
 
 def _pkg_name_from_plugin_path(p) -> Optional[str]:

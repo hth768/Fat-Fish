@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime
+from typing import Optional
 from quiet import attention, degrade
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -156,9 +157,47 @@ MAX_CONTEXT_FILE_BYTES = 160000
 MAX_CONTEXT_FILES = 150
 
 
+def _engine_runtime_dir() -> Optional[str]:
+    """当引擎在应用目录之外（如 FEIYU_QQ_BOT 指向独立目录）时，返回其运行时根目录；
+    否则返回 None（说明引擎已在 APP_DIR/libs/qq_bot_runtime 内，无需额外加入）。
+
+    FEIYU_QQ_BOT 的布局有两种：①直接指向运行时根（顶层即含 plugin_base.py、quiet.py
+    等模块，如 E:/qq_bot）；②指向其上层目录（运行时在 <env>/qq_bot_runtime）。两种都兼容。
+    构建助手工作区根=APP_DIR，若引擎源码不在 APP_DIR 内，模型读不到 plugin_base /
+    PLUGIN_PROTOCOL 等协议依据，写插件时会迷失（曾出现反复「未能从产物识别包名」）。
+    把外部引擎运行时作为只读上下文喂给模型即可根治。
+    """
+    env = (os.environ.get("FEIYU_QQ_BOT", "") or "").strip()
+    if not env:
+        return None
+    env = os.path.abspath(os.path.normpath(env))
+    # ① env 本身就是运行时根（含 plugin_base.py）
+    if os.path.isfile(os.path.join(env, "plugin_base.py")):
+        return env
+    # ② env 的 qq_bot_runtime 子目录是运行时
+    p = os.path.join(env, "qq_bot_runtime")
+    if os.path.isdir(p):
+        return os.path.abspath(p)
+    return None
+
+
+# 外部引擎运行时里只把「协议/基类」少量文件提供给模型，避免海量引擎源码挤占
+# MAX_CONTEXT_FILES 名额、把 bridge/webui 真源码挤出上下文。
+ENGINE_CONTEXT_ALLOW = {
+    "plugin_base.py", "pkg_manager.py", "agent_base.py", "world_base.py",
+    "PLUGIN_PROTOCOL.md", "PLUGINS.md", "manifest.py",
+}
+
+
 def _is_allowed_context_path(abspath: str) -> bool:
     ap = os.path.normcase(os.path.abspath(abspath))
     root = os.path.normcase(workspace_root())
+    # 外部引擎运行时：只读上下文，永不在此写入（写入走 _resolve_rooted 受 _WORKSPACE_ROOTS 约束）
+    eng = _engine_runtime_dir()
+    if eng:
+        ne = os.path.normcase(eng)
+        if ap == ne or ap.startswith(ne + os.sep):
+            return True
     if ap != root and not ap.startswith(root + os.sep):
         return False
     rel = os.path.relpath(ap, root).replace(os.sep, "/")
@@ -177,16 +216,25 @@ def list_context_files() -> dict:
     root = workspace_root()
     custom = is_custom_workspace()
     bases = [root] if custom else [os.path.join(root, d) for d in CONTEXT_ALLOW_DIRS]
+    # 外部引擎运行时（FEIYU_QQ_BOT 指向独立目录且不等于 APP_DIR/libs/qq_bot_runtime）：
+    # 作为只读上下文加入，使模型能读到 plugin_base / PLUGIN_PROTOCOL 等协议依据。
+    eng = _engine_runtime_dir()
+    if eng and os.path.normcase(eng) != os.path.normcase(os.path.join(root, "libs", "qq_bot_runtime")):
+        bases.append(eng)
     seen = set()
     try:
         for base in bases:
             if not os.path.isdir(base):
                 continue
+            is_engine = eng and os.path.normcase(os.path.abspath(base)) == os.path.normcase(eng)
             for dirpath, dirnames, filenames in os.walk(base):
                 dirnames[:] = [n for n in dirnames if n not in CONTEXT_SKIP_DIRS
                                and n not in _WORKSPACE_DENY and not n.startswith(".")]
                 for fn in filenames:
                     if fn.endswith((".py", ".json")) and not fn.endswith(".tmp"):
+                        # 外部引擎只暴露协议/基类少量文件，避免挤占 bridge/webui 名额
+                        if is_engine and not (fn in ENGINE_CONTEXT_ALLOW or fn.lower().endswith(".md")):
+                            continue
                         fp = os.path.join(dirpath, fn)
                         try:
                             sz = os.path.getsize(fp)
@@ -195,7 +243,11 @@ def list_context_files() -> dict:
                             continue
                         if sz > MAX_CONTEXT_FILE_BYTES:
                             continue
-                        rel = os.path.relpath(fp, root).replace(os.sep, "/")
+                        if is_engine:
+                            sub = os.path.relpath(fp, eng).replace(os.sep, "/")
+                            rel = "libs/qq_bot_runtime/" + sub
+                        else:
+                            rel = os.path.relpath(fp, root).replace(os.sep, "/")
                         if any(p in _WORKSPACE_DENY for p in rel.split("/")):
                             continue
                         if rel in seen:
@@ -224,6 +276,13 @@ def read_context_file(rel: str) -> dict:
     if not rel or not isinstance(rel, str):
         return {"ok": False, "error": "路径为空"}
     fp = os.path.normpath(os.path.join(workspace_root(), rel))
+    # 外部引擎的只读上下文：rel 以 libs/qq_bot_runtime/ 开头但实体在 FEIYU_QQ_BOT 引擎内
+    if not os.path.isfile(fp):
+        eng = _engine_runtime_dir()
+        if eng and rel.startswith("libs/qq_bot_runtime/"):
+            alt = os.path.normpath(os.path.join(eng, rel[len("libs/qq_bot_runtime/"):]))
+            if os.path.isfile(alt):
+                fp = alt
     if not _is_allowed_context_path(fp):
         return {"ok": False, "error": "路径不在允许范围内: %s" % rel}
     if not os.path.isfile(fp):
@@ -1282,7 +1341,7 @@ def list_plugin_files_sync(name: str) -> dict:
 # 在一个多轮 tool-calling 循环里由模型自己决定调用顺序，实现
 # 「说需求 → 自己看代码 → 自己改 → 自己查语法 → 自报结果」的闭环。
 CHAT_DIR = os.path.join(DATA_DIR, "builder_chat")
-CHAT_MAX_STEPS = 14                 # 单轮最多工具步数（防死循环）
+CHAT_MAX_STEPS = 24                 # 单轮最多工具步数（防死循环；插件类需写 manifest+plugin.py+校验，14 偏紧）
 CHAT_TOOL_RESULT_MAX = 6000          # 单条工具结果回喂模型的最大字符数
 CHAT_SEARCH_MAX = 40                 # search_code 最多返回条数
 

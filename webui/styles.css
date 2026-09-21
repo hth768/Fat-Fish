@@ -498,6 +498,7 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .dline .dlv { flex-shrink: 0; width: 64px; text-align: right; text-transform: uppercase; font-size: 10px; opacity: .8; }
 .dline .dtx { white-space: pre-wrap; word-break: break-word; flex: 1; color: var(--text); }
 .dline .dwh { color: var(--muted); font-size: 10px; }
+.dline .dcount { color: var(--accent2); font-size: 10px; font-weight: 700; margin-left: 4px; }
 .dline.lv-status .dlv { color: var(--accent2); }
 .dline.lv-status .dtx { color: #aeb9d4; }
 .dline.lv-log .dlv { color: var(--muted); }

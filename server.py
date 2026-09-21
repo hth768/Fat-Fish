@@ -359,12 +359,13 @@ def make_handler(bridge):
                 degrade("server._serve_sse", e, "SSE 事件流断开（客户端可能已离开）")
 
         def _sse_write(self, ev):
-            try:
-                data = json.dumps(ev, ensure_ascii=False)
-                self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
-                self.wfile.flush()
-            except Exception as e:
-                degrade("server._sse_write", e, "SSE 写入失败")
+            # 写失败必须向上抛：让 _serve_sse 退出循环并 finally 注销订阅。
+            # 若在此吞掉异常，客户端断开后写线程永不退出，每条广播都会
+            # 对死连接写一次失败一次（调试开启时 degrade→push_debug→广播
+            # 再次失败，形成自我放大的刷屏反馈环）。
+            data = json.dumps(ev, ensure_ascii=False)
+            self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+            self.wfile.flush()
 
         # ---------------- 构建助手：流式对话（POST 上行的 SSE） ----------------
         def _builder_chat_stream(self, body):

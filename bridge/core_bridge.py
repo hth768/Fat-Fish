@@ -211,13 +211,14 @@ class CoreBridge:
     # ------------------------------------------------------------------
     # SSE 事件中枢
     # ------------------------------------------------------------------
-    def push(self, session, event: dict):
+    def push(self, session, event: dict, record: bool = True):
         event = dict(event)
         with self._lock:
             self._seq += 1
             event["id"] = self._seq
             event["ts"] = time.time()
-            self._log.append(event)
+            if record:
+                self._log.append(event)
             targets = list(self._all)
             if session and session in self._subs:
                 targets += list(self._subs[session])
@@ -258,14 +259,35 @@ class CoreBridge:
             return [dict(e) for e in self._debug_buf]
 
     def push_debug(self, level: str, text: str, where: str = ""):
-        """向调试日志中枢追加一条记录并实时推送（仅调试模式开启时生效）。"""
+        """向调试日志中枢追加一条记录并实时推送（仅调试模式开启时生效）。
+
+        防刷屏：连续完全相同的条目（同级别/同文本/同来源，且间隔 <15s）
+        折叠为最后一行的计数（×N），不再无限堆积——例如客户端断开引发的
+        重复「SSE 写入失败」告警。
+        """
         if not self._debug:
             return
-        entry = {"level": level, "text": str(text), "where": where, "ts": time.time()}
+        text = str(text)
+        entry = {"level": level, "text": text, "where": where, "ts": time.time()}
+        repeat = 0
         with self._debug_lock:
-            self._debug_buf.append(entry)
-        # 走通用 SSE 通道，前端按 type=="debug" 渲染
-        self.push(None, {"type": "debug", "level": level, "text": str(text), "where": where})
+            last = self._debug_buf[-1] if self._debug_buf else None
+            if (last is not None
+                    and last.get("level") == level
+                    and last.get("text") == text
+                    and last.get("where") == where
+                    and entry["ts"] - last.get("ts", 0) < 15):
+                last["count"] = last.get("count", 1) + 1
+                last["ts"] = entry["ts"]
+                repeat = last["count"]
+            else:
+                self._debug_buf.append(entry)
+        ev = {"type": "debug", "level": level, "text": text, "where": where}
+        if repeat:
+            ev["repeat"] = repeat
+        # record=False：调试事件不进通用回放历史（_log），避免挤掉真实事件；
+        # 前端回灌走 /api/debug/log（_debug_buf）。
+        self.push(None, ev, record=False)
 
     def set_debug(self, enabled: bool):
         """开启/关闭调试模式（配置页开关联动；App 启动按设置预置）。"""

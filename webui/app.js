@@ -212,16 +212,33 @@ function renderDebugLog(list) {
   (list || []).slice(-2000).forEach(appendDebug);
 }
 
+function dbgKey(ev) {
+  return (ev.level || "log") + "|" + (ev.where || "") + "|" + (ev.text || "");
+}
+
 function appendDebug(ev) {
   const body = $("#debugBody");
   if (!body) return;
+  // 重复折叠：repeat 事件只更新最后一行的 ×N 徽标，不新增行
+  if (ev.repeat) {
+    const last = body.lastElementChild;
+    if (last && last.dataset.key === dbgKey(ev)) {
+      const tx = last.querySelector(".dtx");
+      let c = last.querySelector(".dcount");
+      if (tx && !c) { c = document.createElement("span"); c.className = "dcount"; tx.appendChild(c); }
+      if (c) c.textContent = " ×" + ev.repeat;
+      return;
+    }
+  }
   // 仅当用户贴近底部时才自动滚动，避免翻看历史时被打断
   const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
   const line = document.createElement("div");
   line.className = "dline lv-" + esc(ev.level || "log");
+  line.dataset.key = dbgKey(ev);
   const t = fmtTime(ev.ts || Date.now() / 1000);
   const where = ev.where ? ` <span class="dwh">[${esc(ev.where)}]</span>` : "";
-  line.innerHTML = `<span class="dts">${t}</span><span class="dlv">${esc(ev.level || "log")}</span><span class="dtx">${esc(ev.text)}${where}</span>`;
+  const cnt = (ev.count && ev.count > 1) ? `<span class="dcount"> ×${ev.count}</span>` : "";
+  line.innerHTML = `<span class="dts">${t}</span><span class="dlv">${esc(ev.level || "log")}</span><span class="dtx">${esc(ev.text)}${cnt}${where}</span>`;
   body.appendChild(line);
   while (body.childElementCount > 2000) body.removeChild(body.firstChild);
   if (ev.level === "status") {
@@ -235,10 +252,9 @@ function openDebugConsole() {
   const c = $("#debugConsole");
   if (!c) return;
   c.classList.remove("hidden");
-  if (!state.debugLoaded) {
-    loadDebug().catch(() => { });
-    state.debugLoaded = true;
-  }
+  // 每次打开都重新拉取：后端缓冲里可能已有折叠计数更新
+  loadDebug().catch(() => { });
+  state.debugLoaded = true;
 }
 
 function closeDebugConsole() {
