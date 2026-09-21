@@ -1511,31 +1511,43 @@ class ChatService:
         elif msg.image_refs:
             user_content = text.strip()
             for ref in msg.image_refs:
+                # 1) 取图片二进制（动图常无直链 url，需 get_image 缓存；取不到即无法识别）
                 try:
                     img_bytes = await reply.fetch_image(ref)
-                    if detect_image_type(img_bytes) == "gif":
-                        desc = await self.vision.describe_gif_animation(img_bytes)
+                except Exception as e:
+                    print(f"[ERROR] 图片获取失败: {e}")
+                    user_content = text.strip() if text.strip() else "[图片获取失败]"
+                    continue
+                # 2) 视觉识别：GIF / 动图（含动画 WebP）抽多帧，其余单帧；
+                #    动图多帧失败则退回单帧描述，避免整个识别被吞掉
+                try:
+                    if detect_image_type(img_bytes) in ("gif", "webp"):
+                        try:
+                            desc = await self.vision.describe_gif_animation(img_bytes)
+                        except Exception as e:
+                            print(f"[WARN] 动图多帧识别失败，退回单帧: {e}")
+                            desc = await self.vision.describe_image(img_bytes, user_content)
                     else:
                         desc = await self.vision.describe_image(img_bytes, user_content)
                     user_content = f"[图片描述] {desc}" + (f"\n[用户文字] {text.strip()}" if text.strip() else "")
-                    # 收集表情包：保存图片 + 识别情绪 + 详细描述
-                    # （局部变量叫 emoji_emotion，避免遮蔽 emotion 情绪模块）
-                    try:
-                        emoji_emotion = await self.vision.recognize_emotion(img_bytes)
-                        emoji_desc = ""
-                        try:
-                            emoji_desc = await self.vision.describe_emoji(img_bytes)
-                        except Exception as e:
-                            print(f"[WARN] 表情包描述识别失败: {e}")
-                        ext_map = {"jpeg": ".jpg", "png": ".png", "gif": ".gif", "webp": ".webp"}
-                        ext = ext_map.get(detect_image_type(img_bytes), ".jpg")
-                        name = emoji_store.add_emoji(img_bytes, emoji_emotion, emoji_desc, ext)
-                        print(f"[INFO] 表情包已收集: {name} (情绪: {emoji_emotion})")
-                    except Exception as e:
-                        print(f"[WARN] 表情包收集失败: {e}")
                 except Exception as e:
                     print(f"[ERROR] 图片识别失败: {e}")
                     user_content = text.strip() if text.strip() else "[图片识别失败]"
+                    continue
+                # 3) 收集表情包（独立 try，失败不影响上面的识别结果）
+                try:
+                    emoji_emotion = await self.vision.recognize_emotion(img_bytes)
+                    emoji_desc = ""
+                    try:
+                        emoji_desc = await self.vision.describe_emoji(img_bytes)
+                    except Exception as e:
+                        print(f"[WARN] 表情包描述识别失败: {e}")
+                    ext_map = {"jpeg": ".jpg", "png": ".png", "gif": ".gif", "webp": ".webp"}
+                    ext = ext_map.get(detect_image_type(img_bytes), ".jpg")
+                    name = emoji_store.add_emoji(img_bytes, emoji_emotion, emoji_desc, ext)
+                    print(f"[INFO] 表情包已收集: {name} (情绪: {emoji_emotion})")
+                except Exception as e:
+                    print(f"[WARN] 表情包收集失败: {e}")
             messages.append({"role": "user", "content": user_content})
         # 优先级 4：普通文字对话
         else:

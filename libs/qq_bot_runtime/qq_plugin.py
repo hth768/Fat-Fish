@@ -275,10 +275,14 @@ plugin_pending_calls = {}
 
 
 async def get_image_bytes(ws, img_data: dict) -> bytes:
-    """获取图片二进制：先直接下载 url，失败用 get_image API 刷新后重试。"""
+    """获取图片二进制：先直接下载 url，失败用 get_image API 刷新后重试。
+
+    动图 / 大图经 get_image 缓存到本地可能尚未就绪（返回空文件或路径暂不存在），
+    因此本地读取失败时重试几次并短等待，避免「无法获取图片」。
+    """
     file = img_data.get("file", "")
     url = img_data.get("url", "")
-    if url:
+    if url and isinstance(url, str) and url.startswith(("http://", "https://")):
         try:
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
                 resp = await c.get(url)
@@ -288,8 +292,13 @@ async def get_image_bytes(ws, img_data: dict) -> bytes:
         except Exception as e:
             print(f"[WARN] URL 下载异常: {e}")
     if file:
-        try:
-            result = await call_action(ws, "get_image", {"file": file})
+        # 重试若干次：动图/大图可能尚未缓存到本地
+        for attempt in range(4):
+            try:
+                result = await call_action(ws, "get_image", {"file": file})
+            except Exception as e:
+                print(f"[WARN] get_image 获取失败: {e}")
+                result = None
             if isinstance(result, dict):
                 local_path = result.get("file")
                 if local_path and isinstance(local_path, str) and not local_path.startswith(("http://", "https://")):
@@ -298,16 +307,20 @@ async def get_image_bytes(ws, img_data: dict) -> bytes:
                             content = f.read()
                             if len(content) > 0:
                                 return content
+                            print(f"[WARN] get_image 本地文件为空（尝试 {attempt+1}）")
                     except OSError as e:
-                        print(f"[WARN] 本地文件读取失败: {e}")
+                        print(f"[WARN] 本地文件读取失败（尝试 {attempt+1}）: {e}")
                 new_url = result.get("url")
-                if new_url:
-                    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
-                        resp = await c.get(new_url)
-                        if resp.status_code == 200 and len(resp.content) > 0:
-                            return resp.content
-        except Exception as e:
-            print(f"[WARN] get_image 获取失败: {e}")
+                if new_url and isinstance(new_url, str) and new_url.startswith(("http://", "https://")):
+                    try:
+                        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+                            resp = await c.get(new_url)
+                            if resp.status_code == 200 and len(resp.content) > 0:
+                                return resp.content
+                    except Exception as e:
+                        print(f"[WARN] get_image url 下载异常: {e}")
+            if attempt < 3:
+                await asyncio.sleep(1.2)
     raise RuntimeError("无法获取图片")
 
 
