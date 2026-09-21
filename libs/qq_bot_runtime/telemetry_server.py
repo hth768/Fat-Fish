@@ -204,7 +204,22 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    httpd = ThreadingHTTPServer((HOST, PORT), _Handler)
+    class _ExclusiveHTTPServer(ThreadingHTTPServer):
+        # 默认 allow_reuse_address=1 在 Windows 下会静默允许多进程绑定同一端口；
+        # 上一轮被强杀的主进程不带走子 sidecar，残留监听与新实例叠加后请求被随机路由。
+        # 改用独占绑定：端口被占用时直接失败，逼出端口清理逻辑而非悄悄堆叠。
+        allow_reuse_address = 0
+
+        def server_bind(self):
+            import socket as _sock
+            if hasattr(_sock, "SO_EXCLUSIVEADDRUSE"):
+                try:
+                    self.socket.setsockopt(_sock.SOL_SOCKET, _sock.SO_EXCLUSIVEADDRUSE, 1)
+                except OSError:
+                    pass
+            super().server_bind()
+
+    httpd = _ExclusiveHTTPServer((HOST, PORT), _Handler)
     mode = "HMAC 强制" if HMAC_KEY else "开发宽松(无签名)"
     print(f"[telemetry] 已启动 http://{HOST}:{PORT}  签名模式={mode}  存储={STORE_FILE}",
           flush=True)

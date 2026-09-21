@@ -14,6 +14,9 @@
 - 模型 Key：真实值在同目录 `ai_providers.json`（覆盖层、热重载），**勿写 config.py/勿提交**；`config.AI_PROVIDERS={}`/`AI_CAPABILITY_ROUTING` 置空。`GLM_API_KEY` 等顶层变量（语音用）保留。
 - 端点约定：`/api/appearance/icon`(+reset) POST；`/api/memory/export` GET；`/api/builder/*` 只读在 do_GET、写只在 do_POST。
 - 捆绑 Python：`libs\qq_bot_runtime\runtime\python\python.exe`（`-m py_compile` 校验）。本机无 F: 盘，绝对路径先 `Test-Path`。
+- **Windows sidecar 端口静默叠加坑**：`ThreadingHTTPServer` 默认 `allow_reuse_address=1`(SO_REUSEADDR) 在 Windows 上允许多进程同时绑同一端口且不报错；反复强杀主进程（不连带杀子进程）会让 sidecar（memory 8766 / monitor 8770 / telemetry 8771 / vox_tts 8765）残留并叠加监听，请求被随机路由到旧进程（记忆错乱、聊天不稳）。**修复模板**：sidecar 服务改 `_ExclusiveHTTPServer`（`allow_reuse_address=0`+`SO_EXCLUSIVEADDRUSE`）；launcher 生成前用 `netstat -ano` 找端口残留 PID 并 `os.kill(SIGTERM)` 清掉（同机单用户桌面，端口为进程私属）。重启命令应连带清旧进程，否则每次重启都叠一层。
+- **部署副本同步铁律（防 500）**：App 层 `server.py` 与 App 桥接层 `E:\feiyu_app\bridge` 必须随仓库同步。曾出现「`server.py` 已给 `bridge.submit_chat` 传 `image_paths` 等新参数，但 `E:\feiyu_app\bridge\core_bridge.py` 未同步仍是旧签名」→ 每发消息 `TypeError`→500 静默失败。同步用 `robocopy 仓库\bridge → E:\feiyu_app\bridge /E`（不删额外文件）。引擎 `E:\qq_bot` 同理用 `robocopy 仓库\libs\qq_bot_runtime → E:\qq_bot /E /XD runtime __pycache__ data .git`。
+- **静态资源缓存击穿**：WebView2（pywebview Edge）对 `/static/app.js` 等会做启发式长缓存；仅 `no-store` 不够（旧缓存条目无校验器仍命中）。给易变资源加 `?v=<文件 mtime>` 查询参数（server 端 index.html 动态注入），URL 一变即强制重新拉取。
 
 ## 2. 自编程（BOT Self Coding）
 - 当前架构：`libs/qq_bot_runtime/self_coding.py`（Issue 机制 `/同意issue` `/拒绝issue`，复用 `bridge/builder_api`）+ `config.BOT_SELF_CODING_*` 开关。旧 `codebuddy_cli.py`（外部 CLI）已弃用。

@@ -270,8 +270,29 @@ def make_handler(bridge):
             ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
             if path.endswith((".html", ".js", ".css")):
                 ctype += "; charset=utf-8"
-            with open(path, "rb") as f:
-                data = f.read()
+            if os.path.basename(rel) == "index.html":
+                # 防 WebView2/浏览器对静态资源做启发式长缓存：给易变资源加文件 mtime 版本参数，
+                # 文件一改动 URL 即变化，旧缓存自动失效（no-store 仍作为兜底）。
+                import re
+                try:
+                    text = open(path, "r", encoding="utf-8").read()
+
+                    def _bust(m):
+                        asset = m.group(1)
+                        fp = os.path.normpath(os.path.join(WEBUI_DIR, asset[len("/static/"):]))
+                        if os.path.isfile(fp):
+                            return "%s?v=%d" % (asset, int(os.path.getmtime(fp)))
+                        return asset
+
+                    text = re.sub(r"(/static/(?:app\.js|styles\.css))", _bust, text)
+                    data = text.encode("utf-8")
+                except Exception as e:
+                    degrade("server._serve_static", e, "index.html 版本注入失败（退回原样）")
+                    with open(path, "rb") as f:
+                        data = f.read()
+            else:
+                with open(path, "rb") as f:
+                    data = f.read()
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
@@ -405,7 +426,9 @@ def make_handler(bridge):
                 if path in ("/", "/index.html"):
                     return self._serve_static("index.html")
                 if path.startswith("/static/"):
-                    return self._serve_static(path[len("/static/"):])
+                    # 剥离 ?v= 版本查询参数（缓存击穿），按文件名定位资源
+                    rel = path.split("?", 1)[0][len("/static/"):]
+                    return self._serve_static(rel)
                 if path == "/api/events":
                     session = (q.get("session") or ["web"])[0]
                     qq = bridge.subscribe(session)
@@ -546,15 +569,21 @@ def make_handler(bridge):
                         return self._json({"ok": False, "error": audio_err})
                     if not body_text.strip() and not image_paths and not video_path and not audio_wav:
                         return self._json({"ok": False, "error": "消息为空"})
-                    return self._json(bridge.submit_chat(
-                        text=body_text,
-                        session=body.get("session", "web"),
-                        user_id=body.get("user_id", "app_owner"),
-                        name=body.get("name", "主人"),
-                        bot_id=body.get("bot_id"),
-                        image_paths=image_paths,
-                        video_path=video_path,
-                        audio_wav=audio_wav))
+                    try:
+                        return self._json(bridge.submit_chat(
+                            text=body_text,
+                            session=body.get("session", "web"),
+                            user_id=body.get("user_id", "app_owner"),
+                            name=body.get("name", "主人"),
+                            bot_id=body.get("bot_id"),
+                            image_paths=image_paths,
+                            video_path=video_path,
+                            audio_wav=audio_wav))
+                    except Exception as e:
+                        import traceback as _tb
+                        degrade("server.do_POST /api/chat", e,
+                                "聊天处理异常：" + "".join(_tb.format_exception_only(type(e), e)))
+                        return self._json({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
                 if path == "/api/core/start":
                     return self._json(bridge.start(wait=True))
                 if path == "/api/core/stop":

@@ -60,6 +60,44 @@ class Launcher:
         except (URLError, OSError):
             return False
 
+    def _free_port(self, spec: SidecarSpec):
+        """Windows 上 ThreadingHTTPServer 默认 allow_reuse_address=1（SO_REUSEADDR）会静默允许多个
+        进程同时绑定同一端口。上一轮被强杀的主进程不会带走子 sidecar，残留监听与新实例叠加后，
+        /health 探测与新请求都可能命中旧进程，导致记忆/监控数据错乱、聊天无响应。
+        启动前先清掉端口上的残留监听（同机单用户桌面，端口为本进程私属），保证每次启动只有一组干净 sidecar。
+        """
+        if os.name != "nt" or not spec.port:
+            return
+        try:
+            out = subprocess.check_output(
+                ["netstat", "-ano", "-p", "TCP"],
+                stderr=subprocess.DEVNULL, shell=False, timeout=5,
+            ).decode("mbcs", "ignore")
+        except Exception as e:
+            degrade("launcher_core.runtime.Launcher._free_port", e, "端口占用查询失败（跳过清理）")
+            return
+        me = os.getpid()
+        victims = set()
+        want = str(spec.port)
+        for line in out.splitlines():
+            cols = line.split()
+            if len(cols) < 5:
+                continue
+            if cols[1].rsplit(":", 1)[-1] != want:
+                continue
+            pid = cols[4]
+            if pid.isdigit():
+                victims.add(int(pid))
+        victims.discard(me)
+        for pid in victims:
+            try:
+                os.kill(pid, signal.SIGTERM)  # Windows: SIGTERM -> TerminateProcess 强制终止
+            except Exception:
+                pass
+        if victims:
+            print(f"[launcher] 端口 {spec.port} 上的残留监听已清理: {sorted(victims)}", flush=True)
+            time.sleep(0.6)  # 等端口释放，避免新 sidecar 立即绑定冲突
+
     # ---- 拉起 / 退出 ----
     def _build_cmd(self, spec: SidecarSpec) -> List[str]:
         exe = spec.python or sys.executable   # 支持 TTS 等隔离 venv 运行时
@@ -72,6 +110,7 @@ class Launcher:
     def spawn(self, spec: SidecarSpec) -> Optional[subprocess.Popen]:
         if not spec.port:
             return None
+        self._free_port(spec)   # 清掉端口上上一轮的孤儿监听，避免 Windows 静默重复绑定
         log_path = os.path.join(self.root, f"{spec.name}_server.log")
         try:
             logf = open(log_path, "a", encoding="utf-8")
