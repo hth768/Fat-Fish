@@ -1002,7 +1002,17 @@ class BotAgent:
                         continue
                 except Exception as e:
                     degrade("libs/qq_bot_runtime/mc_bot_brain.py:996 BotAgent._brain_round", e, "降级：if await self._pull_game_chat()")
-                msg = await self._llm.chat_with_tools(self._session, BOT_TOOLS, think=self._use_thinking)
+                # 注入「自我编程能力」提示（与其他聊天管线一致），让 AI 在 MC 场景也能主动提 issue 构建
+                from self_coding import build_capability_hint
+                _hint = build_capability_hint()
+                _hint_msg = {"role": "system", "content": _hint} if _hint else None
+                if _hint_msg:
+                    self._session.insert(1, _hint_msg)
+                try:
+                    msg = await self._llm.chat_with_tools(self._session, BOT_TOOLS, think=self._use_thinking)
+                finally:
+                    if _hint_msg and self._session and self._session[1] is _hint_msg:
+                        self._session.pop(1)
                 self._session.append(msg)
                 content = str(msg.get("content") or "").strip()
                 tool_calls = msg.get("tool_calls") or []

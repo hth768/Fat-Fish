@@ -15,11 +15,12 @@ import config
 
 
 class GeminiClient:
-    def __init__(self, api_key: str = None, model: str = None):
+    def __init__(self, api_key: str = None, model: str = None, base_url: str = None):
         self.api_key = api_key or getattr(config, "GEMINI_API_KEY", "")
         self.model = model or getattr(config, "GEMINI_MODEL", "gemini-3.7-flash")
-        # 默认走中转站，可被 config.GEMINI_BASE_URL 覆盖
-        self.base_url = getattr(config, "GEMINI_BASE_URL", "https://api.openclawplan.com").rstrip("/")
+        # 端点可被覆盖层 base_url 注入，回落 config 默认 / 中转站
+        self.base_url = (base_url or getattr(config, "GEMINI_BASE_URL",
+                                            "https://api.openclawplan.com")).rstrip("/")
 
     def _resize_frame(self, image_bytes: bytes, max_size: int = 1280) -> bytes:
         """把图片等比缩放到最大边不超过 max_size，减少 token 消耗。"""

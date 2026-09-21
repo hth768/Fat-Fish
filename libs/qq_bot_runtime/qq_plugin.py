@@ -274,6 +274,44 @@ async def call_action(ws, action: str, params: dict) -> dict:
 plugin_pending_calls = {}
 
 
+def _system_proxy() -> str | None:
+    """读取系统（Windows 注册表）代理地址，供 httpx 下载 QQ 媒体（图片/语音）CDN 使用。
+
+    httpx 默认只认 HTTP_PROXY/HTTPS_PROXY 环境变量，不读 Windows 注册表
+    Internet Settings 代理；而本机 QQ 经系统代理（如 127.0.0.1:9098）访问外网，
+    故需显式取出传给 httpx，否则直连 QQ 图片 CDN 会 All connection attempts failed。
+    非 Windows / 未启用代理时返回 None（httpx 直连）。
+    """
+    try:
+        import sys
+        if sys.platform != "win32":
+            return None
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                             r"Software\Microsoft\Windows\CurrentVersion\Internet Settings")
+        enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
+        if not enabled:
+            return None
+        server, _ = winreg.QueryValueEx(key, "ProxyServer")
+        if not server:
+            return None
+        server = server.strip()
+        # 注册表可能是 "http=host:port;https=host:port" 或纯 "host:port"
+        if "=" in server:
+            parts = dict(p.split("=", 1) for p in server.split(";") if "=" in p)
+            host = parts.get("https") or parts.get("http") or next(iter(parts.values()))
+        else:
+            host = server
+        if not host:
+            return None
+        if not host.startswith("http://") and not host.startswith("https://"):
+            host = "http://" + host
+        return host
+    except Exception as e:
+        print(f"[WARN] 读取系统代理失败，改用直连: {e}")
+        return None
+
+
 async def get_image_bytes(ws, img_data: dict) -> bytes:
     """获取图片二进制：先直接下载 url，失败用 get_image API 刷新后重试。
 
@@ -282,9 +320,12 @@ async def get_image_bytes(ws, img_data: dict) -> bytes:
     """
     file = img_data.get("file", "")
     url = img_data.get("url", "")
+    # 系统代理（Windows 注册表）：QQ 图片/语音 CDN 须经系统代理才能连通；
+    # httpx 默认不读 Windows 注册表代理，仅认 HTTP_PROXY 环境变量，故显式传入。
+    _proxy = _system_proxy()
     if url and isinstance(url, str) and url.startswith(("http://", "https://")):
         try:
-            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True, proxy=_proxy) as c:
                 resp = await c.get(url)
                 if resp.status_code == 200 and len(resp.content) > 0:
                     return resp.content
@@ -300,6 +341,10 @@ async def get_image_bytes(ws, img_data: dict) -> bytes:
                 print(f"[WARN] get_image 获取失败: {e}")
                 result = None
             if isinstance(result, dict):
+                try:
+                    print(f"[DIAG] get_image 返回: keys={list(result.keys())} file={str(result.get('file'))[:160]!r} url={str(result.get('url'))[:160]!r}")
+                except Exception:
+                    pass
                 local_path = result.get("file")
                 if local_path and isinstance(local_path, str) and not local_path.startswith(("http://", "https://")):
                     try:
@@ -313,7 +358,7 @@ async def get_image_bytes(ws, img_data: dict) -> bytes:
                 new_url = result.get("url")
                 if new_url and isinstance(new_url, str) and new_url.startswith(("http://", "https://")):
                     try:
-                        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+                        async with httpx.AsyncClient(timeout=60, follow_redirects=True, proxy=_proxy) as c:
                             resp = await c.get(new_url)
                             if resp.status_code == 200 and len(resp.content) > 0:
                                 return resp.content
@@ -503,7 +548,7 @@ async def decode_voice_wav(record_data: dict) -> bytes:
     if local_path:
         if local_path.startswith(("http://", "https://")):
             try:
-                async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+                async with httpx.AsyncClient(timeout=60, follow_redirects=True, proxy=_system_proxy()) as c:
                     resp = await c.get(local_path)
                     if resp.status_code == 200 and len(resp.content) > 0:
                         audio_bytes = resp.content

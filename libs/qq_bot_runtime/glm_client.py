@@ -63,11 +63,13 @@ def gif_extract_frames(gif_bytes: bytes, max_frames: int = 4) -> list:
 
 
 class GLMClient:
-    def __init__(self):
-        # 视觉识别改用 DeepSeek 视觉模型
-        self.api_key = config.DEEPSEEK_API_KEY
-        self.base_url = config.DEEPSEEK_BASE_URL.rstrip("/")
-        self.model = config.VISION_MODEL
+    def __init__(self, api_key: str = None, base_url: str = None, model: str = None):
+        # 凭据/模型/端点统一从外部（ai_providers.json 覆盖层）注入；
+        # 仅当未传时才回落 config 默认值，避免把视觉模型写死到某个供应商。
+        self.api_key = api_key or getattr(config, "DEEPSEEK_API_KEY", "")
+        self.base_url = (base_url or getattr(config, "DEEPSEEK_BASE_URL",
+                                            "https://api.deepseek.com")).rstrip("/")
+        self.model = model or getattr(config, "VISION_MODEL", "deepseek-flash")
 
     async def describe_image(self, image_bytes: bytes, prompt: str = "") -> str:
         """识别图片内容。

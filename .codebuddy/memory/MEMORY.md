@@ -25,7 +25,8 @@
 - 游戏大脑（McBotBrain/PcBrain/PvzBrain）在 `E:\feiyu_app\plugins/brain_*` 插件包，`plugin_registry` 仅内置 `chat`。
 - 端点/群白名单见下；QQ 群白名单 `config.QQ_GROUP_WHITELIST=[]`（空=所有群；`e:\qq_bot\config.py` 填群号）。
 
-## 3. 记忆子系统 / 防串台
+## 3. 记忆子系统 / 防串台 / 管线结构坑
+- `chat_service._chat_pipeline` 是「多分支预处理（URL/搜索/视频/图片/文字 else）+ 汇合后处理（模型调用、语音判断）」结构：**分支内定义、汇合处使用的变量必须提升到分支链之前初始化**（曾因 `voice_only`/`platform_voice_ok`/`effective_text` 只在 else 定义，图片消息 UnboundLocalError；详见 DEBUG.md §7）。
 - `long_term_memory`(用户档案,新覆盖旧) / `persona_memory`(AI 人格,旧优先) / `reflection_memory`(交互规则,按 user_id,空=全局) / `important_notes`(一次性)，均由 `chat_service` 调用。
 - 避坑：档案/反思须区分主体"用户"vs"AI"，否则 AI 特征写进用户档案。
 - 防串台：每条发 AI 的 user 消息带 `[称呼]` 前缀（`_chat_pipeline` 构建新列表不改持久历史）；`build_memory_messages` 注入有 `if user_id` 守卫，空则整段跳过（靠消息标签兜底）。

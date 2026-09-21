@@ -184,11 +184,14 @@ class RealtimeSession:
             import websockets
         except ImportError:
             raise RuntimeError("未安装 websockets 库")
-        url = getattr(config, "GLM_REALTIME_WS_URL", "") or \
-            "wss://open.bigmodel.cn/api/paas/v4/realtime"
-        api_key = getattr(config, "GLM_REALTIME_API_KEY", "") or config.GLM_API_KEY
+        rp = _realtime_provider_cfg()
+        _ws = getattr(config, "GLM_REALTIME_WS_URL", "") or ""
+        if not _ws and rp.get("base_url"):
+            _ws = rp["base_url"].replace("https://", "wss://").replace("http://", "wss://")
+        url = _ws or "wss://open.bigmodel.cn/api/paas/v4/realtime"
+        api_key = getattr(config, "GLM_REALTIME_API_KEY", "") or rp.get("api_key") or config.GLM_API_KEY
         if not api_key:
-            raise RuntimeError("缺少 GLM API Key（config.GLM_API_KEY 或 GLM_REALTIME_API_KEY）")
+            raise RuntimeError("缺少 GLM API Key（覆盖层 realtime 供应商 / config.GLM_API_KEY 或 GLM_REALTIME_API_KEY）")
         try:
             # websockets>=15 用 additional_headers 传鉴权头
             self.ws = await asyncio.wait_for(
@@ -209,7 +212,10 @@ class RealtimeSession:
             "type": "session.update",
             "event_id": uuid.uuid4().hex,
             "session": {
-                "model": getattr(config, "GLM_REALTIME_MODEL", "glm-realtime-flash"),
+                "model": getattr(config, "GLM_REALTIME_MODEL", "") or (
+                    (rp.get("models") or {}).get("realtime")
+                    or (rp.get("models") or {}).get("vision")
+                    or "glm-realtime-flash"),
                 "modalities": ["audio", "text"],
                 "instructions": self.instructions,
                 "input_audio_format": "pcm16",
@@ -544,6 +550,20 @@ def _chat_provider_cfg():
             return p
     for p in providers.values():
         if p.get("api_key"):
+            return p
+    return {}
+
+
+def _realtime_provider_cfg():
+    """实时语音（GLM-Realtime）凭据：优先取覆盖层里声明 realtime/glm 能力的供应商，
+    回落到 config.GLM_API_KEY / GLM_REALTIME_*。避免把语音模型写死到 config 顶层。"""
+    providers = getattr(config, "AI_PROVIDERS", {}) or {}
+    for _name, p in providers.items():
+        if not p.get("api_key"):
+            continue
+        caps = p.get("capabilities") or []
+        drv = str(p.get("driver") or "").lower()
+        if "realtime" in caps or drv in ("glm", "zhipu", "realtime"):
             return p
     return {}
 

@@ -660,47 +660,71 @@ _DEFAULT_VISION_ROUTING = {
     "text":    ["gemini", "glm"],   # 视觉相关文本总结（chat_text）
 }
 
-# 驱动别名 -> (模块名, 类名, 凭据可用性判断)
-_VISION_DRIVER_FACTORIES = {
-    "glm":    ("glm_client", "GLMClient",
-               lambda: bool(getattr(config, "DEEPSEEK_API_KEY", ""))),
-    "gemini": ("gemini_client", "GeminiClient",
-               lambda: bool(getattr(config, "GEMINI_API_KEY", ""))),
+# 驱动类型 -> (模块名, 类名)。供应商在 ai_providers.json 用 driver 字段选择；
+# 不写则默认 openai 兼容（GLMClient 兼容 OpenAI /chat/completions，可对接 deepseek/glm 等）。
+# 这样视觉模型完全由覆盖层决定，不再写死到某个供应商。
+_VISION_DRIVER_CLASSES = {
+    "glm":     ("glm_client", "GLMClient"),
+    "gemini":  ("gemini_client", "GeminiClient"),
+    "openai":  ("glm_client", "GLMClient"),
+    "deepseek":("glm_client", "GLMClient"),
 }
 
 
 class UnifiedVision:
-    def __init__(self):
-        self.drivers = {}          # 别名 -> 客户端实例
-        for alias, (mod, cls, has_key) in _VISION_DRIVER_FACTORIES.items():
-            if not has_key():
+    def _build_drivers(self, cfg: dict) -> dict:
+        """从覆盖层动态构建视觉驱动：仅纳入「声明 vision 能力且配了 key」的供应商，
+        凭据 / 模型 / 端点全部取自该供应商条目（ai_providers.json），不写死任何供应商。"""
+        drivers = {}
+        for name, p in (cfg.get("providers") or {}).items():
+            if not p.get("api_key"):
                 continue
+            if "vision" not in (p.get("capabilities") or []):
+                continue
+            driver = str(p.get("driver") or "openai").lower()
+            mod, cls = _VISION_DRIVER_CLASSES.get(driver, ("glm_client", "GLMClient"))
+            model = (p.get("models") or {}).get("vision") or p.get("default_model")
             try:
                 m = __import__(mod, fromlist=[cls])
-                self.drivers[alias] = getattr(m, cls)()
+                drivers[name] = getattr(m, cls)(
+                    api_key=p["api_key"], base_url=p.get("base_url"), model=model
+                )
             except Exception as e:
-                print(f"[VISION] 驱动 {alias} 初始化失败: {e}")
+                print(f"[VISION] 驱动 {name} 初始化失败: {e}")
+        return drivers
+
+    def __init__(self):
         cfg = load_provider_config()
+        self.drivers = self._build_drivers(cfg)
         self.routing = cfg["vision_routing"]
         self.role_routing = cfg["role_routing"]
-        self._use_llm_vision = self._vision_slot_enabled(cfg)
+        # 单图/表情等简单任务优先走 LLM 视觉能力（由覆盖层 AI_CAPABILITY_ROUTING.vision
+        # 决定，不写死）；GIF/多帧等专用能力再走下方驱动的故障转移。
+        self._use_llm_vision = bool((cfg.get("capability_routing") or {}).get("vision"))
         self.stats = {
             a: {"calls": 0, "ok": 0, "fail": 0, "latency_ms": 0, "last_error": None}
             for a in self.drivers
         }
 
     def reload(self):
-        """运行时热重载视觉路由（ai_providers.json / config.py 默认值）。"""
+        """运行时热重载视觉驱动与路由（ai_providers.json / config.py 默认值）。"""
         cfg = load_provider_config(reset_cache=True)
+        self.drivers = self._build_drivers(cfg)
         self.routing = cfg["vision_routing"]
         self.role_routing = cfg["role_routing"]
-        self._use_llm_vision = self._vision_slot_enabled(cfg)
+        self._use_llm_vision = bool((cfg.get("capability_routing") or {}).get("vision"))
         for a in self.drivers:
             self.stats.setdefault(a, {"calls": 0, "ok": 0, "fail": 0,
                                       "latency_ms": 0, "last_error": None})
 
     async def _dispatch(self, task: str, method: str, *args, **kwargs):
-        order = self.routing.get(task, list(self.drivers.keys()))
+        # 显式路由（覆盖层 AI_VISION_ROUTING，按供应商名）优先；
+        # 若写的是 glm/gemini 这类旧别名或解析不到任何已构建驱动，则回退到全部已构建驱动。
+        explicit = self.routing.get(task)
+        if explicit:
+            order = [a for a in explicit if a in self.drivers] or list(self.drivers.keys())
+        else:
+            order = list(self.drivers.keys())
         last = None
         for alias in order:
             drv = self.drivers.get(alias)
@@ -729,15 +753,6 @@ class UnifiedVision:
                 last = e
                 print(f"[VISION] 驱动 {alias} 任务={task} 失败: {e}，尝试下一个")
         raise ProviderError(f"所有视觉驱动均失败(任务={task}): {last}")
-
-    @staticmethod
-    def _vision_slot_enabled(cfg):
-        # 仅当用户通过「视觉模型」槽位配置了自定义供应商（名为 vision 且含 Key）时，
-        # 才把单图描述路由到 ai_provider 的 vision 能力；否则继续用 GLM/Gemini 专用驱动。
-        vr = (cfg.get("capability_routing") or {}).get("vision") or []
-        if "vision" not in vr:
-            return False
-        return bool((cfg.get("providers") or {}).get("vision", {}).get("api_key"))
 
     async def describe_image(self, image_bytes: bytes, prompt: str = "") -> str:
         if self._use_llm_vision:
