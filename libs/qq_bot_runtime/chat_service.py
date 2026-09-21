@@ -1448,6 +1448,15 @@ class ChatService:
                 await reply.reply(f"深度思考失败：{e}")
             return
 
+        # 平台语音能力 + 有效文本：统一在媒体/文字各分支之前计算。
+        # 图片/视频/链接分支不会走 else 文字分支，但下方语音回复判断无条件使用
+        # voice_only / platform_voice_ok / effective_text——若只在文字分支定义，
+        # 表情包等媒体消息会 UnboundLocalError（cannot access local variable 'voice_only'）。
+        _cap = getattr(reply, "capabilities", None) or {}
+        platform_voice_ok = bool(_cap.get("voice", True))
+        voice_only = bool(_cap.get("voice_only", False))
+        effective_text = text.strip()
+
         # 优先级 1：指定链接解析（消息里带 URL）
         urls = extract_urls(text)
         if urls:
@@ -1548,18 +1557,13 @@ class ChatService:
                 print(f"[WARN] 意图识别异常: {e}")
 
             # 用户只引用了消息但没写文字时，直接用引用内容作为发言
-            effective_text = text.strip()
+            # （effective_text 已在上方统一初始化，这里只做引用兜底覆盖）
             if not effective_text and (msg.quoted_text or has_quote):
                 q = (msg.quoted_text or "").strip()
                 if q:
                     effective_text = f"[用户引用了消息: {q}] 请回应这条消息"
                 else:
                     effective_text = "[用户引用了上一条消息，但没有附文字] 请回应"
-
-            # 平台语音能力（提前计算，供下方合并判断复用）
-            _cap = getattr(reply, "capabilities", None) or {}
-            platform_voice_ok = bool(_cap.get("voice", True))
-            voice_only = bool(_cap.get("voice_only", False))
 
             # 知识库召回：以前搜索学到过的知识直接注入使用，省一次联网搜索。
             # 用户明确要「最新/现在/今天」等信息时不拦截，照常走联网判断

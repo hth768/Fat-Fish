@@ -170,6 +170,15 @@
 
 ---
 
+## 7. UnboundLocalError：表情包（图片消息）触发 `cannot access local variable 'voice_only'`（2026-09-21 已修复）
+
+- **现象**：QQ 发表情包/图片后，智能体回复「抱歉，出错了：cannot access local variable 'voice_only' where it is not associated with a value」。
+- **根因**：`chat_service.py` 的 `_chat_pipeline` 里，`platform_voice_ok` / `voice_only` / `effective_text` 只在「普通文字对话」的 `else` 分支内定义；但下方的语音回复判断（`want_voice = has_voice or voice_only`）在**所有分支**之后无条件执行。图片/视频/链接消息走 `elif` 分支跳过 `else`，这些变量未绑定 → `UnboundLocalError`。（`use_reasoner`/`_voice_judged` 之前已在分支前初始化，故只有这三个中招。）
+- **修复**：把 `_cap`/`platform_voice_ok`/`voice_only`/`effective_text = text.strip()` 的计算**提升到消息分支链（优先级 1 URL）之前**统一定义；删除 `else` 分支内的重复定义。附带收益：链接消息（URL 分支不 return，会继续往下走）此前同样会崩，一并修复。
+- **教训**：`_chat_pipeline` 是「多分支预处理 + 汇合后处理」结构——**分支内定义、汇合处使用的变量必须提升到分支链之前初始化**；新增分支时先检查汇合处引用了哪些变量。
+
+---
+
 ## 排查技巧速记
 
 - 国内访问 GitHub 不便时，用 GitHub API 而非网页定位 CI：
