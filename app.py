@@ -141,6 +141,12 @@ def main():
     bridge = CoreBridge(lt, port)
     from bridge.core_bridge import set_bridge
     set_bridge(bridge)
+    # 调试模式：按配置预置（配置页可运行时开关，此处保证重启后保持）
+    if app_cfg.get("debug"):
+        try:
+            bridge.set_debug(True)
+        except Exception as e:
+            print("[APP] 调试模式预置失败：%s" % e, file=sys.stderr)
 
     # 插件包管理器：每个插件 = plugins/<包名>/ 独立目录，可插拔
     pkg = plugins_api.init(bridge)
@@ -237,7 +243,13 @@ def main():
             lt.stop()
         except Exception as e:
             degrade("app.main.shutdown.lt_stop", e, "停止事件循环失败")
-    sys.exit(exit_code)
+    # 强制退出：引擎核心可能起了非守护线程，sys.exit() 仅结束主线程、残留线程会
+    # 拖住进程不退出；os._exit 直接终止整个进程（清理已在 finally 完成，子进程已回收）。
+    try:
+        import os as _os
+        _os._exit(exit_code)
+    except Exception:
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":

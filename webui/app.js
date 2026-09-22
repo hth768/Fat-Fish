@@ -16,6 +16,8 @@ const state = {
   botId: "feiyu",
   defaultBot: "feiyu",
   bots: [],
+  debug: false,          // 调试模式是否开启
+  debugLoaded: false,    // 本轮是否已从后端回灌日志
 };
 
 /* ---------------- 基础请求 ---------------- */
@@ -140,6 +142,13 @@ function handleEvent(ev) {
     chip.classList.toggle("busy", state.chatBusy);
   } else if (ev.type === "error") {
     addChatMsg("error", "出错了: " + ev.text);
+  } else if (ev.type === "plugins_updated") {
+    // 构建成功后插件自动加入并启动：若正停留在插件页则立即刷新
+    if (!$("#page-plugins").classList.contains("hidden")) loadPlugins();
+    refreshCorePill();
+  } else if (ev.type === "debug") {
+    // 调试日志：仅控制台打开时实时渲染（关闭时后端缓冲已保留，打开会从 /api/debug/log 回灌）
+    if (!$("#debugConsole").classList.contains("hidden")) appendDebug(ev);
   }
   refreshCorePill();
 }
@@ -179,6 +188,88 @@ function appendEventLog(ev) {
   div.innerHTML = `<span class="t">${fmtTime(ev.ts)}</span>${esc(text)}`;
   log.prepend(div);
   while (log.children.length > 80) log.lastChild.remove();
+}
+
+/* ---------------- 调试控制台 ---------------- */
+async function loadDebug() {
+  try {
+    const d = await GET("/api/debug/log");
+    state.debug = !!d.enabled;
+    const tg = $("#debugToggle");
+    if (tg) tg.checked = state.debug;
+    updateDebugFab();
+    if (state.debug) renderDebugLog(d.log || []);
+    return d;
+  } catch (e) {
+    return { enabled: false, log: [] };
+  }
+}
+
+function renderDebugLog(list) {
+  const body = $("#debugBody");
+  if (!body) return;
+  body.innerHTML = "";
+  (list || []).slice(-2000).forEach(appendDebug);
+}
+
+function dbgKey(ev) {
+  return (ev.level || "log") + "|" + (ev.where || "") + "|" + (ev.text || "");
+}
+
+function appendDebug(ev) {
+  const body = $("#debugBody");
+  if (!body) return;
+  // 重复折叠：repeat 事件只更新最后一行的 ×N 徽标，不新增行
+  if (ev.repeat) {
+    const last = body.lastElementChild;
+    if (last && last.dataset.key === dbgKey(ev)) {
+      const tx = last.querySelector(".dtx");
+      let c = last.querySelector(".dcount");
+      if (tx && !c) { c = document.createElement("span"); c.className = "dcount"; tx.appendChild(c); }
+      if (c) c.textContent = " ×" + ev.repeat;
+      return;
+    }
+  }
+  // 仅当用户贴近底部时才自动滚动，避免翻看历史时被打断
+  const nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
+  const line = document.createElement("div");
+  line.className = "dline lv-" + esc(ev.level || "log");
+  line.dataset.key = dbgKey(ev);
+  const t = fmtTime(ev.ts || Date.now() / 1000);
+  const where = ev.where ? ` <span class="dwh">[${esc(ev.where)}]</span>` : "";
+  const cnt = (ev.count && ev.count > 1) ? `<span class="dcount"> ×${ev.count}</span>` : "";
+  line.innerHTML = `<span class="dts">${t}</span><span class="dlv">${esc(ev.level || "log")}</span><span class="dtx">${esc(ev.text)}${cnt}${where}</span>`;
+  body.appendChild(line);
+  while (body.childElementCount > 2000) body.removeChild(body.firstChild);
+  if (ev.level === "status") {
+    const st = $("#debugStatus");
+    if (st) st.textContent = ev.text;
+  }
+  if (nearBottom) body.scrollTop = body.scrollHeight;
+}
+
+function openDebugConsole() {
+  const c = $("#debugConsole");
+  if (!c) return;
+  c.classList.remove("hidden");
+  // 每次打开都重新拉取：后端缓冲里可能已有折叠计数更新
+  loadDebug().catch(() => { });
+  state.debugLoaded = true;
+}
+
+function closeDebugConsole() {
+  const c = $("#debugConsole");
+  if (c) c.classList.add("hidden");
+}
+
+function clearDebugLog() {
+  const b = $("#debugBody");
+  if (b) b.innerHTML = "";
+}
+
+function updateDebugFab() {
+  const fab = $("#debugFab");
+  if (fab) fab.classList.toggle("hidden", !state.debug);
 }
 
 /* ---------------- 仪表盘 ---------------- */
@@ -266,19 +357,59 @@ function addChatMsg(role, text, local) {
   log.scrollTop = log.scrollHeight;
 }
 
-async function sendChat() {
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s == null ? "" : s;
+  return d.innerHTML;
+}
+
+function addChatMsgHtml(role, html) {
+  const log = $("#chatLog");
+  const div = document.createElement("div");
+  div.className = "msg " + role;
+  div.innerHTML = html;
+  if (role !== "user") {
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = fmtTime(Date.now() / 1000);
+    div.appendChild(meta);
+  }
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+async function sendChat(opts) {
+  opts = opts || {};
   const input = $("#chatInput");
   const text = input.value.trim();
-  if (!text) return;
-  if (state.chatBusy) { toast("她还在思考中，稍等一下…"); return; }
+  const hasMedia = pendingImages.length || pendingVideo || pendingAudio;
+  // 插嘴：允许在机器人忙碌时插入，且可空文本（纯打断当前生成）
+  if (!text && !hasMedia && !opts.barge_in) return;
+  if (state.chatBusy && !opts.barge_in) { toast("她还在思考中，稍等一下…"); return; }
   input.value = "";
   // 乐观锁：立即置忙，不等 SSE status 回包（防快速双击导致重复提交/重复回复）
   state.chatBusy = true;
   const chip = $("#chatState");
   chip.textContent = "思考中…"; chip.classList.add("busy");
-  addChatMsg("user", text, true);
+  // 本地乐观渲染用户消息（含附件缩略）
+  let userHtml = "";
+  if (text) userHtml += escapeHtml(text);
+  pendingImages.forEach(it => { userHtml += `<br><img class="chat-att" src="${it.dataUrl}">`; });
+  if (pendingVideo) userHtml += `<br><span class="chat-att-tag">🎬 视频</span>`;
+  if (pendingAudio) userHtml += `<br><span class="chat-att-tag">🎤 语音</span>`;
+  if (opts.barge_in) userHtml = "<span class='barge-tag'>⚡ 插嘴</span>" + userHtml;
+  if (userHtml) addChatMsgHtml("user", userHtml);
+  // 组装并清空待发附件
+  const payload = {
+    text, session: SESSION,
+    images: pendingImages.map(it => it.dataUrl),
+    video: pendingVideo ? pendingVideo.dataUrl : null,
+    audio: pendingAudio ? pendingAudio.dataUrl : null,
+    barge_in: !!opts.barge_in,
+  };
+  pendingImages = []; pendingVideo = null; pendingAudio = null; renderPending();
   try {
-    const r = await POST("/api/chat", { text, session: SESSION });
+    const r = await POST("/api/chat", payload);
     if (!r.ok) {
       addChatMsg("error", r.error || "发送失败");
       state.chatBusy = false;
@@ -290,11 +421,78 @@ async function sendChat() {
     chip.textContent = "空闲"; chip.classList.remove("busy");
   }
 }
-$("#btnSend").addEventListener("click", sendChat);
+$("#btnSend").addEventListener("click", () => sendChat());
+$("#btnBarge").addEventListener("click", () => sendChat({ barge_in: true }));
 $("#chatInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
 $("#btnClearChat").addEventListener("click", () => { $("#chatLog").innerHTML = ""; });
+
+// ---------------- 聊天附件：图片 / 视频 / 语音 ----------------
+let pendingImages = [];   // [{dataUrl, mime, name}]
+let pendingVideo = null; // {dataUrl, mime, name} | null
+let pendingAudio = null; // {dataUrl, mime} | null
+let mediaRecorder = null, recChunks = [];
+
+function fileToDataURL(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+}
+function renderPending() {
+  const box = $("#chatPreview");
+  if (!box) return;
+  box.innerHTML = "";
+  const add = (label, thumb, remove) => {
+    const d = document.createElement("div");
+    d.className = "prev-item";
+    if (thumb) { const i = document.createElement("img"); i.src = thumb; d.appendChild(i); }
+    else { const s = document.createElement("span"); s.textContent = label; d.appendChild(s); }
+    const x = document.createElement("button");
+    x.className = "prev-x"; x.type = "button"; x.textContent = "×";
+    x.onclick = remove; d.appendChild(x);
+    box.appendChild(d);
+  };
+  pendingImages.forEach((it, i) => add("图片", it.dataUrl, () => { pendingImages.splice(i, 1); renderPending(); }));
+  if (pendingVideo) add("视频", null, () => { pendingVideo = null; renderPending(); });
+  if (pendingAudio) add("语音", null, () => { pendingAudio = null; renderPending(); });
+}
+$("#btnImg").addEventListener("click", () => $("#fileImg").click());
+$("#fileImg").addEventListener("change", async (e) => {
+  for (const f of e.target.files) {
+    pendingImages.push({ dataUrl: await fileToDataURL(f), mime: f.type, name: f.name });
+  }
+  e.target.value = ""; renderPending();
+});
+$("#btnVideo").addEventListener("click", () => $("#fileVideo").click());
+$("#fileVideo").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (f) pendingVideo = { dataUrl: await fileToDataURL(f), mime: f.type, name: f.name };
+  e.target.value = ""; renderPending();
+});
+$("#btnVoice").addEventListener("click", async () => {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") { mediaRecorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    recChunks = [];
+    mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) recChunks.push(ev.data); };
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+      pendingAudio = { dataUrl: await fileToDataURL(blob), mime: blob.type || "audio/webm" };
+      renderPending();
+      stream.getTracks().forEach(t => t.stop());
+      const b = $("#btnVoice"); b.classList.remove("rec"); b.textContent = "🎤";
+    };
+    mediaRecorder.start();
+    const b = $("#btnVoice"); b.classList.add("rec"); b.textContent = "⏹";
+  } catch (err) {
+    toast("无法访问麦克风：" + (err && err.message ? err.message : err));
+  }
+});
 
 /* ---------------- 记忆中心 ---------------- */
 $$(".tab").forEach(t => t.addEventListener("click", () => {
@@ -1172,6 +1370,101 @@ function mountIssues(container) {
   const listEl = container.querySelector(".is-list");
   const titleEl = container.querySelector(".is-title");
 
+  // 展开状态 / 当前数据 / 轮询句柄（mountIssues 内闭包共享）
+  const expanded = new Set();
+  let currentIssues = [];
+  let pollTimer = null;
+
+  // 把构建助手的实时事件流渲染成可读的构建过程
+  function renderBuildLog(log) {
+    if (!log || !log.length) return `<div class="hint">（构建尚未产生日志）</div>`;
+    return log.map(ev => {
+      const t = ev.type;
+      if (t === "delta") {
+        const isThink = ev.kind === "think";
+        return `<div class="bline ${isThink ? "bthink" : "bcontent"}">`
+          + `<span class="blabel">${isThink ? "思考" : "输出"}</span>`
+          + `<span class="btext">${esc(ev.text || "")}</span></div>`;
+      }
+      if (t === "tool_start") {
+        return `<div class="bline btool"><span class="blabel">工具</span>`
+          + `调用 <code>${esc(ev.tool || "")}</code></div>`;
+      }
+      if (t === "tool_end") {
+        const s = ev.step || {};
+        let detail = "";
+        if (s.result) {
+          const r = s.result;
+          detail = r.detail != null ? r.detail
+                 : r.value != null ? String(r.value)
+                 : (r.error ? "错误：" + r.error : JSON.stringify(r));
+        }
+        return `<div class="bline btool"><span class="blabel">结果</span>`
+          + `<span class="${s.ok ? "bok" : "berr"}">${s.ok ? "✅" : "❌"}</span>`
+          + `<span class="btext">${esc(detail)}</span></div>`;
+      }
+      if (t === "done") return `<div class="bline bdone">— 本轮构建完成 —</div>`;
+      return "";
+    }).join("");
+  }
+
+  function renderList() {
+    const issues = currentIssues;
+    if (!issues.length) {
+      listEl.innerHTML = `<div class="hint">暂无 Issue。智能体受阻或想要新功能时会自动提；也可在下方输入框手动提交。</div>`;
+      return;
+    }
+    const stateName = { open: "执行中", pending: "待批准", done: "已完成", failed: "失败", rejected: "已拒绝" };
+    listEl.innerHTML = issues.map(it => {
+      const id = it.id;
+      const cls = (it.state || "").replace(/[^a-z]/g, "");
+      const isOpen = expanded.has(id);
+      let actions;
+      const meta = `<span class="hint">轮次 ${it.rounds || 0}${it.updated ? " · " + it.updated : ""}</span>`;
+      if (it.state === "pending") {
+        actions = `<button class="btn ghost sm" data-act="approve" data-id="${esc(id)}">同意</button>`
+          + `<button class="btn ghost sm" data-act="reject" data-id="${esc(id)}">拒绝</button>`;
+      } else if (it.state === "failed") {
+        actions = `<button class="btn ghost sm" data-act="retry" data-id="${esc(id)}">重提</button>` + meta;
+      } else {
+        actions = meta;
+      }
+      const detail = isOpen
+        ? `<div class="sc-issue-detail"><div class="bhead">实时构建过程</div>${renderBuildLog(it.build_log)}</div>`
+        : "";
+      return `<div class="sc-issue ${isOpen ? "open" : ""}" data-id="${esc(id)}">
+        <div class="sc-issue-head" data-toggle="${esc(id)}">
+          <span class="tw">▸</span>
+          <span class="badge">${esc(it.kind || "")}</span>`
+        + `<span class="badge ${esc(cls)}">${stateName[it.state] || it.state || ""}</span>`
+        + `<b>${esc(id)}</b> <span class="hint">${esc(it.title || "")}</span></div>`
+        + `<div class="sc-issue-actions">${actions}</div>`
+        + (it.result && !isOpen ? `<div class="hint wrap" style="margin:4px 0">结果：${esc(it.result)}</div>` : "")
+        + detail;
+    }).join("");
+    listEl.querySelectorAll("[data-toggle]").forEach(h => h.onclick = () => {
+      const id = h.getAttribute("data-toggle");
+      if (expanded.has(id)) expanded.delete(id); else expanded.add(id);
+      renderList();
+    });
+    listEl.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => {
+      const id = b.dataset.id, act = b.dataset.act;
+      const map = {
+        approve: ["/api/self_coding/approve", "已派给构建助手执行~"],
+        reject: ["/api/self_coding/reject", "已拒绝"],
+        retry: ["/api/self_coding/retry", "已重新派发构建~"],
+      };
+      const cfg = map[act];
+      if (!cfg) return;
+      POST(cfg[0], { id })
+        .then(r => {
+          toast(r && r.ok !== false ? cfg[1] : "失败：" + ((r && r.error) || ""), !(r && r.ok !== false));
+          refresh();
+        })
+        .catch(e => toast(e.message, true));
+    });
+  }
+
   async function refresh() {
     try {
       const d = await GET("/api/self_coding/issues");
@@ -1179,36 +1472,15 @@ function mountIssues(container) {
       statusEl.innerHTML = `自编程总开关：<b style="color:${enabled ? "var(--ok)" : "var(--warn)"}">`
         + `${enabled ? "已开启" : "未开启"}</b> ｜ 开关与权限档在「配置」页的「智能体自编程」区；`
         + `Issue 默认自动执行，关闭后需在此点「同意」才构建。`;
-      const issues = d.issues || [];
-      if (!issues.length) {
-        listEl.innerHTML = `<div class="hint">暂无 Issue。智能体受阻或想要新功能时会自动提；也可在下方输入框手动提交。</div>`;
-        return;
+      currentIssues = d.issues || [];
+      renderList();
+      // 有正在构建（执行中）的 Issue 时自动轮询，实时刷新展开中的构建过程
+      const building = currentIssues.some(it => it.state === "open");
+      if (building && !pollTimer) {
+        pollTimer = setInterval(() => refresh().catch(() => {}), 2000);
+      } else if (!building && pollTimer) {
+        clearInterval(pollTimer); pollTimer = null;
       }
-      const stateName = { open: "执行中", pending: "待批准", done: "已完成", failed: "失败", rejected: "已拒绝" };
-      listEl.innerHTML = issues.map(it => {
-        const cls = (it.state || "").replace(/[^a-z]/g, "");
-        const actions = it.state === "pending"
-          ? `<button class="btn ghost sm" data-act="approve" data-id="${esc(it.id)}">同意</button>`
-            + `<button class="btn ghost sm" data-act="reject" data-id="${esc(it.id)}">拒绝</button>`
-          : `<span class="hint">轮次 ${it.rounds || 0}${it.updated ? " · " + it.updated : ""}</span>`;
-        return `<div class="sc-issue">
-          <div class="sc-issue-head"><span class="badge">${esc(it.kind || "")}</span>`
-          + `<span class="badge ${esc(cls)}">${stateName[it.state] || it.state || ""}</span>`
-          + `<b>${esc(it.id)}</b> <span class="hint">${esc(it.title || "")}</span></div>`
-          + (it.result ? `<div class="hint wrap" style="margin:4px 0">结果：${esc(it.result)}</div>` : "")
-          + `<div class="row-actions">${actions}</div></div>`;
-      }).join("");
-      listEl.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => {
-        const id = b.dataset.id, act = b.dataset.act;
-        (act === "approve" ? POST("/api/self_coding/approve", { id })
-                           : POST("/api/self_coding/reject", { id }))
-          .then(r => {
-            toast(r && r.ok !== false ? (act === "approve" ? "已派给构建助手执行~" : "已拒绝")
-                                       : "失败：" + ((r && r.error) || ""), !(r && r.ok !== false));
-            refresh();
-          })
-          .catch(e => toast(e.message, true));
-      });
     } catch (e) {
       listEl.innerHTML = `<div class="hint" style="color:var(--warn)">${esc(e.message)}</div>`;
     }
@@ -2637,6 +2909,36 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // ----- 本地 AI 依赖按需后装（配置页） -----
   initLocalDeps();
+
+  // ===== 调试模式 =====
+  loadDebug().catch(() => { });
+  const debugToggle = $("#debugToggle");
+  if (debugToggle) debugToggle.addEventListener("change", async function () {
+    const on = this.checked;
+    try {
+      const r = await POST("/api/app/settings", { debug: on });
+      if (r && r.ok !== false) {
+        state.debug = on;
+        toast(on ? "调试模式已开启" : "调试模式已关闭");
+        updateDebugFab();
+        if (on) openDebugConsole(); else closeDebugConsole();
+      } else {
+        this.checked = !on;
+        toast("保存失败：" + ((r && r.error) || ""), true);
+      }
+    } catch (e) {
+      this.checked = !on;
+      toast("保存失败：" + e.message, true);
+    }
+  });
+  const btnOpenDbg = $("#btnOpenDebugConsole");
+  if (btnOpenDbg) btnOpenDbg.addEventListener("click", openDebugConsole);
+  const btnCloseDbg = $("#btnCloseDebug");
+  if (btnCloseDbg) btnCloseDbg.addEventListener("click", closeDebugConsole);
+  const btnClearDbg = $("#btnClearDebug");
+  if (btnClearDbg) btnClearDbg.addEventListener("click", clearDebugLog);
+  const fabDbg = $("#debugFab");
+  if (fabDbg) fabDbg.addEventListener("click", openDebugConsole);
 
   // ===== 记忆：导入 / 导出 =====
   $("#btnExportMem").addEventListener("click", async () => {

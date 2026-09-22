@@ -93,6 +93,7 @@ class InboundMessage:
     message_id: str = ""
     text: str = ""                     # 纯文本内容
     mentioned: bool = False            # 群聊中是否 @了机器人（私聊恒 True）
+    barge_in: bool = False             # 插嘴：打断机器人正在进行的回复（取消当前生成任务）
     image_refs: List[Any] = field(default_factory=list)   # 图片引用列表
     audio_wav: bytes = b""             # 已解码为 wav 的语音（无语音为空；语音解码是平台职责）
     has_video: bool = False

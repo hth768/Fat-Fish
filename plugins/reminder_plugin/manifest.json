@@ -1,0 +1,37 @@
+{
+  "schema_version": 2,
+  "name": "reminder_plugin",
+  "title": "定时提醒",
+  "kind": "feature",
+  "version": "1.1.0",
+  "description": "自包含的定时提醒/闹钟插件：支持「每日定时(HH:MM) / 固定间隔(秒) / 一次性延时(秒) / 绝对时间闹钟(once_at)」四类提醒，到点经官方通道 core.app_bridge 推到 App 事件流；支持免打扰时段与 task 标签。不依赖任何第三方库，可独立加载。",
+  "switch": "",
+  "plugin": "reminder_plugin",
+  "config_schema": [
+    {
+      "key": "reminders",
+      "label": "提醒清单（JSON）",
+      "type": "json",
+      "default": [
+        { "text": "喝水时间到啦，主人～", "every": 3600 }
+      ],
+      "desc": "数组，每项四者其一：{\"text\":\"内容\",\"at\":\"08:30\"} 每日定时；或 \"every\":3600 固定间隔秒；或 \"delay\":600 一次性（装载后经过秒数触发）；或 \"once_at\":\"2026-09-21 07:00\" 绝对时间闹钟（也支持只写 \"HH:MM\"，取今天该时刻、已过则顺延到明天）。可选项 \"task\":\"标签\" 会拼在提醒文案前，如「⏰ 提醒：[叫起床] 快起床啦」；once_at 解析失败则该项被丢弃。"
+    },
+    {
+      "key": "check_interval",
+      "label": "检查间隔（秒）",
+      "type": "int",
+      "min": 5,
+      "max": 3600,
+      "default": 20,
+      "desc": "轮询提醒的周期，默认 20 秒（每日定时按分钟匹配，建议 ≤60）"
+    },
+    {
+      "key": "quiet_hours",
+      "label": "免打扰时段",
+      "type": "str",
+      "default": "",
+      "desc": "形如 23:00-07:00；留空则不启用。该时段内不推送提醒。"
+    }
+  ]
+}

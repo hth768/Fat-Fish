@@ -1,0 +1,10 @@
+{
+  "name": "bilibili_platform",
+  "title": "B 站直播平台插件",
+  "kind": "platform",
+  "version": "1.0.0",
+  "description": "B 站直播平台：streamer 模式自己开播当主播（弹幕当耳朵+口播回应）；viewer 模式连别人直播间回弹幕。无 TTS 时自动降级纯文字。",
+  "switch": "ENABLE_BILIBILI_PLUGIN",
+  "plugin": "bilibili",
+  "optional_requires": ["vox_tts"]
+}

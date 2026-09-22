@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "name": "pomodoro_plugin",
+  "title": "番茄钟专注计时",
+  "kind": "feature",
+  "version": "1.0.0",
+  "description": "自包含的番茄钟 / 专注计时插件：自动循环「专注→短休→…→长休→专注」，每段开始时经官方通道 core.app_bridge 往 App 事件流推一行提示；支持每循环长休、每日专注目标与免打扰时段。不依赖任何第三方库，可独立加载；装卸后核心无需改动。",
+  "switch": "",
+  "plugin": "pomodoro_plugin",
+  "config_schema": [
+    {
+      "key": "work_minutes",
+      "label": "专注时长（分钟）",
+      "type": "int",
+      "min": 1,
+      "max": 180,
+      "default": 25,
+      "desc": "单个番茄的专注时长，默认 25 分钟"
+    },
+    {
+      "key": "short_break_minutes",
+      "label": "短休时长（分钟）",
+      "type": "int",
+      "min": 1,
+      "max": 60,
+      "default": 5,
+      "desc": "每段专注后的短休，默认 5 分钟"
+    },
+    {
+      "key": "long_break_minutes",
+      "label": "长休时长（分钟）",
+      "type": "int",
+      "min": 1,
+      "max": 120,
+      "default": 15,
+      "desc": "完成一个循环后的长休，默认 15 分钟"
+    },
+    {
+      "key": "cycles_before_long",
+      "label": "几个番茄后长休",
+      "type": "int",
+      "min": 1,
+      "max": 12,
+      "default": 4,
+      "desc": "每完成这么多段专注进入一次长休，默认 4"
+    },
+    {
+      "key": "daily_goal",
+      "label": "每日专注目标（段）",
+      "type": "int",
+      "min": 0,
+      "max": 100,
+      "default": 0,
+      "desc": "当天达到该段数后停机，次日自动重开；0 = 不限"
+    },
+    {
+      "key": "quiet_hours",
+      "label": "免打扰时段",
+      "type": "str",
+      "default": "",
+      "desc": "形如 23:00-07:00，该时段内不推送提示（计时照常）；留空则不启用"
+    }
+  ]
+}

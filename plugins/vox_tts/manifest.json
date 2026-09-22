@@ -1,0 +1,9 @@
+{
+  "name": "vox_tts",
+  "title": "本地 VoxCPM2 TTS",
+  "kind": "feature",
+  "version": "1.0.0",
+  "description": "本地 TTS sidecar 管理器：自动用 venv_vox 拉起 vox_tts_server 推理服务（免费无限制），失败/超时自动回退 GLM 云端 TTS。音色见 VOXCPM_VOICE_DESC。",
+  "switch": "ENABLE_TTS_SERVER",
+  "plugin": "vox_tts"
+}

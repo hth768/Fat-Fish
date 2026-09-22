@@ -1,0 +1,9 @@
+{
+  "name": "brain_pvz",
+  "title": "PVZ 游戏大脑",
+  "kind": "brain",
+  "version": "1.0.0",
+  "description": "PvzAgent：自己看屏幕玩植物大战僵尸（阳光快层收取 + LLM 读盘决策 + 规则策略）。启用后发 /pvz 开局，游戏须保持前台。",
+  "switch": "ENABLE_PVZ_BRAIN",
+  "plugin": "pvz"
+}

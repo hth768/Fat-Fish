@@ -1,0 +1,9 @@
+{
+  "name": "sidecar_telemetry",
+  "title": "遥测服务",
+  "kind": "sidecar",
+  "version": "1.0.0",
+  "description": "独立进程运行 telemetry_server.py（telemetry.json 遥测数据采集上报）。",
+  "switch": "ENABLE_TELEMETRY_SERVER",
+  "sidecar": { "script": "telemetry_server.py", "host": "127.0.0.1", "port": 8771 }
+}

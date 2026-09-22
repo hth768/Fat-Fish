@@ -1,0 +1,9 @@
+{
+  "name": "brain_pc",
+  "title": "电脑操控大脑",
+  "kind": "brain",
+  "version": "1.0.0",
+  "description": "PcAgent：截屏→视觉理解→键鼠执行的 Windows GUI 智能体。启用后发 /电脑做 <任务> 下发任务（主人专属）。",
+  "switch": "ENABLE_PC_CONTROL",
+  "plugin": "pc"
+}

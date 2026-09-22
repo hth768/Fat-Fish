@@ -6,7 +6,9 @@ import os
 import socket
 import subprocess
 import sys
+import base64
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -20,6 +22,84 @@ if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
 from bridge import appearance_api, builder_api, config_api, memory_api, plugins_api, provider_api, summary_api  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# 聊天媒体附件：data URL 解码落盘 + 语音转码
+# ---------------------------------------------------------------------------
+_MEDIA_EXT = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg",
+    "image/gif": ".gif", "image/webp": ".webp", "image/bmp": ".bmp",
+    "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov",
+    "video/x-matroska": ".mkv",
+    "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/mpeg": ".mp3",
+    "audio/webm": ".weba", "audio/ogg": ".ogg", "audio/mp4": ".m4a",
+    "audio/aac": ".aac", "audio/flac": ".flac",
+}
+
+
+def _decode_data_url(data_url):
+    """data:[mime];base64,xxxx -> (bytes, mime)；非 data URL 按裸 base64 尝试。"""
+    if not isinstance(data_url, str):
+        return None, ""
+    if data_url.startswith("data:"):
+        try:
+            head, b64 = data_url.split(",", 1)
+            mime = head[5:].split(";")[0] or "application/octet-stream"
+            return base64.b64decode(b64), mime
+        except Exception:
+            return None, ""
+    try:
+        return base64.b64decode(data_url), "application/octet-stream"
+    except Exception:
+        return None, ""
+
+
+def _media_dir():
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "media")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _save_media_file(data_url, prefix):
+    """data URL -> 落盘 data/media，返回绝对路径；无效返回 None。"""
+    raw, mime = _decode_data_url(data_url)
+    if not raw:
+        return None
+    ext = _MEDIA_EXT.get(mime, ".bin")
+    path = os.path.join(_media_dir(), f"{prefix}_{uuid.uuid4().hex}{ext}")
+    with open(path, "wb") as f:
+        f.write(raw)
+    return path
+
+
+def _audio_to_wav(data_url):
+    """语音 data URL -> (wav_bytes, error)。wav/mp3 直接返回；webm/ogg 经 ffmpeg 转 16k 单声道 wav。
+
+    浏览器 MediaRecorder 产出 webm/opus，引擎 ASR 需要 wav；转码复用视频处理共用的 ffmpeg
+    （config.FFMPEG_PATH，未配置则尝试 PATH 中的 ffmpeg）。
+    """
+    raw, mime = _decode_data_url(data_url)
+    if not raw:
+        return None, "语音数据无效"
+    if mime in ("audio/wav", "audio/x-wav", "audio/mpeg"):
+        return raw, ""
+    try:
+        from config import FFMPEG_PATH
+    except Exception:
+        FFMPEG_PATH = ""
+    ff = FFMPEG_PATH or "ffmpeg"
+    try:
+        p = subprocess.run(
+            [ff, "-y", "-i", "pipe:0", "-ar", "16000", "-ac", "1", "-f", "wav", "pipe:1"],
+            input=raw, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        if p.returncode != 0 or not p.stdout:
+            return None, "语音转码失败（ffmpeg 不可用或格式不支持）"
+        return p.stdout, ""
+    except FileNotFoundError:
+        return None, "未安装 ffmpeg，无法处理该格式语音（请在「本地 AI 依赖」安装 ffmpeg）"
+    except Exception as e:  # noqa: BLE001
+        return None, f"语音转码异常：{e}"
 
 
 class QuietServer(ThreadingHTTPServer):
@@ -190,8 +270,29 @@ def make_handler(bridge):
             ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
             if path.endswith((".html", ".js", ".css")):
                 ctype += "; charset=utf-8"
-            with open(path, "rb") as f:
-                data = f.read()
+            if os.path.basename(rel) == "index.html":
+                # 防 WebView2/浏览器对静态资源做启发式长缓存：给易变资源加文件 mtime 版本参数，
+                # 文件一改动 URL 即变化，旧缓存自动失效（no-store 仍作为兜底）。
+                import re
+                try:
+                    text = open(path, "r", encoding="utf-8").read()
+
+                    def _bust(m):
+                        asset = m.group(1)
+                        fp = os.path.normpath(os.path.join(WEBUI_DIR, asset[len("/static/"):]))
+                        if os.path.isfile(fp):
+                            return "%s?v=%d" % (asset, int(os.path.getmtime(fp)))
+                        return asset
+
+                    text = re.sub(r"(/static/(?:app\.js|styles\.css))", _bust, text)
+                    data = text.encode("utf-8")
+                except Exception as e:
+                    degrade("server._serve_static", e, "index.html 版本注入失败（退回原样）")
+                    with open(path, "rb") as f:
+                        data = f.read()
+            else:
+                with open(path, "rb") as f:
+                    data = f.read()
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
@@ -258,12 +359,13 @@ def make_handler(bridge):
                 degrade("server._serve_sse", e, "SSE 事件流断开（客户端可能已离开）")
 
         def _sse_write(self, ev):
-            try:
-                data = json.dumps(ev, ensure_ascii=False)
-                self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
-                self.wfile.flush()
-            except Exception as e:
-                degrade("server._sse_write", e, "SSE 写入失败")
+            # 写失败必须向上抛：让 _serve_sse 退出循环并 finally 注销订阅。
+            # 若在此吞掉异常，客户端断开后写线程永不退出，每条广播都会
+            # 对死连接写一次失败一次（调试开启时 degrade→push_debug→广播
+            # 再次失败，形成自我放大的刷屏反馈环）。
+            data = json.dumps(ev, ensure_ascii=False)
+            self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+            self.wfile.flush()
 
         # ---------------- 构建助手：流式对话（POST 上行的 SSE） ----------------
         def _builder_chat_stream(self, body):
@@ -325,7 +427,9 @@ def make_handler(bridge):
                 if path in ("/", "/index.html"):
                     return self._serve_static("index.html")
                 if path.startswith("/static/"):
-                    return self._serve_static(path[len("/static/"):])
+                    # 剥离 ?v= 版本查询参数（缓存击穿），按文件名定位资源
+                    rel = path.split("?", 1)[0][len("/static/"):]
+                    return self._serve_static(rel)
                 if path == "/api/events":
                     session = (q.get("session") or ["web"])[0]
                     qq = bridge.subscribe(session)
@@ -396,6 +500,10 @@ def make_handler(bridge):
                 if path == "/api/appearance":
                     return self._json(appearance_api.get_appearance(
                         (q.get("theme") or [""])[0] or None))
+                # ----- 调试日志（开启调试模式时采集） -----
+                if path == "/api/debug/log":
+                    return self._json({"enabled": bridge.debug_enabled(),
+                                       "log": bridge.get_debug_log()})
                 if path.startswith("/api/appearance/bg"):
                     raw = appearance_api.read_bg()
                     if not raw:
@@ -449,12 +557,39 @@ def make_handler(bridge):
                     ok = _local_installer.start(cuda=(mode == "cuda"))
                     return self._json({"ok": ok, "status": _local_installer.status()})
                 if path == "/api/chat":
-                    return self._json(bridge.submit_chat(
-                        text=body.get("text", ""),
-                        session=body.get("session", "web"),
-                        user_id=body.get("user_id", "app_owner"),
-                        name=body.get("name", "主人"),
-                        bot_id=body.get("bot_id")))
+                    body_text = body.get("text", "") or ""
+                    images = [u for u in (body.get("images") or []) if isinstance(u, str)]
+                    video = body.get("video") or None
+                    audio = body.get("audio") or None
+                    image_paths, video_path, audio_wav, audio_err = [], None, None, None
+                    for u in images:
+                        p = _save_media_file(u, "img")
+                        if p:
+                            image_paths.append(p)
+                    if video:
+                        video_path = _save_media_file(video, "vid")
+                    if audio:
+                        audio_wav, audio_err = _audio_to_wav(audio)
+                    if audio and audio_err:
+                        return self._json({"ok": False, "error": audio_err})
+                    if not body_text.strip() and not image_paths and not video_path and not audio_wav:
+                        return self._json({"ok": False, "error": "消息为空"})
+                    try:
+                        return self._json(bridge.submit_chat(
+                            text=body_text,
+                            session=body.get("session", "web"),
+                            user_id=body.get("user_id", "app_owner"),
+                            name=body.get("name", "主人"),
+                            bot_id=body.get("bot_id"),
+                            image_paths=image_paths,
+                            video_path=video_path,
+                            audio_wav=audio_wav,
+                            barge_in=bool(body.get("barge_in", False))))
+                    except Exception as e:
+                        import traceback as _tb
+                        degrade("server.do_POST /api/chat", e,
+                                "聊天处理异常：" + "".join(_tb.format_exception_only(type(e), e)))
+                        return self._json({"ok": False, "error": "%s: %s" % (type(e).__name__, e)})
                 if path == "/api/core/start":
                     return self._json(bridge.start(wait=True))
                 if path == "/api/core/stop":
@@ -644,6 +779,9 @@ def make_handler(bridge):
                 if path == "/api/self_coding/reject":
                     import self_coding
                     return self._json(self_coding.reject_issue(body.get("id", "")))
+                if path == "/api/self_coding/retry":
+                    import self_coding
+                    return self._json(self_coding.retry_issue(body.get("id", "")))
                 if path == "/api/self_coding/file":
                     import self_coding
                     return self._json(self_coding.file_issue(

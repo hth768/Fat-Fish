@@ -1,0 +1,9 @@
+{
+  "name": "balance_monitor",
+  "title": "DeepSeek 余额监控",
+  "kind": "feature",
+  "version": "1.0.0",
+  "description": "定时查询 DeepSeek 账户余额，低于阈值（BALANCE_ALERT_THRESHOLD）时提醒（经发送通道）。",
+  "switch": "ENABLE_BALANCE_MONITOR",
+  "plugin": "balance_monitor"
+}

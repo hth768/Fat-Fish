@@ -1,0 +1,9 @@
+{
+  "name": "console_platform",
+  "title": "控制台平台插件",
+  "kind": "platform",
+  "version": "1.0.0",
+  "description": "终端聊天平台：在启动 App 的控制台窗口里直接和肥鱼娘对话（stdin 输入）。",
+  "switch": "ENABLE_CONSOLE_PLUGIN",
+  "plugin": "console"
+}

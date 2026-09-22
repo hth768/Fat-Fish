@@ -9,10 +9,14 @@
 流程：
   InboundMessage -> 命令分发 -> 触发判断 -> 记忆/上下文构建 -> DeepSeek -> 回复动作
 """
+from __future__ import annotations
+
 import asyncio
+from collections import deque
 import os
 import re
 import time
+import random
 
 import config
 import emotion
@@ -100,6 +104,33 @@ def _brain_detail_line(brain, st) -> str:
     return str(st.get("description") or "")
 
 
+class _BacklogItem:
+    """积压队列中的一个消息项。"""
+    __slots__ = ("msg", "reply", "ev")
+    def __init__(self, msg, reply, ev):
+        self.msg = msg
+        self.reply = reply
+        self.ev = ev
+
+
+class _Session:
+    """一个聊天会话的调度状态：串行队列 + 消费者 task + 当前生成 task + 唤醒信号。
+
+    同一 (平台/频道/用户) 对应一个 _Session，保证该会话的消息 FIFO 串行处理，
+    并支持「连发合并回复」与「插嘴打断」（取消 current 生成 task）。
+    """
+    __slots__ = ("items", "task", "current", "wake", "coalesce_ms", "merge", "idle")
+
+    def __init__(self, coalesce_ms=700, merge=True, idle=5.0):
+        self.items = deque()
+        self.task = None
+        self.current = None
+        self.wake = asyncio.Event()
+        self.coalesce_ms = coalesce_ms
+        self.merge = merge
+        self.idle = idle
+
+
 class ChatService:
     """聊天大脑。通过 handle_message() 接收任何平台的消息。"""
 
@@ -107,6 +138,8 @@ class ChatService:
         self.agent_id = agent_id
         self.llm = get_llm()  # 统一多供应商入口（chat/reasoning/tools/vision）
         self.vision = get_vision()  # 统一视觉层（GLM/Gemini 驱动，按任务路由 + 故障转移）
+        # 会话调度状态：key -> _Session（积压队列 + 插嘴）
+        self._sessions = {}
         # 使用 SessionManagerAdapter 替代 Memory，支持会话热切换
         self.memory = SessionManagerAdapter()
 
@@ -114,13 +147,171 @@ class ChatService:
     # 主入口
     # ==================================================================
     async def handle_message(self, msg: InboundMessage, reply: ReplyTarget):
-        """处理一条平台无关的消息。按所属智能体设置隔离上下文，保证记忆命名空间正确。"""
-        # 多智能体隔离：本次处理全程处于该智能体的记忆命名空间
+        """处理一条平台无关的消息。
+
+        多智能体隔离 + 会话调度：同一 (平台/频道/用户) 的消息进入串行队列，
+        支持「积压消息合并回复」与「插嘴打断」（barge_in）。
+        """
         token = agent_ctx.set_agent(self.agent_id)
         try:
-            return await self._handle_message(msg, reply)
+            return await self._dispatch_message(msg, reply)
         finally:
             agent_ctx.reset_agent(token)
+
+    # ==================================================================
+    # 会话调度：积压消息合并回复 + 插嘴打断
+    # ==================================================================
+    def _session_key(self, msg: InboundMessage) -> tuple:
+        """同一 (平台, 频道类型, 频道, 用户) 视为一个串行会话。"""
+        return (msg.platform, msg.channel_type, msg.channel_id, msg.user_id)
+
+    def _backlog_cfg(self):
+        """返回 (合并窗口毫秒, 是否合并, 空闲超时秒, 插嘴开关)。"""
+        return (
+            max(0, int(getattr(config, "BACKLOG_COALESCE_MS", 700))),
+            bool(getattr(config, "BACKLOG_MERGE", True)),
+            max(1.0, float(getattr(config, "BACKLOG_IDLE_TIMEOUT", 5.0))),
+            bool(getattr(config, "BARGE_IN_ENABLED", True)),
+        )
+
+    async def _dispatch_message(self, msg: InboundMessage, reply: ReplyTarget):
+        """把消息交给会话调度器：入队、必要时启动消费者、等待本条处理完成。
+
+        - 普通消息追加到队列尾部，按 FIFO 串行处理（保证顺序、不丢、不并发竞争上下文）。
+        - 插嘴消息（barge_in）插到队首，并立即取消当前正在进行的生成任务。
+        """
+        coalesce_ms, merge, idle, barge_enabled = self._backlog_cfg()
+        text = (msg.text or "").strip()
+        # 插嘴命令归一：/插嘴 xxx 或 /打断 xxx 被视为带 barge_in 的消息
+        if barge_enabled and (text.startswith("/插嘴") or text.startswith("/打断")):
+            pre = "/插嘴" if text.startswith("/插嘴") else "/打断"
+            msg.barge_in = True
+            msg.text = text[len(pre):].strip()
+        key = self._session_key(msg)
+        sess = self._sessions.get(key)
+        if sess is None:
+            sess = self._sessions[key] = _Session(coalesce_ms, merge, idle)
+        ev = asyncio.Event()
+        item = _BacklogItem(msg, reply, ev)
+        if getattr(msg, "barge_in", False):
+            sess.items.appendleft(item)
+            if sess.current is not None and not sess.current.done():
+                sess.current.cancel()  # 打断机器人正在进行的回复
+        else:
+            sess.items.append(item)
+        sess.wake.set()
+        if sess.task is None or sess.task.done():
+            sess.task = asyncio.ensure_future(self._consume(key, sess))
+        # 等待本条消息被处理完（平台 await handle_message 的语义保持不变）
+        await ev.wait()
+
+    async def _consume(self, key, sess):
+        """消费者循环：取出积压消息，合并窗口内收集连发，逐批交给管线处理。"""
+        loop = asyncio.get_event_loop()
+        try:
+            while True:
+                if not sess.items:
+                    sess.wake.clear()
+                    try:
+                        await asyncio.wait_for(sess.wake.wait(), sess.idle)
+                    except asyncio.TimeoutError:
+                        return  # 会话空闲，消费者退出
+                    if not sess.items:
+                        continue
+                # 取首条
+                batch = [sess.items.popleft()]
+                if getattr(batch[0].msg, "barge_in", False):
+                    # 插嘴消息立即处理（打断已在 dispatch 阶段触发）
+                    await self._process_batch(sess, batch)
+                    continue
+                # 合并窗口：在 coalesce 时间内收集同会话连发的多条消息
+                deadline = loop.time() + sess.coalesce_ms / 1000.0
+                while True:
+                    wait = deadline - loop.time()
+                    if wait <= 0:
+                        break
+                    sess.wake.clear()
+                    try:
+                        await asyncio.wait_for(sess.wake.wait(), wait)
+                    except asyncio.TimeoutError:
+                        break
+                    while sess.items and not getattr(sess.items[0].msg, "barge_in", False):
+                        batch.append(sess.items.popleft())
+                    if sess.items and getattr(sess.items[0].msg, "barge_in", False):
+                        break  # 插嘴到来，留给下一轮立即处理
+                # 窗口结束（超时/到点）后，收割剩余普通消息，避免漏处理
+                while sess.items and not getattr(sess.items[0].msg, "barge_in", False):
+                    batch.append(sess.items.popleft())
+                await self._process_batch(sess, batch)
+        finally:
+            sess.task = None
+            # 兜底：退出瞬间又有残留消息则重启消费者（竞态保护）
+            if sess.items:
+                sess.task = asyncio.ensure_future(self._consume(key, sess))
+
+    async def _process_batch(self, sess, batch):
+        """处理一批消息：插嘴逐条处理；普通连发可按配置合并为一条。"""
+        barge_items = [it for it in batch if getattr(it.msg, "barge_in", False)]
+        normal_items = [it for it in batch if not getattr(it.msg, "barge_in", False)]
+        for it in barge_items:
+            await self._run_one(sess, it)
+        if not normal_items:
+            return
+        if sess.merge and len(normal_items) > 1:
+            merged = self._merge_items(normal_items)
+            extra = [it.ev for it in normal_items[1:]]
+            await self._run_one(sess, normal_items[0], override=merged, extra_events=extra)
+        else:
+            for it in normal_items:
+                await self._run_one(sess, it)
+
+    async def _run_one(self, sess, item, override=None, extra_events=None):
+        """执行单条（或合并后的）消息；跟踪 current task 供插嘴取消。"""
+        msg = override if override is not None else item.msg
+        reply = item.reply
+        task = asyncio.ensure_future(self._handle_message(msg, reply))
+        sess.current = task
+        try:
+            await task
+        except asyncio.CancelledError:
+            # 被插嘴打断：本次不回复，仅标记完成
+            pass
+        except Exception as e:
+            # 双重兜底（_handle_message 内已 reply），再保险一次
+            try:
+                await reply.reply(f"抱歉，出错了：{e}")
+            except Exception:
+                pass
+        finally:
+            sess.current = None
+            item.ev.set()
+            for e2 in (extra_events or []):
+                e2.set()
+
+    def _merge_items(self, items):
+        """把多条连发消息合并为一条（text 用换行拼接，媒体取首条）。"""
+        base = items[0].msg
+        texts = [(it.msg.text or "").strip() for it in items]
+        merged_text = "\n".join(t for t in texts if t) or (base.text or "")
+        return InboundMessage(
+            platform=base.platform,
+            channel_type=base.channel_type,
+            channel_id=base.channel_id,
+            user_id=base.user_id,
+            user_name=base.user_name,
+            message_id=base.message_id,
+            text=merged_text,
+            image_refs=list(base.image_refs or []),
+            audio_wav=base.audio_wav or b"",
+            has_video=base.has_video,
+            video_ref=base.video_ref,
+            quoted_text=base.quoted_text,
+            quoted_image_refs=list(base.quoted_image_refs or []),
+            quoted_sender=base.quoted_sender,
+            quoted_self=base.quoted_self,
+            mentioned=base.mentioned,
+            raw=base.raw,
+        )
 
     async def _handle_message(self, msg: InboundMessage, reply: ReplyTarget):
         user_id = msg.user_id
@@ -1149,7 +1340,7 @@ class ChatService:
         # ---------------- 触发判断 ----------------
         # 群聊接话已关闭：未被 @（should_reply 为 False）时，只有"引用了机器人自己发的
         # 消息"才允许触发（QQ 上引用=对着机器人说话）；语音/视频/引用别人的消息都不再接话。
-        if not self.should_reply(msg):
+        if not await self.should_reply(msg):
             if not (has_quote and getattr(msg, "quoted_self", False)):
                 return
 
@@ -1363,6 +1554,7 @@ class ChatService:
 
         messages = self.memory.get(channel_type, channel_id, user_id)
         use_reasoner = False
+        _voice_judged = False  # 合并判断的语音意图结果（仅普通文字分支内赋值，其余分支保持 False）
 
         # 每 bot 人格覆盖：若该 bot 在 AgentCore 上设置了 _persona_override，
         # 用它替换基座人设（config.SYSTEM_PROMPT），实现多 bot 人格隔离。
@@ -1387,6 +1579,7 @@ class ChatService:
 
         # 说话人标识（防串台降级）：优先真实称呼，其次 user_name，再次 channel 兜底，最后 "用户"
         # 既用于下方记忆注入的身份锚点，也用于待会儿给每条 user 消息打标签。
+        user_name = getattr(msg, "user_name", "") or ""
         try:
             from emotion import resolve_display_name
             speaker_label = (resolve_display_name(user_id) or user_name or user_id
@@ -1444,6 +1637,15 @@ class ChatService:
                 await reply.reply(f"深度思考失败：{e}")
             return
 
+        # 平台语音能力 + 有效文本：统一在媒体/文字各分支之前计算。
+        # 图片/视频/链接分支不会走 else 文字分支，但下方语音回复判断无条件使用
+        # voice_only / platform_voice_ok / effective_text——若只在文字分支定义，
+        # 表情包等媒体消息会 UnboundLocalError（cannot access local variable 'voice_only'）。
+        _cap = getattr(reply, "capabilities", None) or {}
+        platform_voice_ok = bool(_cap.get("voice", True))
+        voice_only = bool(_cap.get("voice_only", False))
+        effective_text = text.strip()
+
         # 优先级 1：指定链接解析（消息里带 URL）
         urls = extract_urls(text)
         if urls:
@@ -1498,31 +1700,43 @@ class ChatService:
         elif msg.image_refs:
             user_content = text.strip()
             for ref in msg.image_refs:
+                # 1) 取图片二进制（动图常无直链 url，需 get_image 缓存；取不到即无法识别）
                 try:
                     img_bytes = await reply.fetch_image(ref)
-                    if detect_image_type(img_bytes) == "gif":
-                        desc = await self.vision.describe_gif_animation(img_bytes)
+                except Exception as e:
+                    print(f"[ERROR] 图片获取失败: {e}")
+                    user_content = text.strip() if text.strip() else "[图片获取失败]"
+                    continue
+                # 2) 视觉识别：GIF / 动图（含动画 WebP）抽多帧，其余单帧；
+                #    动图多帧失败则退回单帧描述，避免整个识别被吞掉
+                try:
+                    if detect_image_type(img_bytes) in ("gif", "webp"):
+                        try:
+                            desc = await self.vision.describe_gif_animation(img_bytes)
+                        except Exception as e:
+                            print(f"[WARN] 动图多帧识别失败，退回单帧: {e}")
+                            desc = await self.vision.describe_image(img_bytes, user_content)
                     else:
                         desc = await self.vision.describe_image(img_bytes, user_content)
                     user_content = f"[图片描述] {desc}" + (f"\n[用户文字] {text.strip()}" if text.strip() else "")
-                    # 收集表情包：保存图片 + 识别情绪 + 详细描述
-                    # （局部变量叫 emoji_emotion，避免遮蔽 emotion 情绪模块）
-                    try:
-                        emoji_emotion = await self.vision.recognize_emotion(img_bytes)
-                        emoji_desc = ""
-                        try:
-                            emoji_desc = await self.vision.describe_emoji(img_bytes)
-                        except Exception as e:
-                            print(f"[WARN] 表情包描述识别失败: {e}")
-                        ext_map = {"jpeg": ".jpg", "png": ".png", "gif": ".gif", "webp": ".webp"}
-                        ext = ext_map.get(detect_image_type(img_bytes), ".jpg")
-                        name = emoji_store.add_emoji(img_bytes, emoji_emotion, emoji_desc, ext)
-                        print(f"[INFO] 表情包已收集: {name} (情绪: {emoji_emotion})")
-                    except Exception as e:
-                        print(f"[WARN] 表情包收集失败: {e}")
                 except Exception as e:
                     print(f"[ERROR] 图片识别失败: {e}")
                     user_content = text.strip() if text.strip() else "[图片识别失败]"
+                    continue
+                # 3) 收集表情包（独立 try，失败不影响上面的识别结果）
+                try:
+                    emoji_emotion = await self.vision.recognize_emotion(img_bytes)
+                    emoji_desc = ""
+                    try:
+                        emoji_desc = await self.vision.describe_emoji(img_bytes)
+                    except Exception as e:
+                        print(f"[WARN] 表情包描述识别失败: {e}")
+                    ext_map = {"jpeg": ".jpg", "png": ".png", "gif": ".gif", "webp": ".webp"}
+                    ext = ext_map.get(detect_image_type(img_bytes), ".jpg")
+                    name = emoji_store.add_emoji(img_bytes, emoji_emotion, emoji_desc, ext)
+                    print(f"[INFO] 表情包已收集: {name} (情绪: {emoji_emotion})")
+                except Exception as e:
+                    print(f"[WARN] 表情包收集失败: {e}")
             messages.append({"role": "user", "content": user_content})
         # 优先级 4：普通文字对话
         else:
@@ -1544,7 +1758,7 @@ class ChatService:
                 print(f"[WARN] 意图识别异常: {e}")
 
             # 用户只引用了消息但没写文字时，直接用引用内容作为发言
-            effective_text = text.strip()
+            # （effective_text 已在上方统一初始化，这里只做引用兜底覆盖）
             if not effective_text and (msg.quoted_text or has_quote):
                 q = (msg.quoted_text or "").strip()
                 if q:
@@ -1563,32 +1777,62 @@ class ChatService:
                         messages.append({"role": "system", "content": kb_context})
                         print("[KB] 知识库命中，跳过联网搜索")
 
-            # 自动联网判断（知识库已命中时不重复联网）
+            # 自动联网 + 自动推理 + 语音意图 + 功能需求探测：合并为「一次」LLM 判断
+            # （替代 should_web_search / should_reason / wants_voice_reply / _file_feature_issue_now
+            #  四次独立调用，省 3 次往返）。各能力有开关/前置预判守卫。
             need_search = False
-            if config.AUTO_WEB_SEARCH and effective_text and not kb_context:
-                # 关键词预判：仅疑似实时话题才跑 LLM judge + 联网，闲聊直接跳过（省 ~1.7s 前置开销）
-                if _looks_realtime(effective_text):
-                    need_search = await should_web_search(effective_text)
-                else:
-                    print("[WEB] 非实时话题，跳过联网 judge")
-                if need_search:
-                    await reply.reply("唔...这个我得去查查最新的，等我翻翻资料~")
-                    try:
-                        search_result = await search_web(effective_text)
-                        await reply.reply(search_result)
-                        # 后台沉淀：把这次搜到的通用知识记进知识库
-                        knowledge_service.get_knowledge().learn_async(effective_text, search_result)
-                        if config.ENABLE_MEMORY:
-                            self.memory.add(channel_type, channel_id, user_id, "user", effective_text)
-                        return
-                    except Exception as e:
-                        print(f"[ERROR] 自动联网搜索失败: {e}")
-                        need_search = False
-
-            # 自动推理判断
             use_reasoner = False
-            if config.AUTO_REASONING and effective_text:
-                use_reasoner = await should_reason(effective_text)
+            _judge_search = bool(config.AUTO_WEB_SEARCH and effective_text and not kb_context
+                                  and _looks_realtime(effective_text))
+            _judge_reason = bool(config.AUTO_REASONING and effective_text)
+            _judge_voice = bool(config.ENABLE_VOICE and platform_voice_ok
+                                and not (has_voice or voice_only)
+                                and not effective_text.strip().startswith(("/", "搜索", "思考")))
+            _judge_feature = bool(getattr(config, "BOT_SELF_CODING_ENABLED", False)
+                                  and effective_text
+                                  and not effective_text.strip().startswith("/"))
+            _feature_catalog = ""
+            if _judge_feature:
+                _feature_catalog = _build_capability_catalog()
+                try:
+                    core = getattr(self, "core", None)
+                    if core is not None:
+                        brains = [getattr(b, "title", "") or getattr(b, "name", "") for b in core.brains.all()]
+                        if brains:
+                            _feature_catalog += "\n【已注册大脑】\n" + "\n".join("- " + x for x in brains)
+                except Exception as e:
+                    print(f"[WARN] 功能清单-大脑读取失败: {e}")
+            _voice_judged = False
+            if _judge_search or _judge_reason or _judge_voice or _judge_feature:
+                _caps = await _judge_capabilities(effective_text, _judge_search, _judge_reason,
+                                                  _judge_voice, _judge_feature, _feature_catalog)
+                need_search = _caps["need_search"]
+                use_reasoner = _caps["need_reason"]
+                _voice_judged = _caps["need_voice"]
+                if _judge_feature:
+                    # 功能需求：LLM 判定 ∪ 本地启发式，降低漏判（增强判断强度）
+                    _need_feat = _caps["need_feature"]
+                    _feat_summary = _caps["feature_summary"]
+                    _fh = _looks_like_feature_request(effective_text)
+                    if _fh[0] and not _caps["feature_already"] \
+                            and not _catalog_covers_request(_fh[1], _feature_catalog):
+                        _need_feat = True
+                        _feat_summary = _feat_summary or _fh[1] or effective_text.strip()[:60]
+                    if _need_feat and _feat_summary:
+                        asyncio.create_task(self._file_feature_issue_now(_feat_summary, user_id))
+            if need_search:
+                await reply.reply("唔...这个我得去查查最新的，等我翻翻资料~")
+                try:
+                    search_result = await search_web(effective_text)
+                    await reply.reply(search_result)
+                    # 后台沉淀：把这次搜到的通用知识记进知识库
+                    knowledge_service.get_knowledge().learn_async(effective_text, search_result)
+                    if config.ENABLE_MEMORY:
+                        self.memory.add(channel_type, channel_id, user_id, "user", effective_text)
+                    return
+                except Exception as e:
+                    print(f"[ERROR] 自动联网搜索失败: {e}")
+                    need_search = False
 
             # 注入实时时间
             try:
@@ -1690,6 +1934,11 @@ class ChatService:
         except Exception as e:
             print(f"[WARN] 说话人标签注入失败（不影响主流程）: {e}")
 
+        # 注入自身能力提示：已装载插件 + 自我编程能力，避免对插件能做的/可自建的需求回答「做不到了」
+        cap_hint = _build_self_capability_hint()
+        if cap_hint:
+            messages.append({"role": "system", "content": cap_hint})
+
         # 调用模型（统一供应商：推理走 reasoning，否则 chat）
         # 若当前 bot 在 AgentCore 上设置了 _model_override，则覆盖主聊天模型（不改变推理模型）
         _model_override = getattr(getattr(self, "core", None), "_model_override", None)
@@ -1780,15 +2029,13 @@ class ChatService:
         # 平台能力降级：capabilities.voice=False 的平台（如 B 站弹幕）直接走文字，
         # 跳过语音意图判断（省一次 LLM 调用）与语音合成；
         # capabilities.voice_only=True 的平台（如 B 站直播）只有语音通道，恒走语音。
-        _cap = getattr(reply, "capabilities", None) or {}
-        platform_voice_ok = bool(_cap.get("voice", True))
-        voice_only = bool(_cap.get("voice_only", False))
         want_voice = has_voice or voice_only
         if config.ENABLE_VOICE and platform_voice_ok and not want_voice:
             if re.match(r'^/?(语音|voice)\b', text.strip()):
                 want_voice = True
-            elif not text.strip().startswith(("/", "搜索", "思考")):
-                want_voice = await wants_voice_reply(text)
+            else:
+                # 复用上方「一次合并判断」的语音意图结果（不再单独调 wants_voice_reply）
+                want_voice = bool(_voice_judged)
 
         if config.ENABLE_VOICE and platform_voice_ok and want_voice:
             voice_text = clean_voice_text(reply_text)
@@ -1826,18 +2073,87 @@ class ChatService:
     # ==================================================================
     # 触发判断
     # ==================================================================
-    def should_reply(self, msg: InboundMessage) -> bool:
-        """判断是否应回复该消息。"""
+    async def _file_feature_issue_now(self, summary: str, user_id: str):
+        """（由合并判断触发的轻量提 Issue：不再单独调 LLM）
+
+        入参 summary 已由 `_judge_capabilities` 一次性判定产出（is_request=是、already_have=否）。
+        此处只做冷却去重 + 经 self_coding.file_issue 提 feature Issue（受 ISSUE_AUTO 控制自动执行）。
+        全程异常静默，绝不阻塞主回复。
+        """
+        try:
+            from self_coding import file_issue, is_enabled
+            if not is_enabled():
+                return
+            summary = (summary or "").strip()[:120]
+            if not summary:
+                return
+            # 冷却去重：同一需求 10 分钟内不重复提
+            _now = time.time()
+            _key = re.sub(r"\s+", "", summary)[:40]
+            if _FEATURE_ISSUE_COOLDOWN.get(_key, 0) > _now - 600:
+                return
+            for _k in list(_FEATURE_ISSUE_COOLDOWN):
+                if _FEATURE_ISSUE_COOLDOWN[_k] < _now - 600:
+                    _FEATURE_ISSUE_COOLDOWN.pop(_k, None)
+            _FEATURE_ISSUE_COOLDOWN[_key] = _now
+            body = (f"用户提出但尚未具备的能力需求：{summary}\n\n"
+                    "请在现有架构（插件/大脑/聊天管道）内评估如何实现，若可行请自动构建并提交。")
+            res = file_issue(title=f"需求：{summary}", body=body, kind="feature")
+            print(f"[SELF-CODING] 功能需求探测命中，已提 Issue: {res.get('issue_id')} （{summary}）")
+        except Exception as e:
+            print(f"[WARN] 功能需求 Issue 提交失败（不影响主回复）: {e}")
+
+    async def should_reply(self, msg: InboundMessage) -> bool:
+        """判断是否应回复该消息（群聊主动接话：关键词快路径 + 10%随机 + 语义判断）。"""
         if msg.channel_type == "private":
             return True
         if config.ONLY_MENTION_OR_PRIVATE:
             if msg.mentioned:
                 return True
-            if getattr(config, "ENABLE_PROACTIVE_SPEAKER", False) and getattr(config, "PROACTIVE_GROUP_REPLY", False):
-                if _is_related_topic(msg.text):
+            # 主动接话群白名单：配置了则仅列表内群主动接话，其余群只回 @（空=全部群，兼容旧行为）
+            chatter_groups = getattr(config, "GROUP_CHATTER_GROUPS", []) or []
+            if chatter_groups and str(msg.channel_id) not in {str(g) for g in chatter_groups}:
+                return False
+            # 1) 关键词快路径：强相关话题直接接（便宜，不打 LLM）
+            if _is_related_topic(msg.text):
+                return True
+            # 2) 10% 随机接话：即使语义判断无关，也有概率随便接一句
+            if random.random() < float(getattr(config, "GROUP_CHATTER_PROB", 0.10)):
+                return True
+            # 3) 语义判断：LLM 判断消息是否对"智能体自己感兴趣的话题"相关/能接茬
+            if getattr(config, "GROUP_SEMANTIC_REPLY", True):
+                if await self._semantic_interest(msg):
                     return True
             return False
         return True
+
+    async def _semantic_interest(self, msg: InboundMessage) -> bool:
+        """语义接话：用 LLM 判断群聊消息是否值得智能体自然接一句话。
+
+        话题范围由 GROUP_SEMANTIC_INTERESTS（默认见 _DEFAULT_INTERESTS）界定，
+        不局限于游戏，而是智能体自己感兴趣的话题。失败/超时不接（安全降级，防刷屏）。
+        """
+        text = (msg.text or "").strip()
+        if len(text) < 2:
+            return False
+        interests = getattr(config, "GROUP_SEMANTIC_INTERESTS", _DEFAULT_INTERESTS)
+        to = float(getattr(config, "GROUP_SEMANTIC_TIMEOUT", 8.0))
+        messages = [
+            {"role": "system", "content": "你是肥鱼娘的接话判断助手。只输出 JSON，不要任何解释。"},
+            {"role": "user", "content": (
+                f"肥鱼娘感兴趣的话题包括：{interests}\n\n"
+                f"下面是一条 QQ 群聊消息：\n「{text}」\n\n"
+                f"判断这条消息是否值得肥鱼娘自然地接一句话"
+                f"（与她感兴趣的话题相关 / 有趣 / 能接茬 / 她会想插嘴）。\n"
+                f'只回答 JSON：{{"reply": true}} 或 {{"reply": false}}。')},
+        ]
+        try:
+            raw = await asyncio.wait_for(
+                self.llm.chat(messages, capability="chat", timeout=int(to)),
+                to + 1.0)
+            return '"reply": true' in raw.replace(" ", "").lower()
+        except Exception:
+            return False
 
     # ==================================================================
     # 语音：ASR 与 TTS（编解码由平台插件负责，这里只调云端接口）
@@ -1938,6 +2254,18 @@ class ChatService:
 # ============================================================================
 # 模块级工具函数（平台无关的判断/提取，供 ChatService 与其它模块复用）
 # ============================================================================
+
+# 智能体（肥鱼娘）自己感兴趣的话题范围，用于群聊语义接话判断（不局限于游戏）。
+_DEFAULT_INTERESTS = (
+    "游戏（尤其是我的世界/Minecraft、生存、建造、红石、开黑一起玩）；"
+    "可爱萌系事物（猫娘、猫狗小动物、毛绒、宝宝用语）；"
+    "美食与饮品（火锅、奶茶、甜点、零食、好吃的）；"
+    "情感与日常（喜欢/讨厌/开心/难过/吐槽/八卦/表白/分手）；"
+    "动漫影视与二次元（番剧、角色、cos、电影）；"
+    "她自己的设定相关（被喊名字、讨论她的身份/能力）；"
+    "无聊/摸鱼/放假/周末/天气等轻松闲聊"
+)
+
 
 def _is_related_topic(text: str) -> bool:
     """判断群聊消息是否与肥鱼娘相关（游戏/自己/被喊名字等），相关则主动接话。"""
@@ -2144,6 +2472,175 @@ async def wants_voice_reply(text: str) -> bool:
     except Exception as e:
         print(f"[WARN] 语音意图判断失败，默认不用语音: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# 自编程功能需求探测：LLM 判断 + 本地启发式双保险（增强判断强度）
+# ---------------------------------------------------------------------------
+async def _call_capability_judge(prompt: str) -> str:
+    """调用「判断用」LLM：优先 role=judge（若有专门路由），失败回退默认 chat 供应商。
+
+    D 盘部署实测 role=judge 无可用供应商会抛异常，导致整段判断失效、功能需求探测形同虚设。
+    回退默认 chat 供应商可让判断真正生效；两层都不可用才交给启发式兜底。
+    """
+    try:
+        return await get_llm().chat([{"role": "user", "content": prompt}], capability="chat", role="judge")
+    except Exception:
+        # 未配置 judge 供应商时，用默认 chat 供应商兜底，确保判断仍可用
+        return await get_llm().chat([{"role": "user", "content": prompt}], capability="chat")
+
+
+# 明确「请求新增/设置/支持某功能」的信号（偏向新功能，规避普通闲聊）
+_FEATURE_REQ_PATTERNS = [
+    r"定时(任务|提醒|闹钟|计划)",
+    r"提醒我(每|在|到|几点|\d|每天|每周|上午|下午|早上|晚上)",
+    r"(帮我|请|能不能|可以|可不可以|能否|想让你)(设置|添加|加|创建|建|写|做|实现|弄|搞|开发|造|搞个|做个)(一个|个|一)?(.{0,6})(功能|插件|能力|模块|大脑|机器人|小工具|定时|提醒)",
+    r"(增加|添加|支持|开通|实现|开发|集成|接入)(了?)(一个|个|一)?(.{0,6})(功能|插件|能力|模块|大脑|接口|定时|提醒)",
+    r"有没有(.{0,6})(功能|插件|能力|办法|方式|渠道|方法)(可以|能|来|去)?",
+    r"能不能(.{0,8})(功能|插件|能力|定时|提醒)|能(.{0,4})(帮我)?(.{0,6})吗",
+    r"我希望(有|能|可以|具备)(一个|个|一)?(.{0,6})(功能|插件|能力|定时|提醒)",
+    r"我想要(一个|个|一)?(.{0,6})(功能|插件|能力|定时|提醒)",
+    r"(帮|给)我(写一个|做个|编个|开发个)(.{0,6})(脚本|程序|机器人|插件)",
+]
+# 否定信号：表明确认「已有」该能力，不视为新需求
+_FEATURE_ALREADY_OK = ["已经", "早就", "本来就有", "本来就会", "已经可以", "已经有了", "你不是已经"]
+
+
+def _looks_like_feature_request(text: str):
+    """启发式判断用户是否在请求新功能/能力。返回 (是否像, 提取的简短需求短语)。
+
+    仅作 LLM 判断不可用或漏判时的增强兜底；模式偏向明确的「新增/设置/支持某功能」，
+    普通闲聊（如「帮我查天气」）不会命中。命中后由调用方对照能力清单过滤已支持项。
+    """
+    if not text:
+        return (False, "")
+    if any(neg in text for neg in _FEATURE_ALREADY_OK):
+        return (False, "")
+    for pat in _FEATURE_REQ_PATTERNS:
+        m = re.search(pat, text)
+        if m:
+            phrase = m.group(0).strip()
+            phrase = re.sub(r"^(帮我|请|想让你|能不能|可以|可不可以|能否|我希望|我想要|给我|你)(帮我)?", "", phrase)
+            return (True, phrase[:40])
+    return (False, "")
+
+
+def _catalog_covers_request(phrase: str, catalog: str) -> bool:
+    """粗粒度：提取的需求短语是否已被现有能力清单覆盖，避免为已有功能误提单。"""
+    if not phrase or not catalog:
+        return False
+    toks = set(re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_\-]+", catalog))
+    for seg in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9_\-]+", phrase):
+        if seg in toks:
+            return True
+    return False
+
+
+async def _judge_capabilities(text: str, judge_search: bool, judge_reason: bool,
+                            judge_voice: bool, judge_feature: bool = False,
+                            feature_catalog: str = "") -> Dict[str, object]:
+    """一次 LLM 调用，综合判断本消息是否需要：联网搜索 / 深度推理 / 语音回复 / 新增功能需求。
+
+    替代原 should_web_search / should_reason / wants_voice_reply / _file_feature_issue_now 四次独立判断
+    （省 3 次 LLM 往返）。judge_* 为对应能力的启用开关；关闭的能力不参与、直接返回默认值。
+    解析：对每项取首次出现的「需要/不需要」判定（「不需要」优先），稳健不依赖模型严格格式。
+    """
+    out = {"need_search": False, "need_reason": False, "need_voice": False,
+           "need_feature": False, "feature_already": False, "feature_summary": ""}
+    if not (judge_search or judge_reason or judge_voice or judge_feature):
+        return out
+    parts = []
+    if judge_search:
+        parts.append("1) 是否需要联网搜索实时信息（天气/新闻/股价/最新事件/时效事实/现实人物公司地点事件）：回答 需要 或 不需要")
+    if judge_reason:
+        parts.append("2) 是否需要深度推理（数学证明/逻辑/算法/为什么怎么办/多步思考）：回答 需要 或 不需要")
+    if judge_voice:
+        parts.append("3) 用户是否希望用语音（而非文字）回复（如「说给我听」「用语音和我聊」）：回答 需要 或 不需要")
+    if judge_feature:
+        parts.append("4) 用户是否在请求「当前尚不具备的新能力/功能」（而非普通闲聊或对已有功能的正常使用）："
+                     "回答 需要 或 不需要；若需要，再回答 feature_already（该能力是否已在下方清单里有对应/等价能力：是/否）"
+                     "和 feature_summary（用一句话概括这个待新增功能）。"
+                     "注意：即便只是隐含地希望拥有某种新能力（如「帮我做个X」「有没有办法X」「能XX吗」「设置定时任务」），"
+                     "只要当前清单没有对应/等价能力，也应判为需要——宁可多提，不要漏判。")
+    prompt = (
+        "你是一个判断助手。请对用户消息逐条判断，每项只回答「需要」或「不需要」（功能项额外回答 是/否 与 一句话）。\n"
+        + "\n".join(parts) + "\n\n"
+        f"用户消息：{text}\n\n"
+    )
+    if judge_feature and feature_catalog:
+        prompt += (
+            "下面是「肥鱼娘」当前已具备的功能/能力清单，用于判断 feature_already：\n"
+            f"{feature_catalog}\n\n"
+        )
+    prompt += "请严格按以下格式每行一项输出（未启用的项不输出）：\n"
+    if judge_search:
+        prompt += "need_search: 需要/不需要\n"
+    if judge_reason:
+        prompt += "need_reason: 需要/不需要\n"
+    if judge_voice:
+        prompt += "need_voice: 需要/不需要\n"
+    if judge_feature:
+        prompt += "need_feature: 需要/不需要\nfeature_already: 是/否\nfeature_summary: <待新增功能一句话概括>\n"
+    try:
+        result = await _call_capability_judge(prompt)
+        result = result or ""
+        for key, on in (("need_search", judge_search), ("need_reason", judge_reason), ("need_voice", judge_voice)):
+            if not on:
+                continue
+            m = re.search(rf"{key}\s*[:：]?\s*(需要|不需要)", result)
+            out[key] = bool(m) and m.group(1) == "需要"
+        if judge_feature:
+            m_f = re.search(r"need_feature\s*[:：]?\s*(需要|不需要)", result)
+            out["need_feature"] = bool(m_f) and m_f.group(1) == "需要"
+            if out["need_feature"]:
+                m_a = re.search(r"feature_already\s*[:：]?\s*(是|否)", result)
+                out["feature_already"] = bool(m_a) and m_a.group(1) == "是"
+                m_s = re.search(r"feature_summary\s*[:：]?\s*(.+)", result)
+                out["feature_summary"] = (m_s.group(1).strip() if m_s else text.strip())[:120]
+    except Exception as e:
+        print(f"[WARN] 综合能力判断失败，按保守兜底(联网/推理默认需要, 功能默认不需要): {e}")
+        if judge_search:
+            out["need_search"] = True
+        if judge_reason:
+            out["need_reason"] = True
+    return out
+
+
+_FEATURE_ISSUE_COOLDOWN: Dict[str, float] = {}
+
+
+def _build_self_capability_hint() -> str:
+    """注入主聊天的「自身能力」提示：已装载插件 + 自我编程能力。
+
+    单一真相源已迁至 self_coding.build_capability_hint()（各聊天/大脑管线共用），
+    这里仅做转发，避免多份实现漂移。
+    """
+    from self_coding import build_capability_hint
+    return build_capability_hint()
+
+
+def _build_capability_catalog() -> str:
+    """汇总「当前已具备的能力/功能/插件/大脑」清单，供功能需求探测判定。
+    含插件/大脑 SPECS 名与已知内置能力关键词（自然语言表述的能力即使无对应插件也计入）。
+    """
+    items = []
+    try:
+        from plugin_registry import SPECS
+        for s in SPECS:
+            title = f"（{s.title}）" if s.title else ""
+            items.append(f"{s.name}{title}[{s.kind}]")
+    except Exception as e:
+        print(f"[WARN] 功能清单-插件读取失败: {e}")
+    known = [
+        "聊天对话", "记忆(人物档案/重要信息)", "表情包识别", "心情(情绪)识别与表达",
+        "联网搜索(实时信息)", "深度推理(推理模型)", "语音输入(语音识别)", "语音输出(语音合成/朗读)",
+        "电脑操控(操控鼠标键盘)", "Minecraft(MC)监听与操控", "植物大战僵尸(PVZ)自动化",
+        "B站直播/视频学习", "对话总结", "实时视觉(看屏幕/窗口/摄像头/游戏)", "截图",
+        "插件/大脑管理(安装启用)", "自我编程(自动提Issue构建功能)", "主动说话(闲聊)",
+        "翻译", "身份绑定(跨平台)", "知识库(搜索沉淀)",
+    ]
+    lines = ["【插件/大脑清单】"] + ["- " + i for i in items] + ["【内置/已知能力】"] + ["- " + k for k in known]
+    return "\n".join(lines)
 
 
 async def extract_memory(user_text: str, reply: str, include_mood: bool = False, user_id: str = "") -> dict:

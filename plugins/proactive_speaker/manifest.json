@@ -1,0 +1,9 @@
+{
+  "name": "proactive_speaker",
+  "title": "主动说话调度器",
+  "kind": "feature",
+  "version": "1.0.0",
+  "description": "隔一阵子主动找主人私聊/在群里开话题/游戏分享（经 MessageSender 发送；无平台通道时静默待命）。目标见 PROACTIVE_PRIVATE_USER_ID。",
+  "switch": "ENABLE_PROACTIVE_SPEAKER",
+  "plugin": "proactive_speaker"
+}
