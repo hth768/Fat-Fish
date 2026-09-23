@@ -105,6 +105,9 @@ td.wrap { white-space: pre-wrap; word-break: break-word; max-width: 480px; }
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 .btn.primary:hover { background: var(--accent2); }
+.btn.barge { background: var(--warn, #f59e0b); border-color: var(--warn, #f59e0b); color: #1a1206; font-weight: 700; }
+.btn.barge:hover { filter: brightness(1.08); }
+.barge-tag { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 6px; background: var(--warn, #f59e0b); color: #1a1206; font-size: 11px; font-weight: 700; vertical-align: middle; }
 .btn.ghost { background: transparent; }
 .btn.small { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
 .btn.danger { border-color: var(--err); color: var(--err); background: transparent; }

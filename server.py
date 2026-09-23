@@ -583,7 +583,8 @@ def make_handler(bridge):
                             bot_id=body.get("bot_id"),
                             image_paths=image_paths,
                             video_path=video_path,
-                            audio_wav=audio_wav))
+                            audio_wav=audio_wav,
+                            barge_in=bool(body.get("barge_in", False))))
                     except Exception as e:
                         import traceback as _tb
                         degrade("server.do_POST /api/chat", e,

@@ -580,7 +580,7 @@ class CoreBridge:
     def submit_chat(self, text: str, session: str = "web", user_id: str = OWNER_ID,
                     name: str = OWNER_NAME, bot_id: str = None,
                     image_paths: list = None, video_path: str = None,
-                    audio_wav: bytes = None) -> dict:
+                    audio_wav: bytes = None, barge_in: bool = False) -> dict:
         """提交一条用户消息到指定 bot 的 ChatService（异步执行，回复走 SSE）。
 
         媒体经本地落盘路径传入：image_paths=图片绝对路径列表；video_path=视频路径；
@@ -607,6 +607,7 @@ class CoreBridge:
             has_video=bool(video_path),
             video_ref=video_path,
             mentioned=True,
+            barge_in=barge_in,
             raw={"session": session, "source": "app", "bot_id": bot_id or ""},
         )
         reply = AppReplyTarget(session, msg=msg)

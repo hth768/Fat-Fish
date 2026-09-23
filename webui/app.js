@@ -378,12 +378,14 @@ function addChatMsgHtml(role, html) {
   log.scrollTop = log.scrollHeight;
 }
 
-async function sendChat() {
+async function sendChat(opts) {
+  opts = opts || {};
   const input = $("#chatInput");
   const text = input.value.trim();
   const hasMedia = pendingImages.length || pendingVideo || pendingAudio;
-  if (!text && !hasMedia) return;
-  if (state.chatBusy) { toast("她还在思考中，稍等一下…"); return; }
+  // 插嘴：允许在机器人忙碌时插入，且可空文本（纯打断当前生成）
+  if (!text && !hasMedia && !opts.barge_in) return;
+  if (state.chatBusy && !opts.barge_in) { toast("她还在思考中，稍等一下…"); return; }
   input.value = "";
   // 乐观锁：立即置忙，不等 SSE status 回包（防快速双击导致重复提交/重复回复）
   state.chatBusy = true;
@@ -395,13 +397,15 @@ async function sendChat() {
   pendingImages.forEach(it => { userHtml += `<br><img class="chat-att" src="${it.dataUrl}">`; });
   if (pendingVideo) userHtml += `<br><span class="chat-att-tag">🎬 视频</span>`;
   if (pendingAudio) userHtml += `<br><span class="chat-att-tag">🎤 语音</span>`;
-  addChatMsgHtml("user", userHtml);
+  if (opts.barge_in) userHtml = "<span class='barge-tag'>⚡ 插嘴</span>" + userHtml;
+  if (userHtml) addChatMsgHtml("user", userHtml);
   // 组装并清空待发附件
   const payload = {
     text, session: SESSION,
     images: pendingImages.map(it => it.dataUrl),
     video: pendingVideo ? pendingVideo.dataUrl : null,
     audio: pendingAudio ? pendingAudio.dataUrl : null,
+    barge_in: !!opts.barge_in,
   };
   pendingImages = []; pendingVideo = null; pendingAudio = null; renderPending();
   try {
@@ -417,7 +421,8 @@ async function sendChat() {
     chip.textContent = "空闲"; chip.classList.remove("busy");
   }
 }
-$("#btnSend").addEventListener("click", sendChat);
+$("#btnSend").addEventListener("click", () => sendChat());
+$("#btnBarge").addEventListener("click", () => sendChat({ barge_in: true }));
 $("#chatInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
