@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import os
 import re
 import time
+import random
 
 import config
 import emotion
@@ -102,6 +104,69 @@ def _brain_detail_line(brain, st) -> str:
     return str(st.get("description") or "")
 
 
+class _BacklogItem:
+    """积压队列中的一个消息项。"""
+    __slots__ = ("msg", "reply", "ev")
+    def __init__(self, msg, reply, ev):
+        self.msg = msg
+        self.reply = reply
+        self.ev = ev
+
+
+class _Session:
+    """一个聊天会话的调度状态：串行队列 + 消费者 task + 当前生成 task + 唤醒信号。
+
+    同一 (平台/频道/用户) 对应一个 _Session，保证该会话的消息 FIFO 串行处理，
+    并支持「连发合并回复」与「插嘴打断」（取消 current 生成 task）。
+    """
+    __slots__ = ("items", "task", "current", "wake", "coalesce_ms", "merge", "idle")
+
+    def __init__(self, coalesce_ms=700, merge=True, idle=5.0):
+        self.items = deque()
+        self.task = None
+        self.current = None
+        self.wake = asyncio.Event()
+        self.coalesce_ms = coalesce_ms
+        self.merge = merge
+        self.idle = idle
+
+
+# ==================================================================
+# 群聊多人对话聚合 + 话题检测（模块级缓冲）
+# 按 channel_id 滚动记录群里所有人的消息（不含命令/空文本/机器人自己），
+# 用于回复时聚合「群整体上下文」，以及轻量话题检测。这样群里接话/被@时，
+# 模型看到的是多人近况与当前话题，而不是孤立的单条触发消息。
+# ==================================================================
+_GROUP_MSG_BUFFER: dict = {}    # channel_id -> list[{ts, user_id, user_name, text}]
+_GROUP_TOPIC_CACHE: dict = {}   # channel_id -> {topic, ts, count}
+
+
+def _record_group_message(msg) -> None:
+    """把群里任意人的消息记入聚合缓冲。命令/空文本/非群聊跳过。"""
+    if getattr(msg, "channel_type", None) != "group":
+        return
+    text = (msg.text or "").strip()
+    if not text or text.startswith("/"):
+        return
+    cid = msg.channel_id
+    buf = _GROUP_MSG_BUFFER.get(cid)
+    if buf is None:
+        buf = []
+        _GROUP_MSG_BUFFER[cid] = buf
+    buf.append({
+        "ts": time.time(),
+        "user_id": str(msg.user_id),
+        "user_name": getattr(msg, "user_name", "") or "",
+        "text": text,
+    })
+    ttl = max(60, int(getattr(config, "GROUP_BUFFER_TTL", 600)))
+    maxn = max(10, int(getattr(config, "GROUP_BUFFER_MAX", 40)))
+    now = time.time()
+    buf[:] = [m for m in buf if now - m["ts"] < ttl]   # TTL 清理（换话题丢弃）
+    if len(buf) > maxn:
+        del buf[:len(buf) - maxn]
+
+
 class ChatService:
     """聊天大脑。通过 handle_message() 接收任何平台的消息。"""
 
@@ -109,6 +174,9 @@ class ChatService:
         self.agent_id = agent_id
         self.llm = get_llm()  # 统一多供应商入口（chat/reasoning/tools/vision）
         self.vision = get_vision()  # 统一视觉层（GLM/Gemini 驱动，按任务路由 + 故障转移）
+        self._emoji_recent = {}    # 按会话记录最近用过的表情包，避免连续重复选用
+        # 会话调度状态：key -> _Session（积压队列 + 插嘴）
+        self._sessions = {}
         # 使用 SessionManagerAdapter 替代 Memory，支持会话热切换
         self.memory = SessionManagerAdapter()
 
@@ -116,13 +184,176 @@ class ChatService:
     # 主入口
     # ==================================================================
     async def handle_message(self, msg: InboundMessage, reply: ReplyTarget):
-        """处理一条平台无关的消息。按所属智能体设置隔离上下文，保证记忆命名空间正确。"""
-        # 多智能体隔离：本次处理全程处于该智能体的记忆命名空间
+        """处理一条平台无关的消息。
+
+        多智能体隔离 + 会话调度：同一 (平台/频道/用户) 的消息进入串行队列，
+        支持「积压消息合并回复」与「插嘴打断」（barge_in）。
+        """
+        # 群聊：把每条消息记入多人聚合缓冲（供话题检测 + 回复时注入群整体上下文）
+        try:
+            _record_group_message(msg)
+        except Exception as e:
+            print(f"[WARN] 群聊消息聚合失败（不影响主流程）: {e}")
         token = agent_ctx.set_agent(self.agent_id)
         try:
-            return await self._handle_message(msg, reply)
+            return await self._dispatch_message(msg, reply)
         finally:
             agent_ctx.reset_agent(token)
+
+    # ==================================================================
+    # 会话调度：积压消息合并回复 + 插嘴打断
+    # ==================================================================
+    def _session_key(self, msg: InboundMessage) -> tuple:
+        """同一 (平台, 频道类型, 频道, 用户) 视为一个串行会话。"""
+        return (msg.platform, msg.channel_type, msg.channel_id, msg.user_id)
+
+    def _backlog_cfg(self):
+        """返回 (合并窗口毫秒, 是否合并, 空闲超时秒, 插嘴开关)。"""
+        return (
+            max(0, int(getattr(config, "BACKLOG_COALESCE_MS", 700))),
+            bool(getattr(config, "BACKLOG_MERGE", True)),
+            max(1.0, float(getattr(config, "BACKLOG_IDLE_TIMEOUT", 5.0))),
+            bool(getattr(config, "BARGE_IN_ENABLED", True)),
+        )
+
+    async def _dispatch_message(self, msg: InboundMessage, reply: ReplyTarget):
+        """把消息交给会话调度器：入队、必要时启动消费者、等待本条处理完成。
+
+        - 普通消息追加到队列尾部，按 FIFO 串行处理（保证顺序、不丢、不并发竞争上下文）。
+        - 插嘴消息（barge_in）插到队首，并立即取消当前正在进行的生成任务。
+        """
+        coalesce_ms, merge, idle, barge_enabled = self._backlog_cfg()
+        text = (msg.text or "").strip()
+        # 插嘴命令归一：/插嘴 xxx 或 /打断 xxx 被视为带 barge_in 的消息
+        if barge_enabled and (text.startswith("/插嘴") or text.startswith("/打断")):
+            pre = "/插嘴" if text.startswith("/插嘴") else "/打断"
+            msg.barge_in = True
+            msg.text = text[len(pre):].strip()
+        key = self._session_key(msg)
+        sess = self._sessions.get(key)
+        if sess is None:
+            sess = self._sessions[key] = _Session(coalesce_ms, merge, idle)
+        ev = asyncio.Event()
+        item = _BacklogItem(msg, reply, ev)
+        if getattr(msg, "barge_in", False):
+            sess.items.appendleft(item)
+            if sess.current is not None and not sess.current.done():
+                sess.current.cancel()  # 打断机器人正在进行的回复
+        else:
+            sess.items.append(item)
+        sess.wake.set()
+        if sess.task is None or sess.task.done():
+            sess.task = asyncio.ensure_future(self._consume(key, sess))
+        # 等待本条消息被处理完（平台 await handle_message 的语义保持不变）
+        await ev.wait()
+
+    async def _consume(self, key, sess):
+        """消费者循环：取出积压消息，合并窗口内收集连发，逐批交给管线处理。"""
+        loop = asyncio.get_event_loop()
+        try:
+            while True:
+                if not sess.items:
+                    sess.wake.clear()
+                    try:
+                        await asyncio.wait_for(sess.wake.wait(), sess.idle)
+                    except asyncio.TimeoutError:
+                        return  # 会话空闲，消费者退出
+                    if not sess.items:
+                        continue
+                # 取首条
+                batch = [sess.items.popleft()]
+                if getattr(batch[0].msg, "barge_in", False):
+                    # 插嘴消息立即处理（打断已在 dispatch 阶段触发）
+                    await self._process_batch(sess, batch)
+                    continue
+                # 合并窗口：在 coalesce 时间内收集同会话连发的多条消息
+                deadline = loop.time() + sess.coalesce_ms / 1000.0
+                while True:
+                    wait = deadline - loop.time()
+                    if wait <= 0:
+                        break
+                    sess.wake.clear()
+                    try:
+                        await asyncio.wait_for(sess.wake.wait(), wait)
+                    except asyncio.TimeoutError:
+                        break
+                    while sess.items and not getattr(sess.items[0].msg, "barge_in", False):
+                        batch.append(sess.items.popleft())
+                    if sess.items and getattr(sess.items[0].msg, "barge_in", False):
+                        break  # 插嘴到来，留给下一轮立即处理
+                # 窗口结束（超时/到点）后，收割剩余普通消息，避免漏处理
+                while sess.items and not getattr(sess.items[0].msg, "barge_in", False):
+                    batch.append(sess.items.popleft())
+                await self._process_batch(sess, batch)
+        finally:
+            sess.task = None
+            # 兜底：退出瞬间又有残留消息则重启消费者（竞态保护）
+            if sess.items:
+                sess.task = asyncio.ensure_future(self._consume(key, sess))
+
+    async def _process_batch(self, sess, batch):
+        """处理一批消息：插嘴逐条处理；普通连发可按配置合并为一条。"""
+        barge_items = [it for it in batch if getattr(it.msg, "barge_in", False)]
+        normal_items = [it for it in batch if not getattr(it.msg, "barge_in", False)]
+        for it in barge_items:
+            await self._run_one(sess, it)
+        if not normal_items:
+            return
+        if sess.merge and len(normal_items) > 1:
+            merged = self._merge_items(normal_items)
+            extra = [it.ev for it in normal_items[1:]]
+            await self._run_one(sess, normal_items[0], override=merged, extra_events=extra)
+        else:
+            for it in normal_items:
+                await self._run_one(sess, it)
+
+    async def _run_one(self, sess, item, override=None, extra_events=None):
+        """执行单条（或合并后的）消息；跟踪 current task 供插嘴取消。"""
+        msg = override if override is not None else item.msg
+        reply = item.reply
+        task = asyncio.ensure_future(self._handle_message(msg, reply))
+        sess.current = task
+        try:
+            await task
+        except asyncio.CancelledError:
+            # 被插嘴打断：本次不回复，仅标记完成
+            pass
+        except Exception as e:
+            # 双重兜底（_handle_message 内已 reply），再保险一次
+            try:
+                await reply.reply(f"抱歉，出错了：{e}")
+            except Exception:
+                pass
+        finally:
+            sess.current = None
+            item.ev.set()
+            for e2 in (extra_events or []):
+                e2.set()
+
+    def _merge_items(self, items):
+        """把多条连发消息合并为一条（text 用换行拼接，媒体取首条）。"""
+        base = items[0].msg
+        texts = [(it.msg.text or "").strip() for it in items]
+        merged_text = "\n".join(t for t in texts if t) or (base.text or "")
+        return InboundMessage(
+            platform=base.platform,
+            channel_type=base.channel_type,
+            channel_id=base.channel_id,
+            user_id=base.user_id,
+            user_name=base.user_name,
+            message_id=base.message_id,
+            text=merged_text,
+            image_refs=list(base.image_refs or []),
+            audio_wav=base.audio_wav or b"",
+            has_video=base.has_video,
+            video_ref=base.video_ref,
+            quoted_text=base.quoted_text,
+            quoted_image_refs=list(base.quoted_image_refs or []),
+            quoted_sender=base.quoted_sender,
+            quoted_self=base.quoted_self,
+            mentioned=base.mentioned,
+            raw=base.raw,
+        )
 
     async def _handle_message(self, msg: InboundMessage, reply: ReplyTarget):
         user_id = msg.user_id
@@ -1151,7 +1382,7 @@ class ChatService:
         # ---------------- 触发判断 ----------------
         # 群聊接话已关闭：未被 @（should_reply 为 False）时，只有"引用了机器人自己发的
         # 消息"才允许触发（QQ 上引用=对着机器人说话）；语音/视频/引用别人的消息都不再接话。
-        if not self.should_reply(msg):
+        if not await self.should_reply(msg):
             if not (has_quote and getattr(msg, "quoted_self", False)):
                 return
 
@@ -1652,6 +1883,18 @@ class ChatService:
             except Exception as e:
                 degrade("libs/qq_bot_runtime/chat_service.py:1511 ChatService._chat_pipeline", e, "降级：from realtime import get_time_context")
 
+            # 群聊多人对话聚合上下文：让回复基于群整体话题而非单条触发消息
+            if channel_type == "group":
+                try:
+                    gctx = await self._get_group_context(channel_id)
+                    if gctx:
+                        messages.append({"role": "system", "content":
+                            "【群聊整体上下文】下面是群里多人最近的对话与当前话题。请结合整体语境回应，"
+                            "不要只针对最后一条消息孤立作答；若大家在同一话题上，顺着话题自然接茬即可。\n"
+                            + gctx})
+                except Exception as e:
+                    print(f"[WARN] 群聊上下文注入失败: {e}")
+
             messages.append({"role": "user", "content": effective_text or text})
 
         # 语言跟随
@@ -1661,8 +1904,12 @@ class ChatService:
             lang_cn = lang_names.get(lang, lang)
             messages.append({"role": "system", "content": f"【重要】用户本次使用{lang_cn}交流，请务必用{lang_cn}回复，不要用中文。"})
 
-        # 注入表情包清单
-        emoji_hint = emoji_store.build_emoji_hint()
+        # 注入表情包清单（带最近用过的去重，避免连续重复同一张）
+        try:
+            _emoji_exclude = self._emoji_recent.get((channel_type, channel_id, user_id), [])
+        except Exception:
+            _emoji_exclude = []
+        emoji_hint = emoji_store.build_emoji_hint(exclude=_emoji_exclude)
         if emoji_hint:
             messages.append({"role": "system", "content": emoji_hint})
 
@@ -1764,6 +2011,24 @@ class ChatService:
             user_content = text if text.strip() else "[图片]"
             self.memory.add(channel_type, channel_id, user_id, "user", user_content)
             self.memory.add(channel_type, channel_id, user_id, "assistant", reply_text)
+            # 记录本次回复用过的表情包，供下次注入时避免连续重复
+            try:
+                _used = re.findall(r"\[表情包:([^\]]+)\]", reply_text)
+                if _used:
+                    _k = (channel_type, channel_id, user_id)
+                    _lst = self._emoji_recent.get(_k, [])
+                    for _n in _used:
+                        if _n in _lst:
+                            _lst.remove(_n)
+                        # StickerStore usage 标注：累计使用次数（轻度降权冷热门）
+                        try:
+                            emoji_store.record_emoji_used(_n)
+                        except Exception as _e:
+                            print(f"[WARN] 表情包用量记录失败: {_e}")
+                    _lst.extend(_used)
+                    self._emoji_recent[_k] = _lst[-3:]
+            except Exception as e:
+                print(f"[WARN] 表情包去重记录失败: {e}")
             if not msg.image_refs and text.strip():
                 self.memory.set_topic(channel_type, channel_id, user_id, text.strip()[:100])
 
@@ -1844,6 +2109,12 @@ class ChatService:
         if config.ENABLE_VOICE and platform_voice_ok and not want_voice:
             if re.match(r'^/?(语音|voice)\b', text.strip()):
                 want_voice = True
+            elif (getattr(config, "VOICE_AUTO_CHAT", False)
+                  and not effective_text.strip().startswith("/")
+                  and not use_reasoner):
+                # 本地 TTS 免费：普通闲聊 / 搜索类回复默认发语音（深度推理长答案仍走文字）。
+                # 命令、显式不要语音、或推理链保持文字。设 VOICE_AUTO_CHAT=False 可退回「仅用户要求才发」。
+                want_voice = True
             else:
                 # 复用上方「一次合并判断」的语音意图结果（不再单独调 wants_voice_reply）
                 want_voice = bool(_voice_judged)
@@ -1914,18 +2185,132 @@ class ChatService:
         except Exception as e:
             print(f"[WARN] 功能需求 Issue 提交失败（不影响主回复）: {e}")
 
-    def should_reply(self, msg: InboundMessage) -> bool:
-        """判断是否应回复该消息。"""
+    async def _detect_group_topic(self, channel_id: str, recent: list) -> str:
+        """带缓存+防抖的群聊话题检测：返回当前在聊什么的短标签（<=20字），失败返回空。"""
+        if not getattr(config, "GROUP_TOPIC_ENABLED", True) or not recent:
+            return ""
+        cached = _GROUP_TOPIC_CACHE.get(channel_id)
+        now = time.time()
+        refresh_sec = max(15, int(getattr(config, "GROUP_TOPIC_REFRESH_SEC", 60)))
+        refresh_msgs = max(1, int(getattr(config, "GROUP_TOPIC_REFRESH_MSGS", 5)))
+        need = (not cached
+                or now - cached.get("ts", 0) > refresh_sec
+                or len(recent) - cached.get("count", 0) >= refresh_msgs)
+        if cached and not need:
+            return cached.get("topic", "")
+        conv = "\n".join(f"{m.get('user_name') or m.get('user_id')}：{m['text']}" for m in recent)
+        prompt = (
+            "下面是某个 QQ 群最近的聊天记录（多人对话）。请用不超过 20 字概括这群人"
+            "当前在聊什么话题，例如「在讨论今晚吃什么」「在聊 Minecraft 红石」「在吐槽工作」。\n"
+            "只输出话题本身，不要解释、不要标点以外的修饰。\n\n" + conv
+        )
+        try:
+            tout = max(5, int(getattr(config, "GROUP_TOPIC_TIMEOUT", 8)))
+            topic = await asyncio.wait_for(
+                self.llm.chat([{"role": "user", "content": prompt}], capability="chat"),
+                timeout=tout + 1,
+            )
+            topic = (topic or "").strip().strip('"').strip('。').strip()
+            if topic:
+                _GROUP_TOPIC_CACHE[channel_id] = {"topic": topic, "ts": now, "count": len(recent)}
+                return topic
+        except Exception as e:
+            print(f"[WARN] 群聊话题检测失败（用旧话题）: {e}")
+        return cached.get("topic", "") if cached else ""
+
+    async def _get_group_context(self, channel_id: str) -> str:
+        """聚合群最近多人对话 + 当前话题，返回注入给模型的多行文本；无则空串。"""
+        if not getattr(config, "GROUP_CONTEXT_ENABLED", True):
+            return ""
+        buf = _GROUP_MSG_BUFFER.get(channel_id)
+        if not buf:
+            return ""
+        turns = max(3, int(getattr(config, "GROUP_CONTEXT_TURNS", 15)))
+        recent = buf[-turns:]
+        if not recent:
+            return ""
+        try:
+            topic = await self._detect_group_topic(channel_id, recent)
+        except Exception:
+            topic = ""
+        lines = []
+        if topic:
+            lines.append(f"【当前群聊话题】{topic}")
+        lines.append("【群聊最近对话（多人，按时间正序）】")
+        for m in recent:
+            name = m.get("user_name") or m.get("user_id")
+            lines.append(f"{name}：{m['text']}")
+        return "\n".join(lines)
+
+    async def should_reply(self, msg: InboundMessage) -> bool:
+        """判断是否应回复该消息（群聊主动接话：关键词快路径 + 10%随机 + 语义判断）。"""
         if msg.channel_type == "private":
             return True
         if config.ONLY_MENTION_OR_PRIVATE:
             if msg.mentioned:
                 return True
-            if getattr(config, "ENABLE_PROACTIVE_SPEAKER", False) and getattr(config, "PROACTIVE_GROUP_REPLY", False):
-                if _is_related_topic(msg.text):
+            # 主动接话群白名单：配置了则仅列表内群主动接话，其余群只回 @（空=全部群，兼容旧行为）
+            chatter_groups = getattr(config, "GROUP_CHATTER_GROUPS", []) or []
+            if chatter_groups and str(msg.channel_id) not in {str(g) for g in chatter_groups}:
+                return False
+            # 1) 关键词快路径：强相关话题直接接（便宜，不打 LLM）
+            if _is_related_topic(msg.text):
+                return True
+            # 2) 10% 随机接话：即使语义判断无关，也有概率随便接一句
+            if random.random() < float(getattr(config, "GROUP_CHATTER_PROB", 0.10)):
+                return True
+            # 3) 语义判断：LLM 判断消息是否对"智能体自己感兴趣的话题"相关/能接茬
+            if getattr(config, "GROUP_SEMANTIC_REPLY", True):
+                if await self._semantic_interest(msg):
                     return True
             return False
         return True
+
+    async def _semantic_interest(self, msg: InboundMessage) -> bool:
+        """语义接话：用 LLM 判断群聊消息是否值得智能体自然接一句话。
+
+        话题范围由 GROUP_SEMANTIC_INTERESTS（默认见 _DEFAULT_INTERESTS）界定，
+        不局限于游戏，而是智能体自己感兴趣的话题。失败/超时不接（安全降级，防刷屏）。
+
+        群聊时若开启 GROUP_TOPIC_GUIDE_REPLY，会把「群整体上下文（话题+多人最近对话）」
+        一并给模型，让接话判断基于整体语境而非孤立的单条消息。
+        """
+        text = (msg.text or "").strip()
+        if len(text) < 2:
+            return False
+        interests = getattr(config, "GROUP_SEMANTIC_INTERESTS", _DEFAULT_INTERESTS)
+        to = float(getattr(config, "GROUP_SEMANTIC_TIMEOUT", 8.0))
+        # 群聊整体上下文：让接话判断参考当前话题与多人近况（命中缓存则不重复烧 token）
+        gctx = ""
+        if getattr(config, "GROUP_TOPIC_GUIDE_REPLY", True) and msg.channel_type == "group":
+            try:
+                gctx = await self._get_group_context(msg.channel_id)
+            except Exception:
+                gctx = ""
+        gctx_block = ""
+        if gctx:
+            gctx_block = (
+                "【群聊整体上下文（群里多人最近在聊什么）】\n" + gctx +
+                "\n请结合上面整体语境判断（例如某条单看无关、但当前话题正热且你能接茬，"
+                "也算值得接）。\n\n"
+            )
+        messages = [
+            {"role": "system", "content": "你是肥鱼娘的接话判断助手。只输出 JSON，不要任何解释。"},
+            {"role": "user", "content": (
+                f"肥鱼娘感兴趣的话题包括：{interests}\n\n"
+                f"{gctx_block}"
+                f"下面是一条 QQ 群聊消息：\n「{text}」\n\n"
+                f"判断这条消息（结合上面群聊整体语境）是否值得肥鱼娘自然地接一句话"
+                f"（与她感兴趣的话题相关 / 有趣 / 能接茬 / 她会想插嘴）。\n"
+                f'只回答 JSON：{{"reply": true}} 或 {{"reply": false}}。')},
+        ]
+        try:
+            raw = await asyncio.wait_for(
+                self.llm.chat(messages, capability="chat", timeout=int(to)),
+                to + 1.0)
+            return '"reply": true' in raw.replace(" ", "").lower()
+        except Exception:
+            return False
 
     # ==================================================================
     # 语音：ASR 与 TTS（编解码由平台插件负责，这里只调云端接口）
@@ -2026,6 +2411,18 @@ class ChatService:
 # ============================================================================
 # 模块级工具函数（平台无关的判断/提取，供 ChatService 与其它模块复用）
 # ============================================================================
+
+# 智能体（肥鱼娘）自己感兴趣的话题范围，用于群聊语义接话判断（不局限于游戏）。
+_DEFAULT_INTERESTS = (
+    "游戏（尤其是我的世界/Minecraft、生存、建造、红石、开黑一起玩）；"
+    "可爱萌系事物（猫娘、猫狗小动物、毛绒、宝宝用语）；"
+    "美食与饮品（火锅、奶茶、甜点、零食、好吃的）；"
+    "情感与日常（喜欢/讨厌/开心/难过/吐槽/八卦/表白/分手）；"
+    "动漫影视与二次元（番剧、角色、cos、电影）；"
+    "她自己的设定相关（被喊名字、讨论她的身份/能力）；"
+    "无聊/摸鱼/放假/周末/天气等轻松闲聊"
+)
+
 
 def _is_related_topic(text: str) -> bool:
     """判断群聊消息是否与肥鱼娘相关（游戏/自己/被喊名字等），相关则主动接话。"""
@@ -2315,7 +2712,11 @@ async def _judge_capabilities(text: str, judge_search: bool, judge_reason: bool,
     if judge_reason:
         parts.append("2) 是否需要深度推理（数学证明/逻辑/算法/为什么怎么办/多步思考）：回答 需要 或 不需要")
     if judge_voice:
-        parts.append("3) 用户是否希望用语音（而非文字）回复（如「说给我听」「用语音和我聊」）：回答 需要 或 不需要")
+        parts.append("3) 这条消息是否适合用语音（而非文字）回复：默认用文字。"
+                     "只有「用户明显想听声音/要求念出」时才回答 需要——例如说「用语音/说给我听/念给我听/说句话」、"
+                     "想要听肥鱼娘声音（「我想听你声音」「你唱一个」）、或要求把某段内容念出来。"
+                     "普通闲聊/打招呼/问答/搜索/长内容/代码/列表一律 不需要（用户偏好打字、嫌语音磨叽，打字更合适）。"
+                     "按内容本质判断，回答 需要 或 不需要")
     if judge_feature:
         parts.append("4) 用户是否在请求「当前尚不具备的新能力/功能」（而非普通闲聊或对已有功能的正常使用）："
                      "回答 需要 或 不需要；若需要，再回答 feature_already（该能力是否已在下方清单里有对应/等价能力：是/否）"
