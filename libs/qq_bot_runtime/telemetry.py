@@ -174,7 +174,11 @@ def _enqueue(group: str, key: str, event: str, **metrics):
         degrade("libs/qq_bot_runtime/telemetry.py:173 _enqueue", e, "降级：item = {'group': group, 'key': key, 'event': event")
 
 
+_fail_streak = 0              # 连续上报失败次数（成功即清零）；用于折叠降噪
+
+
 def _flush_once():
+    global _fail_streak
     with _q_lock:
         batch = _q[:]
         del _q[:]
@@ -190,8 +194,14 @@ def _flush_once():
         req = Request(_SERVER_URL + "/report", data=payload, headers=headers,
                       method="POST")
         urlopen(req, timeout=3)
+        _fail_streak = 0
     except (URLError, OSError, Exception) as e:
-        degrade("libs/qq_bot_runtime/telemetry.py:193 _flush_once", e, "降级：import json as _json")
+        # 连续失败折叠：第 1 次与之后每 12 次（约 1 分钟）各报一条，避免 sidecar
+        # 短暂无响应时每 5 秒刷一条 WARN（reporter 周期恰好绕过 quiet 5s 合并窗口）。
+        _fail_streak += 1
+        if _fail_streak == 1 or _fail_streak % 12 == 0:
+            degrade("libs/qq_bot_runtime/telemetry.py:193 _flush_once", e,
+                    "降级：import json as _json（连续 %d 次失败）" % _fail_streak)
 
 
 def _reporter_loop():
