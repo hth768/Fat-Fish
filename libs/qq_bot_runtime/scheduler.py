@@ -60,7 +60,12 @@ async def balance_monitor_loop():
 
             # 低余额提醒
             if total < config.BALANCE_ALERT_THRESHOLD and not alerted:
-                if config.BALANCE_ALERT_USER_ID:
+                if config.BALANCE_ALERT_SILENT:
+                    # 静默模式：只在后台日志打印，不私聊打扰主人
+                    print(f"[INFO] DeepSeek 余额不足（静默不打扰）：{total} {currency} "
+                          f"< 阈值 {config.BALANCE_ALERT_THRESHOLD}，充值 {topped_up} + 赠金 {granted}")
+                    alerted = True  # 提醒过了，不再重复打印
+                elif config.BALANCE_ALERT_USER_ID:
                     msg = (
                         f"⚠️ 主人，我的 DeepSeek 账户余额不足啦！\n"
                         f"当前余额：{total} {currency}\n"

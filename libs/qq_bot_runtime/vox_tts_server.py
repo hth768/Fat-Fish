@@ -275,7 +275,7 @@ def _resample_speed(wav_bytes: bytes, speed: float) -> bytes:
 
 
 def _synthesize(text: str, voice_desc: str = "", seed: int = None,
-                speed: float = 1.0) -> bytes:
+                speed: float = 1.0, inference_timesteps: int = 25) -> bytes:
     """合成（调用方需持 _gen_lock）；返回 48kHz wav 字节。
 
     voice_desc 非空时按 VoxCPM2 语音设计协议在正文前拼接 "(描述)"——
@@ -300,7 +300,7 @@ def _synthesize(text: str, voice_desc: str = "", seed: int = None,
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     t0 = time.time()
-    wav = model.generate(text=full_text, cfg_value=2.0, inference_timesteps=10)
+    wav = model.generate(text=full_text, cfg_value=2.0, inference_timesteps=inference_timesteps)
     sr = getattr(model, "tts_model", None)
     sample_rate = getattr(sr, "sample_rate", 48000) if sr is not None else 48000
     _log(f"合成 {len(text)} 字（voice_desc={bool(voice_desc)} seed={seed} speed={speed}）"
@@ -366,6 +366,8 @@ class _Handler(BaseHTTPRequestHandler):
             seed = int(seed) if seed is not None else None
             speed = float(req.get("speed", 1.0) or 1.0)
             speed = max(0.6, min(1.6, speed))
+            inference_timesteps = int(req.get("inference_timesteps", 25) or 25)
+            inference_timesteps = max(1, min(50, inference_timesteps))
         except Exception as e:
             self._send_json(400, {"error": f"bad request: {e}"})
             return
@@ -380,7 +382,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         with _gen_lock:
             try:
-                wav = _synthesize(text, voice_desc, seed, speed)
+                wav = _synthesize(text, voice_desc, seed, speed, inference_timesteps)
             except Exception as e:
                 _log(f"合成异常: {type(e).__name__}: {e}")
                 self._send_json(500, {"error": f"{type(e).__name__}: {e}"})
@@ -409,7 +411,7 @@ class _Handler(BaseHTTPRequestHandler):
             speed = float(req.get("speed", 1.0) or 1.0)
             speed = max(0.6, min(1.6, speed))
             cfg_value = float(req.get("cfg_value", 2.0) or 2.0)
-            inference_timesteps = int(req.get("inference_timesteps", 10) or 10)
+            inference_timesteps = int(req.get("inference_timesteps", 25) or 25)
             inference_timesteps = max(1, min(50, inference_timesteps))
         except Exception as e:
             self._send_json(400, {"error": f"bad request: {e}"})

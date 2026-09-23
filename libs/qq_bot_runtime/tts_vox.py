@@ -27,6 +27,25 @@ from quiet import attention, degrade
 # 项目根目录（本文件所在目录）
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
+def _resolve_model_dir() -> str:
+    """解析 VoxCPM2 权重目录（与 vox_tts_server.py 的解析规则保持一致）。
+
+    config.VOXCPM_MODEL_DIR 支持：
+    - 绝对路径（如 "E:\\plugins\\voice_pack\\models\\VoxCPM2"）→ 直接用；
+    - 相对路径 → 基于引擎根 _BASE_DIR 解析；
+    - 空 → 回退 <引擎根>/models/VoxCPM2（旧默认）。
+    必须返回绝对路径，并会被 spawn() 经环境变量 VOXCPM_MODEL_DIR 透传给子进程，
+    否则子进程只会按自己的 BASE_DIR/models/VoxCPM2 找权重而 503 永不就绪。
+    """
+    cfg = (getattr(config, "VOXCPM_MODEL_DIR", "") or "").strip()
+    if not cfg:
+        return os.path.join(_BASE_DIR, "models", "VoxCPM2")
+    if os.path.isabs(cfg):
+        return cfg
+    return os.path.join(_BASE_DIR, cfg)
+
+
 # 单例服务句柄（VoxTTSPlugin.__init__ 创建；手动模式时为 None，只做 HTTP 调用）
 _service = None
 
@@ -57,7 +76,7 @@ class _SidecarProcess:
         """依赖是否齐备（venv + 服务脚本 + 权重）。"""
         if not self._python or not os.path.exists(self._script):
             return False
-        model_dir = os.path.join(_BASE_DIR, getattr(config, "VOXCPM_MODEL_DIR", "models/VoxCPM2"))
+        model_dir = _resolve_model_dir()
         return os.path.exists(os.path.join(model_dir, "model.safetensors"))
 
     def spawn(self) -> bool:
@@ -73,6 +92,9 @@ class _SidecarProcess:
         try:
             env = dict(os.environ)
             env["VOXCPM_FFMPEG"] = str(getattr(config, "FFMPEG_PATH", "") or "")
+            # 把权重目录透传给子进程（vox_tts_server.py 优先用该环境变量，否则按自身
+            # BASE_DIR/models/VoxCPM2 找权重——而运行实例引擎根 E:\qq_bot 下并无该目录）。
+            env["VOXCPM_MODEL_DIR"] = _resolve_model_dir()
             self.proc = subprocess.Popen(
                 [self._python, self._script],
                 cwd=_BASE_DIR,
@@ -186,9 +208,16 @@ def _voice_speed() -> float:
         return 1.0
 
 
+def _voice_timesteps() -> int:
+    try:
+        return int(getattr(config, "VOXCPM_INFERENCE_TIMESTEPS", 25) or 25)
+    except (TypeError, ValueError):
+        return 25
+
+
 def _cache_path(text: str) -> str:
-    # 缓存键含音色描述与语速：改描述/语速后旧缓存自动失效重合成
-    key = hashlib.md5(f"voxcpm2|{_voice_desc()}|{_voice_speed()}|{text}".encode("utf-8")).hexdigest()
+    # 缓存键含音色描述、语速、推理步数：改任一项后旧缓存自动失效重合成
+    key = hashlib.md5(f"voxcpm2|{_voice_desc()}|{_voice_speed()}|{_voice_timesteps()}|{text}".encode("utf-8")).hexdigest()
     return os.path.join(_cache_dir(), key + ".wav")
 
 
@@ -223,7 +252,8 @@ async def voxcpm_synthesize(text: str) -> str:
     timeout = getattr(config, "VOXCPM_TIMEOUT_SECONDS", 180)
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         resp = await client.post(_url("/tts"), json={
-            "text": text, "voice_desc": _voice_desc(), "speed": _voice_speed()})
+            "text": text, "voice_desc": _voice_desc(),
+            "speed": _voice_speed(), "inference_timesteps": _voice_timesteps()})
     if resp.status_code != 200:
         raise RuntimeError(f"本地 TTS 失败 {resp.status_code}: {resp.text[:200]}")
 
