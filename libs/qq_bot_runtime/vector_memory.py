@@ -231,7 +231,15 @@ def _get_local_model():
     try:
         from sentence_transformers import SentenceTransformer
         print(f"[VECTOR] 加载本地向量模型: {VECTOR_MODEL_NAME}")
-        _model_instance = SentenceTransformer(VECTOR_MODEL_NAME)
+        # 强制 CPU:本机 CUDA/cuBLAS 运行期异常(cudaErrorUnknown),走 GPU 会让
+        # generate_embedding 整批失败→向量全为 null。MiniLM 在 CPU 上编码约 0.3s,足够。
+        import os
+        os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+        # 离线优先:本机直连 HuggingFace 不稳,必须禁用在线 revision 校验,否则首次
+        # SentenceTransformer() 会卡在 HF 元数据拉取直到超时→嵌入整批失败。
+        os.environ['HF_HUB_OFFLINE'] = '1'
+        os.environ['TRANSFORMERS_OFFLINE'] = '1'
+        _model_instance = SentenceTransformer(VECTOR_MODEL_NAME, device='cpu')
         return _model_instance
     except ImportError:
         print("[VECTOR] sentence-transformers 未安装，使用 API 方案")

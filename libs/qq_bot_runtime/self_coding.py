@@ -713,6 +713,18 @@ def _pkg_name_from_plugin_path(p) -> Optional[str]:
     return None
 
 
+def _pkg_name_from_plugin_path(p) -> Optional[str]:
+    """从 plugins/<name>/... 形式的相对路径取包名（目录第二段）。"""
+    if not isinstance(p, str):
+        return None
+    rel = p.replace("\\", "/").lstrip("/")
+    if rel.startswith("plugins/"):
+        parts = rel.split("/")
+        if len(parts) >= 2 and parts[1]:
+            return parts[1]
+    return None
+
+
 def _extract_pkg_name(build_res: Dict) -> Optional[str]:
     """从构建助手返回里尽量提取保存的包名（优先 manifest 中的 name）。
 

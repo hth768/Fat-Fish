@@ -1,0 +1,9 @@
+{
+  "name": "qq_platform",
+  "title": "QQ 平台插件",
+  "kind": "platform",
+  "version": "1.0.0",
+  "description": "把 QQ 接入核心（NapCat / OneBot v11 反向 WebSocket）。启用前需 NapCat 已配置反向 WS 指向 ws://127.0.0.1:8080/onebot/v11/ws。",
+  "switch": "ENABLE_QQ_PLUGIN",
+  "plugin": "qq"
+}

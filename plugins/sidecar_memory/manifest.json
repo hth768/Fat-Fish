@@ -1,0 +1,9 @@
+{
+  "name": "sidecar_memory",
+  "title": "记忆 RPC 服务",
+  "kind": "sidecar",
+  "version": "1.0.0",
+  "description": "独立进程运行 memory_server.py（vector_memory 重负载记忆：向量检索/时间索引）。未启用时记忆模块自动降级为直读模式。",
+  "switch": "ENABLE_MEMORY_SERVER",
+  "sidecar": { "script": "memory_server.py", "host": "127.0.0.1", "port": 8766 }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "brain_mc_mod",
+  "title": "模组世界 MC 大脑",
+  "kind": "brain",
+  "version": "1.0.0",
+  "description": "MCAgent：FeiyuAPI 模组世界的自主生存大脑（LLM 工具调用 + 安全守卫）。启用后发 /mc自动 让她自己去玩。",
+  "switch": "",
+  "plugin": "mc_mod"
+}

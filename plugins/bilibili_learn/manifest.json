@@ -1,0 +1,11 @@
+{
+  "name": "bilibili_learn",
+  "title": "B 站每日定时自主学习",
+  "kind": "feature",
+  "version": "1.0.0",
+  "description": "每天按 BILIBILI_LEARN_KEYWORDS / UP_UIDS 搜视频→总结→沉淀知识库→按 BILIBILI_LEARN_SHARE 分享。调度参数见配置。",
+  "switch": "ENABLE_BILIBILI_LEARN_SCHEDULE",
+  "plugin": "bilibili_learn_schedule",
+  "requires": ["bilibili_platform"],
+  "optional_requires": ["bilibili_dm"]
+}

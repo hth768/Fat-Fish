@@ -1,0 +1,10 @@
+{
+  "name": "bilibili_dm",
+  "title": "B 站私信自动回复",
+  "kind": "feature",
+  "version": "1.0.0",
+  "description": "监听 B 站私信，仅对白名单 UID（BILIBILI_DM_WHITELIST）自动 AI 回复；带「/」的命令仅主人（BILIBILI_DM_OWNER_UID）可执行。",
+  "switch": "ENABLE_BILIBILI_DM",
+  "plugin": "bilibili_dm",
+  "requires": ["bilibili_platform"]
+}

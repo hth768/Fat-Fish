@@ -1,0 +1,9 @@
+{
+  "name": "brain_mc_bot",
+  "title": "原版世界 MC Bot 大脑",
+  "kind": "brain",
+  "version": "1.0.0",
+  "description": "BotAgent（mineflayer 纯净原版世界试验场）：由独立进程 python mc_bot_run.py 驱动，核心只接入其状态通道（data/mc_bot_live.json）。",
+  "switch": "",
+  "plugin": "mc_bot"
+}

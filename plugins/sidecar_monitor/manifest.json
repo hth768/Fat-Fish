@@ -1,0 +1,10 @@
+{
+  "name": "sidecar_monitor",
+  "title": "监控 / 可观测性服务",
+  "kind": "sidecar",
+  "version": "1.0.0",
+  "description": "独立进程运行 monitor_server.py（行为遥测聚合与监控面板数据源）。依赖记忆 RPC 服务。",
+  "switch": "ENABLE_MONITOR",
+  "requires": ["sidecar_memory"],
+  "sidecar": { "script": "monitor_server.py", "host": "127.0.0.1", "port": 8770 }
+}
