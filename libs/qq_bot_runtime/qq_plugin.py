@@ -11,6 +11,8 @@
 将来接入 B 站/直播等平台时，参照本文件实现 PlatformPlugin 即可，核心不用改。
 """
 import asyncio
+import base64
+import hashlib
 import json
 import os
 import re
@@ -152,6 +154,21 @@ def extract_images(message: list) -> list:
     return refs
 
 
+# 主动回看意图关键词（对齐新版 qq_view_image 主动回看工具）：用户明确要求重新看清/识别图片。
+_VISION_RECALL_KEYWORDS = (
+    "重看图片", "再看图", "重新看图", "重新看", "再看这张", "再看看这张", "再看下这张",
+    "看清楚", "看清点", "认清楚", "认清", "重新识别", "重新描述", "仔细看这张",
+    "图里是什么", "图里写了什么", "你看这张", "再看看图", "重新看看", "再看一眼",
+)
+
+
+def vision_recall_intent(text: str) -> bool:
+    """判断用户文本是否含主动回看图片的意图（用于触发 VLM 主动回看）。"""
+    if not text:
+        return False
+    return any(k in text for k in _VISION_RECALL_KEYWORDS)
+
+
 def is_mentioned(data: dict) -> bool:
     """判断群里是否 @了机器人（含 @全体成员）。"""
     self_id = data.get("self_id")
@@ -170,6 +187,25 @@ def _is_http_url(s: str) -> bool:
 # ============================================================================
 # QQ 回复目标：ChatService 通过它回复消息
 # ============================================================================
+async def _to_qq_voice_file(wav_path: str) -> str:
+    """把本地 TTS 的 wav 转成 QQ 客户端更易播放的 mp3；ffmpeg 不可用/失败则原样返回 wav。"""
+    ffmpeg = getattr(config, "FFMPEG_PATH", "") or "ffmpeg"
+    if not wav_path.lower().endswith(".wav") or not os.path.exists(wav_path):
+        return wav_path
+    mp3 = wav_path[:-4] + ".mp3"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            ffmpeg, "-y", "-i", wav_path, "-b:a", "128k", mp3,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await asyncio.wait_for(proc.communicate(), timeout=60)
+        if proc.returncode == 0 and os.path.exists(mp3):
+            return mp3
+        print(f"[WARN] 语音转 mp3 失败(rc={proc.returncode})，回退 wav")
+    except Exception as e:
+        print(f"[WARN] 语音转 mp3 异常，回退 wav: {e}")
+    return wav_path
+
+
 class QQReplyTarget(ReplyTarget):
     """一次 QQ 会话的回复上下文。"""
 
@@ -179,8 +215,16 @@ class QQReplyTarget(ReplyTarget):
         super().__init__(msg)
         self.plugin = plugin
 
-    async def reply(self, text: str):
-        """回复文本：拆分文字/表情/图片为多条消息逐条发送。"""
+    def _high_risk(self, text: str) -> bool:
+        """判断是否为高风险回复（需确认）：群发，或含 @all/@全体成员。"""
+        if self.msg.channel_type == "group":
+            return True
+        if "@all" in text or "@全体成员" in text:
+            return True
+        return False
+
+    async def _raw_send(self, text: str):
+        """实际发送（拆分文字/表情/图片为多条消息逐条发送）。"""
         ws = self.plugin.ws
         if not ws:
             print("[QQ-PLUGIN] ws 未连接，回复丢弃")
@@ -208,18 +252,29 @@ class QQReplyTarget(ReplyTarget):
             await ws.send(json.dumps(payload, ensure_ascii=False))
             await asyncio.sleep(config.SEND_INTERVAL_SECONDS)
 
+    async def reply(self, text: str):
+        """回复文本。若开启 QQ_SEND_CONFIRM 且为高风险回复，先发草稿、确认后再正式发。"""
+        # 可选发送确认（对齐新版 qq_draft/qq_confirm）：高风险回复先发草稿，确认后再正式发
+        if getattr(config, "QQ_SEND_CONFIRM", False) and self._high_risk(text):
+            # 存 (文本, 时间戳)，供 _dispatch 在过期时作废（对齐新版 onTurnEnded）
+            self.plugin._confirm_pending[(self.msg.channel_type, self.msg.channel_id)] = (text, time.time())
+            await self._raw_send(f"[草稿·确认后发送]\n{text}")
+            return
+        await self._raw_send(text)
+
     async def reply_voice(self, wav_path: str):
-        """发送语音消息（QQ record 段）。"""
+        """发送语音消息（QQ record 段）。本地 TTS 产出 wav，转 mp3 提升 QQ 客户端兼容性（失败回退 wav）。"""
         ws = self.plugin.ws
         if not ws:
             return
+        voice_file = await _to_qq_voice_file(wav_path)
         message_type = self.msg.channel_type
         target = self.msg.channel_id
         payload = {
             "action": "send_msg",
             "params": {
                 "message_type": message_type,
-                "message": [{"type": "record", "data": {"file": wav_path}}],
+                "message": [{"type": "record", "data": {"file": voice_file}}],
             },
             "echo": f"voice-{self.msg.message_id}",
         }
@@ -504,16 +559,30 @@ async def get_video_file(ws, video_data: dict, message_type: str = "", group_id=
 
 
 async def get_quoted_message(ws, reply_id) -> dict:
-    """用 get_msg 获取被引用消息的完整内容。"""
+    """用 get_msg 获取被引用消息的完整内容。
+
+    返回包含引用消息的会话信息（channel_type/channel_id/sender_id），
+    供 build_inbound 做 sameConversation 断言，防止跨会话引用串入上下文。
+    """
     if not reply_id:
         return {}
     try:
         result = await call_action(ws, "get_msg", {"message_id": reply_id})
         if not isinstance(result, dict):
             return {}
-        quoted = {"text": "", "image_refs": [], "user_id": "", "time": result.get("time", "")}
+        quoted = {"text": "", "image_refs": [], "user_id": "", "time": result.get("time", ""),
+                  "channel_type": "", "channel_id": "", "sender_id": ""}
         sender = result.get("sender", {}) or {}
         quoted["user_id"] = sender.get("nickname") or sender.get("user_id") or ""
+        quoted["sender_id"] = str(result.get("user_id") or sender.get("user_id") or "")
+        # 引用消息的会话：group 用 group_id，private 用 user_id
+        mtype = result.get("message_type") or result.get("message_type_")
+        if mtype == "group" or result.get("group_id"):
+            quoted["channel_type"] = "group"
+            quoted["channel_id"] = str(result.get("group_id") or "")
+        elif mtype == "private" or result.get("user_id"):
+            quoted["channel_type"] = "private"
+            quoted["channel_id"] = str(result.get("user_id") or "")
         raw = result.get("message")
         if isinstance(raw, list):
             for seg in raw:
@@ -594,6 +663,17 @@ class QQPlugin(PlatformPlugin):
         self._server = None
         self.adapter = None      # MessageSender（主动发送用）
         self._tasks = set()
+        # 消息追踪（对齐新版 known_messages / msgChain）：
+        self._known_messages = {}     # message_id -> 处理时间戳（echo/重投去重）
+        self._conv_chains = {}        # (channel_type, channel_id) -> 串行任务链（避免并发抢同一会话）
+        self._vision_seen = {}        # 图片 sha256 -> 最后描述时间（视觉去重）
+        self._confirm_pending = {}     # (channel_type, channel_id) -> (草稿文本, 时间戳)（QQ_SEND_CONFIRM 待确认）
+        # 状态落盘（对齐新版 saveState）：把可序列化去重字典持久化到 dataDir json，进程重启后仍有效
+        self._state_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "qq_plugin_state.json")
+        self._state_timer = None
+        self._state_save_delay = 1.5  # debounce 秒数
+        self._send_confirm_ttl = float(getattr(config, "QQ_SEND_CONFIRM_TTL", 180))
 
     async def start(self):
         from qq_adapter import get_qq_adapter
@@ -601,6 +681,10 @@ class QQPlugin(PlatformPlugin):
 
         self.adapter = get_qq_adapter()
         set_sender(self.adapter)
+
+        # 状态落盘：从 dataDir json 恢复去重字典（known_messages / vision_seen）
+        if getattr(config, "QQ_STATE_PERSIST", True):
+            self._load_state()
 
         # 订阅"AI 请求修改核心代码"事件，私聊通知用户确认
         def _on_edit_request(data: dict):
@@ -618,17 +702,27 @@ class QQPlugin(PlatformPlugin):
         except Exception as e:
             degrade("libs/qq_bot_runtime/qq_plugin.py:560 QQPlugin.start", e, "降级：get_event_bus().on('code.edit_request', _on_edit_r")
 
-        # NapCat 反向 WebSocket 服务端：等 NapCat 主动连进来
-        host = config.WS_HOST
-        port = config.WS_PORT
-        path = config.WS_PATH
-        self._server = await websockets.serve(self._handler, host, port, max_size=16 * 1024 * 1024)
-        print(f"[QQ-PLUGIN] WebSocket 服务已启动: ws://{host}:{port}{path}（等待 NapCat 连接）")
-        wl = set(str(g) for g in getattr(config, "QQ_GROUP_WHITELIST", []) or [])
-        if wl:
-            print(f"[QQ-PLUGIN] 群监听白名单已启用（仅处理这些群）: {', '.join(sorted(wl))}")
+        # QQ 连接模式（对齐新版 cortico-world-qq 双向能力）
+        mode = str(getattr(config, "QQ_WS_MODE", "reverse")).lower()
+        if mode == "forward":
+            # 正向 WS 客户端：本机连到 NapCat 暴露的 WebSocket 地址，并自动重连
+            self._reconnect_task = asyncio.ensure_future(self._forward_loop())
+            wl = set(str(g) for g in getattr(config, "QQ_GROUP_WHITELIST", []) or [])
+            print(f"[QQ-PLUGIN] 正向 WS 客户端模式（连 {getattr(config, 'QQ_WS_URL', 'ws://127.0.0.1:3001')}），等待连接…")
+            if wl:
+                print(f"[QQ-PLUGIN] 群监听白名单已启用（仅处理这些群）: {', '.join(sorted(wl))}")
         else:
-            print("[QQ-PLUGIN] 群监听白名单未启用：所有群均处理（QQ_GROUP_WHITELIST 为空）")
+            # 反向 WS 服务端（默认）：等 NapCat 主动连进来
+            host = config.WS_HOST
+            port = config.WS_PORT
+            path = config.WS_PATH
+            self._server = await websockets.serve(self._handler, host, port, max_size=16 * 1024 * 1024)
+            print(f"[QQ-PLUGIN] WebSocket 服务已启动: ws://{host}:{port}{path}（等待 NapCat 连接）")
+            wl = set(str(g) for g in getattr(config, "QQ_GROUP_WHITELIST", []) or [])
+            if wl:
+                print(f"[QQ-PLUGIN] 群监听白名单已启用（仅处理这些群）: {', '.join(sorted(wl))}")
+            else:
+                print("[QQ-PLUGIN] 群监听白名单未启用：所有群均处理（QQ_GROUP_WHITELIST 为空）")
         await super().start()
 
     async def stop(self):
@@ -639,6 +733,12 @@ class QQPlugin(PlatformPlugin):
             except Exception as e:
                 degrade("libs/qq_bot_runtime/qq_plugin.py:576 QQPlugin.stop", e, "降级：await self._server.wait_closed()")
             self._server = None
+        # 状态落盘：退出前冲刷一次（对齐新版 saveState 在回合/进程结束时持久化）
+        if getattr(config, "QQ_STATE_PERSIST", True):
+            try:
+                self._save_state_now()
+            except Exception as e:
+                print(f"[WARN] 状态落盘退出冲刷失败（忽略）: {e}")
         self.ws = None
         plugin_pending_calls.clear()
         if self.adapter:
@@ -647,6 +747,224 @@ class QQPlugin(PlatformPlugin):
             t.cancel()
         self._tasks.clear()
         await super().stop()
+
+    # ------------------------------------------------------------------
+    # 正向 WS 客户端 + 断线自动重连（对齐新版双向模式）
+    # ------------------------------------------------------------------
+    async def _forward_loop(self):
+        """正向模式：作为客户端连到 NapCat 的 WS，断线按 1s→30s 退避重连。"""
+        delay = int(getattr(config, "QQ_WS_RECONNECT_MIN", 1))
+        url = getattr(config, "QQ_WS_URL", "ws://127.0.0.1:3001")
+        while True:
+            try:
+                async with websockets.connect(url, max_size=16 * 1024 * 1024) as ws:
+                    self.ws = ws
+                    self.adapter.set_ws(ws)
+                    print(f"[QQ-PLUGIN] 正向 WS 已连接：{url}")
+                    delay = int(getattr(config, "QQ_WS_RECONNECT_MIN", 1))
+                    try:
+                        await self._handler(ws)
+                    finally:
+                        self.ws = None
+                        self.adapter.set_ws(None)
+            except Exception as e:
+                print(f"[QQ-PLUGIN] 正向 WS 连接失败：{e}")
+            if not getattr(config, "QQ_WS_RECONNECT", True):
+                break
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, int(getattr(config, "QQ_WS_RECONNECT_MAX", 30)))
+
+    # ------------------------------------------------------------------
+    # 消息追踪（known_messages / 会话串行链）—— 对齐新版
+    # ------------------------------------------------------------------
+    def _mark_seen(self, mid) -> bool:
+        """记录已处理的 message_id；若近期已处理过（echo/重投）返回 True（应跳过）。"""
+        now = time.time()
+        ttl = max(60, int(getattr(config, "QQ_KNOWN_MESSAGES_TTL", 600)))
+        if len(self._known_messages) > 2000:
+            self._known_messages = {k: v for k, v in self._known_messages.items() if now - v < ttl}
+        if mid in self._known_messages:
+            return True
+        self._known_messages[mid] = now
+        self._schedule_save_state()  # 去重状态落盘
+        return False
+
+    # ------------------------------------------------------------------
+    # 状态落盘（对齐新版 saveState）：把可序列化去重字典持久化到 dataDir json
+    # （_conv_chains 含 asyncio future，不可序列化，仅做内存态）
+    # ------------------------------------------------------------------
+    def _load_state(self):
+        """启动/重载时从 dataDir json 恢复去重字典（带 TTL 过滤）。"""
+        try:
+            import json as _json
+            if not os.path.exists(self._state_path):
+                return
+            with open(self._state_path, "r", encoding="utf-8") as f:
+                st = _json.load(f)
+            now = time.time()
+            km_ttl = max(60, int(getattr(config, "QQ_KNOWN_MESSAGES_TTL", 600)))
+            vs_ttl = max(0, int(getattr(config, "QQ_VISION_DEDUP_SEC", 300)))
+            km = st.get("known_messages", {})
+            self._known_messages = {k: float(v) for k, v in km.items()
+                                    if now - float(v) < km_ttl}
+            vs = st.get("vision_seen", {})
+            self._vision_seen = {k: float(v) for k, v in vs.items()
+                                 if now - float(v) < vs_ttl}
+            print(f"[INFO] 状态落盘已恢复：known_messages={len(self._known_messages)}，"
+                  f"vision_seen={len(self._vision_seen)}")
+        except Exception as e:
+            print(f"[WARN] 状态落盘加载失败（忽略）: {e}")
+
+    def _schedule_save_state(self):
+        """debounce 写盘：1.5s 内的多次更新只落一次（对齐新版 saveState 防抖）。"""
+        if getattr(config, "QQ_STATE_PERSIST", True) is False:
+            return
+        if self._state_timer is not None:
+            self._state_timer.cancel()
+        try:
+            loop = asyncio.get_event_loop()
+            self._state_timer = loop.call_later(self._state_save_delay, self._save_state_now)
+        except Exception:
+            # 无事件循环（如同步上下文）时退化为直接写
+            try:
+                self._save_state_now()
+            except Exception:
+                pass
+
+    def _save_state_now(self):
+        """立即把去重字典写盘（供 debounce 与 stop 调用）。"""
+        self._state_timer = None
+        try:
+            import json as _json
+            d = os.path.dirname(self._state_path)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            st = {
+                "known_messages": self._known_messages,
+                "vision_seen": self._vision_seen,
+            }
+            tmp = self._state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json.dump(st, f, ensure_ascii=False)
+            os.replace(tmp, self._state_path)
+        except Exception as e:
+            print(f"[WARN] 状态落盘写入失败（忽略）: {e}")
+
+    # ------------------------------------------------------------------
+    # 视觉 VLM 路由（对齐新版 qq_view_image）：收图异步描述 + sha256 去重
+    # ------------------------------------------------------------------
+    async def _fetch_image_b64(self, seg):
+        """下载图片字节 -> (base64, sha256)。失败返回 (None, None)。"""
+        try:
+            data = await self._fetch_image(seg)
+            if not data:
+                return None, None
+            return base64.b64encode(data).decode("ascii"), hashlib.sha256(data).hexdigest()
+        except Exception:
+            return None, None
+
+    async def _vision_describe(self, seg, force: bool = False) -> str:
+        """对单张图片做视觉描述（需视觉模型）；失败/去重命中返回空串。
+
+        force=True 时绕过去重窗口（用于主动回看，重新识别同一张图）。
+        """
+        data_b64, sha = await self._fetch_image_b64(seg)
+        if not data_b64:
+            return ""
+        ttl = max(0, int(getattr(config, "QQ_VISION_DEDUP_SEC", 300)))
+        now = time.time()
+        if not force and sha in self._vision_seen and now - self._vision_seen[sha] < ttl:
+            return ""
+        self._vision_seen[sha] = now
+        self._schedule_save_state()  # 视觉去重状态落盘
+        try:
+            vision = getattr(self.core, "chat", None)
+            if vision is None or not hasattr(vision, "llm"):
+                return ""
+            resp = await vision.llm.chat(
+                [{"role": "user", "content": [
+                    {"type": "image", "data": f"data:image;base64,{data_b64}"},
+                    {"type": "text", "text": "用一句话描述这张图片的主要内容，中文。"},
+                ]}],
+                capability="vision")
+            resp = (resp or "").strip()
+            if resp:
+                self._vision_account(sha, len(resp))
+            return resp
+        except Exception as e:
+            print(f"[WARN] 图片视觉描述失败（降级跳过）: {e}")
+            return ""
+
+    def _vision_account(self, sha: str, chars: int):
+        """视觉用量记账（对齐新版 vision-accounting.jsonl）：每次实际视觉调用追加一行。"""
+        try:
+            if not getattr(config, "QQ_VISION_ACCOUNTING", True):
+                return
+            log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+            os.makedirs(log_dir, exist_ok=True)
+            log_path = os.path.join(log_dir, "vision-accounting.jsonl")
+            rec = {"ts": round(time.time(), 3), "sha256": sha[:16], "chars": chars}
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception as e:
+            print(f"[WARN] 视觉记账失败（忽略）: {e}")
+
+    async def get_forward_msg(self, fid):
+        """通过 OneBot get_forward_msg 拉取合并转发的全部节点（对齐新版 forwardIdentityCollapsed）。
+
+        返回节点列表：[{sender:{user_id,nickname}, message:[...], time, ...}]，失败返回 None。
+        """
+        if not self.ws:
+            return None
+        try:
+            res = await self.call_action(self.ws, "get_forward_msg", {"id": str(fid)})
+        except Exception as e:
+            print(f"[WARN] get_forward_msg 调用失败: {e}")
+            return None
+        if not isinstance(res, dict) or res.get("status") != "ok":
+            print(f"[WARN] get_forward_msg 返回非 ok: {res}")
+            return None
+        data = res.get("data") or {}
+        return data.get("messages") or []
+
+    async def _expand_forward(self, message, self_id=None) -> str:
+        """合并转发展开（对齐新版 forwardIdentityCollapsed / recoverForwardSelfNodes）：
+
+        识别 forward 段、拉取节点并展开为「昵称：文本」列表，作为引用上下文。
+        QQ 合并转发中，机器人自身的节点可能被折叠为转发者身份，这里做 recoverForwardSelfNodes：
+        命中自身 user_id 的节点显式标注为「我(肥鱼娘)」，避免自身发言缺失/错归他人。
+        """
+        lines = []
+        limit = int(getattr(config, "QQ_FORWARD_EXPAND_LIMIT", 40))
+        for seg in message:
+            if seg.get("type") != "forward":
+                continue
+            fid = seg.get("data", {}).get("id")
+            if not fid:
+                continue
+            try:
+                nodes = await self.get_forward_msg(fid)
+            except Exception as e:
+                print(f"[WARN] 拉取合并转发失败: {e}")
+                continue
+            if not nodes:
+                continue
+            for n in nodes[:limit]:
+                sender = n.get("sender") or {}
+                node_uid = str(n.get("user_id") or sender.get("user_id") or "")
+                # recoverForwardSelfNodes：自身节点补回（QQ 合并转发中自身消息可能折叠）
+                if self_id and node_uid == str(self_id):
+                    u = sender.get("nickname") or "我(肥鱼娘)"
+                elif sender.get("nickname"):
+                    u = sender.get("nickname")
+                elif node_uid:
+                    u = node_uid
+                else:
+                    u = "某人"
+                txt = extract_text(n.get("message", []))
+                if txt:
+                    lines.append(f"{u}：{txt}")
+        return "\n".join(lines)
 
     async def _handler(self, ws):
         """单个 WebSocket 连接：读事件 -> 组装 InboundMessage -> 交核心处理。"""
@@ -681,6 +999,10 @@ class QQPlugin(PlatformPlugin):
 
                 # 消息事件 -> 组装并分发
                 if data.get("post_type") == "message":
+                    # known_messages：已处理过的 message_id（echo 回显/重投）直接跳过
+                    mid = data.get("message_id")
+                    if mid is not None and self._mark_seen(mid):
+                        continue
                     if data.get("message_type") == "group":
                         gid = str(data.get("group_id") or "")
                         wl = set(str(g) for g in getattr(config, "QQ_GROUP_WHITELIST", []) or [])
@@ -734,12 +1056,75 @@ class QQPlugin(PlatformPlugin):
 
     async def _dispatch(self, data: dict):
         """OneBot 事件 -> InboundMessage -> 核心聊天大脑。"""
+        # 发送确认（对齐新版 qq_draft/qq_confirm）：本会话有待确认草稿且用户回确认词 -> 正式发送
+        if getattr(config, "QQ_SEND_CONFIRM", False):
+            text0 = extract_text(data.get("message", []))
+            conv = (data.get("message_type", "private"),
+                    str(data.get("group_id") or data.get("user_id") or ""))
+            pend = self._confirm_pending.pop(conv, None)
+            if pend is not None:
+                # onTurnEnded：草稿过期自动作废，避免旧草稿被后续任意消息误触发确认
+                pend_text, pend_ts = pend if isinstance(pend, tuple) else (pend, 0)
+                age = time.time() - float(pend_ts)
+                if age > self._send_confirm_ttl:
+                    print(f"[INFO] 待确认草稿已过期（{age:.0f}s > {self._send_confirm_ttl:.0f}s），作废")
+                elif text0.strip() in ("确认", "发送", "好的", "好", "发", "ok", "OK", "可以", "准", "yes", "Yes"):
+                    await self._send_confirmed(conv, pend_text)
+                    return
+                # 否则视为取消，继续正常处理本条
+
         try:
             msg = await self.build_inbound(data)
-            reply = QQReplyTarget(self, msg)
-            await self.core.chat.handle_message(msg, reply)
         except Exception as e:
-            print(f"[QQ-PLUGIN] 消息处理失败: {e}")
+            print(f"[QQ-PLUGIN] 消息组装失败: {e}")
+            return
+        reply = QQReplyTarget(self, msg)
+
+        async def _run():
+            try:
+                await self.core.chat.handle_message(msg, reply)
+            except Exception as e:
+                print(f"[QQ-PLUGIN] 消息处理失败: {e}")
+
+        # 按会话串行化，避免同一群/会话并发抢上下文导致串台或乱序
+        if getattr(config, "QQ_SERIAL_PER_CONV", True):
+            key = (msg.channel_type, msg.channel_id)
+            prev = self._conv_chains.get(key)
+
+            async def _chained():
+                if prev is not None:
+                    try:
+                        await prev
+                    except Exception:
+                        pass
+                await _run()
+
+            self._conv_chains[key] = asyncio.ensure_future(_chained())
+        else:
+            asyncio.ensure_future(_run())
+
+    async def _send_confirmed(self, conv, text: str):
+        """把已确认的草稿文本正式发出（不经过聊天大脑）。"""
+        ws = self.ws
+        if not ws:
+            return
+        message_type, target = conv
+        for i, segments in enumerate(split_text_and_images(text)):
+            valid = [s for s in segments
+                     if not (s.get("type") == "text" and not s.get("data", {}).get("text", "").strip())]
+            if not valid:
+                continue
+            payload = {
+                "action": "send_msg",
+                "params": {"message_type": message_type, "message": valid},
+                "echo": f"confirm-{int(time.time() * 1000)}-{i}",
+            }
+            if message_type == "group":
+                payload["params"]["group_id"] = target
+            else:
+                payload["params"]["user_id"] = target
+            await ws.send(json.dumps(payload, ensure_ascii=False))
+            await asyncio.sleep(config.SEND_INTERVAL_SECONDS)
 
     async def build_inbound(self, data: dict) -> InboundMessage:
         """把 OneBot 消息事件转换成平台无关的 InboundMessage。"""
@@ -771,13 +1156,60 @@ class QQPlugin(PlatformPlugin):
                 msg.video_ref = {"data": seg.get("data", {}), "message_id": msg.message_id}
                 break
 
+        # 合并转发展开（对齐新版）：识别 forward 段、拉取并展开节点为引用上下文
+        if getattr(config, "QQ_FORWARD_EXPAND", True):
+            try:
+                fwd = await self._expand_forward(message, self_id=data.get("self_id"))
+                if fwd:
+                    msg.text = f"[合并转发内容]\n{fwd}\n" + (msg.text or "")
+            except Exception as e:
+                print(f"[WARN] 合并转发展开失败（降级忽略）: {e}")
+
+        # 视觉 VLM 路由（对齐新版 qq_view_image）：收图异步描述并去重，作为上下文
+        if getattr(config, "QQ_VISION_ON_IMAGE", False):
+            try:
+                descs = []
+                for seg in extract_images(message):
+                    d = await self._vision_describe(seg)
+                    if d:
+                        descs.append(d)
+                if descs:
+                    msg.text = (msg.text or "") + "\n" + "\n".join(f"[图片内容: {d}]" for d in descs)
+            except Exception as e:
+                print(f"[WARN] 图片视觉描述失败（降级忽略）: {e}")
+
+        # VLM 主动回看（对齐新版 qq_view_image 主动回看工具）：用户明确要求重新看清/识别图片时，
+        # 绕过去重窗口对当前消息中的图片重新描述并注入，作为一次主动回看。
+        if getattr(config, "QQ_VISION_RECALL", True):
+            try:
+                if vision_recall_intent(msg.text or ""):
+                    imgs = extract_images(message)
+                    if imgs:
+                        recalls = []
+                        for seg in imgs:
+                            d = await self._vision_describe({"data": seg}, force=True)
+                            if d:
+                                recalls.append(d)
+                        if recalls:
+                            msg.text = (msg.text or "") + "\n" + "\n".join(
+                                f"[图片主动回看: {d}]" for d in recalls)
+            except Exception as e:
+                print(f"[WARN] 图片主动回看失败（降级忽略）: {e}")
+
         # 引用消息（需要调 OneBot API，属平台职责）
         reply_info = extract_reply(message)
         if reply_info.get("id"):
             quoted = await get_quoted_message(self.ws, reply_info["id"])
             if quoted:
-                msg.quoted_text = quoted.get("text", "")
-                msg.quoted_image_refs = quoted.get("image_refs", [])
-                msg.quoted_sender = quoted.get("user_id", "")
-                msg.quoted_self = (str(quoted.get("user_id", "")) == str(data.get("self_id", "")))
+                # sameConversation 断言：引用的会话必须与当前一致，否则丢弃（防跨会话引用串入上下文）
+                q_type = quoted.get("channel_type")
+                q_gid = quoted.get("channel_id")
+                if q_type and q_gid and (q_type != msg.channel_type or q_gid != msg.channel_id):
+                    print(f"[INFO] 引用消息来自其他会话（{q_type}/{q_gid}），"
+                          f"当前为 {msg.channel_type}/{msg.channel_id}，已丢弃避免串上下文")
+                else:
+                    msg.quoted_text = quoted.get("text", "")
+                    msg.quoted_image_refs = quoted.get("image_refs", [])
+                    msg.quoted_sender = quoted.get("user_id", "")
+                    msg.quoted_self = (str(quoted.get("sender_id", "")) == str(data.get("self_id", "")))
         return msg

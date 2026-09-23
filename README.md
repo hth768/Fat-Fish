@@ -102,7 +102,7 @@ qq_bot 运行时在 2026-09 重构为「**智能体核心 + 插件系统**」：
 | `agent_ctx.py` | **多智能体隔离**：基于 `contextvars` 维护「当前智能体」上下文，隔离各 Bot 的记忆/身份/知识库/向量；`agent_storage_dir()` 决定落盘命名空间（默认 `feiyu` 回落引擎目录，其余落 `agents/<id>/memory`） |
 | `plugin_base.py` | 插件系统：`Plugin` / `PlatformPlugin` / `FeaturePlugin` / `PluginManager` |
 | `message_bus.py` | 消息契约：`InboundMessage` / `ReplyTarget` / `MessageSender` / 事件总线 |
-| `qq_plugin.py` | QQ 平台插件：NapCat WebSocket、OneBot 协议、SILK 语音解码、私聊聚合 |
+| `qq_plugin.py` | QQ 平台插件：NapCat WebSocket（反向/正向）、OneBot 协议、SILK 语音解码、私聊聚合、合并转发展开、引用 sameConversation 断言、消息去重、群聊多人聚合+话题检测、VLM 视觉描述、状态落盘 |
 | `bilibili_plugin.py` / `bili_*` | B 站直播平台：主播(streamer)/观众(viewer) 两模式、弹幕 WS、字幕服务、推流 |
 | `mc_bot_brain.py` / `mc_*.py` | MC 功能大脑：自主代理/导航/合成（与聊天平台无关，被 `chat_service` 调用） |
 | `pc_agent.py` / `pc_control.py` | **电脑操控大脑**：截屏→视觉理解→工具调用→键鼠执行，四层护栏 + 急停 |
@@ -253,6 +253,21 @@ python app.py --with-core
 > **World 类型（一等公民）**：`kind="world"` 的插件（如 `mc_world`）与 `brain` 走同一条 `create_brain` + `core.brains` 注册通道，天然获得统一生命周期、状态查询与 `brain.event` 事件通道；它把游戏 / 虚拟主播等**外部世界**接入肥鱼，区别于对接 IM 的 `platform` 插件。详见 [`PLUGINS.md`](./PLUGINS.md) 第 3.4 节与 `plugins/mc_world/`。
 
 包管理见 `bridge/pkg_manager.py`；插件包的 `manifest.json` 会在**装载前静态校验**（必填字段、`kind` 合法性、包名与目录一致、依赖字段、`schema_version` 兼容性），坏包不再静默消失（规则见 [`PLUGINS.md`](./PLUGINS.md)）。
+
+### QQ 平台插件（NapCat / OneBot）
+
+`qq_plugin.py` 是 QQ 平台插件：通过 NapCat 暴露的 OneBot v11 **反向 / 正向** WebSocket 接入，把 QQ 私聊 / 群聊消息转成 `InboundMessage` 交给核心 `ChatService`，回复经 `QQReplyTarget` 发回（含 SILK 语音解码、私聊聚合等既有能力）。已实现能力（对齐新版 `cortico-world-qq`）：
+
+- **消息去重** `known_messages`：按 `message_id` 去重，防 echo / 重投重复处理。
+- **引用 sameConversation 断言**：被引用消息的会话须与当前一致，跨会话引用直接丢弃，防串上下文。
+- **合并转发展开** `QQ_FORWARD_EXPAND`：拉取合并转发节点展开为「昵称：文本」上下文，并对机器人自身节点做 `recoverForwardSelfNodes`（显式标注「我(肥鱼娘)」），避免自身发言缺失 / 错归他人。
+- **引用增强** `QQ_QUOTE_ENHANCE`：经 OneBot `get_msg` 取被引消息的文本 + 图片作为上下文。
+- **群聊多人聚合 + 话题检测**：`chat_service` 维护群内多人滚动消息缓冲与 LLM 短话题标签，回复基于整体语境而非单条；是否接话也参考群整体话题（`GROUP_TOPIC_GUIDE_REPLY`）。
+- **VLM 视觉描述** `QQ_VISION_ON_IMAGE`：收到图片异步做视觉描述并 sha256 去重作为上下文；每次实际调用写 `data/vision-accounting.jsonl` 用量记账（`QQ_VISION_ACCOUNTING`）。
+- **状态落盘** `QQ_STATE_PERSIST`：去重 / 视觉去重字典持久化到 `data/qq_plugin_state.json`（1.5s 防抖），重启仍有效。
+- **发送确认门** `QQ_SEND_CONFIRM`：对高风险回复（群 / @all / 外部）先发草稿待用户「确认」才正式发；草稿超 `QQ_SEND_CONFIRM_TTL` 秒自动作废（避免旧草稿被后续消息误触发）。
+
+关键配置（见 `libs/qq_bot_runtime/config.py`）：`QQ_WS_MODE`（reverse/forward）、`QQ_WS_URL` / `QQ_WS_RECONNECT*`、`QQ_FORWARD_EXPAND` / `QQ_FORWARD_EXPAND_LIMIT`、`QQ_QUOTE_ENHANCE`、`QQ_VISION_ON_IMAGE` / `QQ_VISION_DEDUP_SEC` / `QQ_VISION_ACCOUNTING`、`QQ_STATE_PERSIST`、`QQ_SEND_CONFIRM` / `QQ_SEND_CONFIRM_TTL`、`QQ_SERIAL_PER_CONV`、`QQ_KNOWN_MESSAGES_TTL`。
 
 ### 构建助手（对话式 Agent）
 
