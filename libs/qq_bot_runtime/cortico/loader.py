@@ -161,12 +161,21 @@ async def mount_packages(assembly: WorldAssembly,
             world = NodeWorld(bridge, fallback_id=wid)
             await world._prepare()
             await world.refresh_vars()
+            # Cortico 约定配置段按 World 真实 id 命名（如包 cortico-world-dungeon 的
+            # id=dungeon），而装载时按包名建段；此处把配置对齐到真实 id，保证
+            # start_enabled() / 配置页读取一致（否则 enabled 永远读不到、World 不启动）。
+            real_id = world.id
+            if real_id and real_id != wid:
+                real_section = assembly.section(real_id)
+                real_section.clear()
+                real_section.update(cfg_section)
             slot = assembly.add_prebuilt(world, label=m.label)
-            # 用包自己的 defaults 补默认配置段（首次运行）
+            # 用包自己的 defaults 补默认配置段（首次运行），落到真实 id 段
             try:
                 defaults = await bridge.defaults()
+                target = assembly.section(real_id or wid)
                 for k, v in (defaults or {}).items():
-                    cfg_section.setdefault(k, v)
+                    target.setdefault(k, v)
             except Exception:
                 pass
             results.append({"id": wid, "source": "node", "ok": True,

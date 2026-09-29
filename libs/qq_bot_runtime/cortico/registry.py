@@ -93,8 +93,9 @@ class WorldAssembly:
         self._state_path = state_path or _state_file()
         self.timezone = timezone
         self.bot_name = bot_name
-        self._secrets = secrets or (lambda name: os.environ.get(name, ""))
-        self._store_secret = store_secret or (lambda name, value: os.environ.__setitem__(name, value))
+        self._secrets_data = self._load_secrets()
+        self._secrets = secrets or self._read_secret
+        self._store_secret = store_secret or self._write_secret
         self.store = EventStore()
         self.slots: List[WorldSlot] = []
         self.missing: List[MissingWorld] = []
@@ -136,6 +137,37 @@ class WorldAssembly:
             os.replace(tmp, self._state_path)
         except OSError as e:
             print(f"[CORTICO] 装配状态落盘失败: {e}")
+
+    # ---- 密钥（邀请码 / 凭据）持久化 ----
+    def _secrets_path(self) -> str:
+        return os.path.join(os.path.dirname(self._state_path), "cortico_secrets.json")
+
+    def _load_secrets(self) -> Dict[str, str]:
+        try:
+            with open(self._secrets_path(), encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return d if isinstance(d, dict) else {}
+
+    def _read_secret(self, name: str) -> str:
+        v = os.environ.get(name)
+        if v:
+            return v
+        return self._secrets_data.get(name, "")
+
+    def _write_secret(self, name: str, value: str) -> None:
+        self._secrets_data[name] = "" if value is None else str(value)
+        os.environ[name] = self._secrets_data[name]
+        try:
+            p = self._secrets_path()
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self._secrets_data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, p)
+        except OSError as e:
+            print(f"[CORTICO] 密钥持久化失败: {e}")
 
     def section(self, wid: str) -> Dict[str, Any]:
         return self.cfg["worlds"].setdefault(wid, {"enabled": False})
