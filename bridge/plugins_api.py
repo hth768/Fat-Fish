@@ -426,6 +426,8 @@ SEEK_SKIP_DIRS = {
     "node_modules", "site-packages", "__pycache__", ".git",
     "venv", "venv_vox", "_build", "dist", "hf_cache", "emojis", "voice_tmp",
     "qq_bot_runtime",   # 任何 feiyu 引擎运行时副本（内部巨大且不含待装插件）
+    # Chromium / Electron 组件：自带 manifest.json 但绝不可能是 feiyu 插件（通义千问、夸克等）
+    "meipreload", "widevinecdm",
 }
 # feiyu 插件 manifest 特征（防把浏览器组件等带 manifest.json 的目录误装）
 SEEK_KINDS = {"platform", "feature", "brain", "sidecar", "local"}
@@ -500,7 +502,8 @@ def market_seek(bridge) -> dict:
     timeout_hit = False
 
     def install_plugin(dirpath: str) -> None:
-        meta = read_manifest(dirpath) or {}
+        # quiet=True：全盘搜寻撞见的第三方 manifest（浏览器/Electron 组件）不该告警
+        meta = read_manifest(dirpath, quiet=True) or {}
         name = str(meta.get("name") or "")
         # 收紧判定：必须是 feiyu 插件特征（合法 kind + 蛇形 name），
         # 浏览器组件等恰好带 manifest.json 的目录在这里被拒。
@@ -569,7 +572,7 @@ def market_seek(bridge) -> dict:
                     continue
                 # 命中检测：代码包（manifest.json）优先，其次资源包签名
                 if "manifest.json" in filenames:
-                    if read_manifest(dirpath):
+                    if read_manifest(dirpath, quiet=True):
                         install_plugin(dirpath)
                     dirnames[:] = []
                 else:

@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "name": "proactive_speaker",
   "title": "主动说话调度器",
   "kind": "feature",

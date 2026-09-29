@@ -174,8 +174,12 @@ class PluginManager:
                         f"[ERR] {spec.name}: 平台已请求启用但未注册进 PluginManager")
 
         # 已注册但不在清单 → 未登记的野插件（warning）
+        # 例外：plugins/ 目录下的**安装包**（自建/构建助手产出）本就不该进内建清单，
+        # 它们由 pkg_manager 动态装载，属于预期情况，不算野插件。
+        pkg_managed = {p.name for p in self._plugins.values()
+                       if getattr(p, "_pkg_managed", False)}
         known = {s.name for s in reg.SPECS}
-        for name in registered - known:
+        for name in sorted(registered - known - pkg_managed):
             warnings.append(f"[WARN] {name}: 已注册但未在 plugin_registry 登记")
 
         report["ok"] = not errors

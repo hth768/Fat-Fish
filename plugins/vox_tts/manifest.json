@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "name": "vox_tts",
   "title": "本地 VoxCPM2 TTS",
   "kind": "feature",

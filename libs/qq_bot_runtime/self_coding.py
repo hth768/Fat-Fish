@@ -445,6 +445,8 @@ def _build_prompt(issue: Dict) -> str:
         "硬性要求：\n"
         "1) 产物必须以插件包形式落到 `plugins/<包名>/` 目录：至少含 `plugin.py` 与 "
         "MANIFEST（含 name/title/version/kind=feature 或 platform/sidecar/local/description）。\n"
+        "   MANIFEST 第一行必须写 `\"schema_version\": 2`（当前协议版本），否则会按 1 处理并告警；"
+        "name 必须是小写蛇形且与目录名一致。\n"
         "2) 必须调用工具 `save_plugin`（或在 `plugins/<包名>/` 下用 `write_file`）把产物真正"
         "保存下来，不能只输出代码片段。\n"
         "3) 工作区仅允许写入 plugins/agents/bridge/libs/webui/config；"

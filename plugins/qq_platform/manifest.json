@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "name": "qq_platform",
   "title": "QQ 平台插件",
   "kind": "platform",

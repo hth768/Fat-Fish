@@ -221,10 +221,15 @@ def _flush_schema_notice(names: list) -> None:
           f"{MANIFEST_SCHEMA_VERSION}）：" + "、".join(uniq))
 
 
-def read_manifest(pkg_dir: str) -> dict:
-    """兼容旧调用：只取 meta（校验结果请用 load_manifest）。"""
+def read_manifest(pkg_dir: str, quiet: bool = False) -> dict:
+    """兼容旧调用：只取 meta（校验结果请用 load_manifest）。
+
+    quiet=True：不打印任何校验告警。用于「探查性读取」——全盘搜寻插件时会撞见
+    浏览器/Electron 组件自带的 manifest.json（MEIPreload、WidevineCdm、resources/app…），
+    "不是 feiyu 插件"在这里是**预期结果**而非异常，打 WARN 只会刷屏。
+    """
     meta, errors, warns = load_manifest(pkg_dir)
-    if errors or warns:
+    if (errors or warns) and not quiet:
         _log_manifest_issues(os.path.basename(os.path.normpath(pkg_dir)), pkg_dir, errors, warns)
     return meta
 
@@ -496,10 +501,15 @@ class PackageManager:
                 wrapper = _load_wrapper(meta["dir"], name)
                 self._loaded[name] = wrapper
                 if meta["kind"] in ("brain", "world"):
-                    core.brains.register(wrapper.create_brain(core))
+                    brain = wrapper.create_brain(core)
+                    # 标记来源：让 plugin_registry 校验知道这是「安装包」而非未登记的野插件
+                    setattr(brain, "_pkg_managed", True)
+                    core.brains.register(brain)
                 else:
                     _set_switch(meta["switch"], True)
-                    core.plugins.register(wrapper.create_plugin(core))
+                    plugin = wrapper.create_plugin(core)
+                    setattr(plugin, "_pkg_managed", True)
+                    core.plugins.register(plugin)
                 loaded.append(name)
             except Exception as e:
                 failed.append(f"{name}: {e!r}")

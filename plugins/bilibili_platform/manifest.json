@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "name": "bilibili_platform",
   "title": "B 站直播平台插件",
   "kind": "platform",

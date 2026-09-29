@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "name": "brain_mc_bot",
   "title": "原版世界 MC Bot 大脑",
   "kind": "brain",

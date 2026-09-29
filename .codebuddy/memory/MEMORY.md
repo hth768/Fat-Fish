@@ -3,7 +3,7 @@
 *逐日细节见同目录 `YYYY-MM-DD.md`。只存跨会话稳定、高频复用要点。*
 
 ## 1. 项目结构 / 部署副本 / 运维
-- 仓库 `e:\feiyu_standalone`（GitHub `hth768/Fat-Fish`）= Python 后端 + pywebview/Edge + 原生 JS WebUI，含捆绑引擎 `libs/qq_bot_runtime`，**唯一 git 提交目标**（dist/ 已 gitignore）。部署副本均非 git、不提交：`e:\qq_bot`(纯引擎，多 ~27 个游戏自动化 `mc_*`/`pc_*`/`pvz_*`，**同步保留不删**)；`E:\feiyu_app`(App 层无 libs，`FEIYU_QQ_BOT=E:\qq_bot` 复用引擎)；`D:\testing\Fat-Fish`(**完整克隆、独立 git 仓库，与仓库同源同根提交 28a4617，可 git 三方合并**)。
+- 仓库 `e:\feiyu_standalone`（GitHub `hth768/Fat-Fish`）= Python 后端 + pywebview/Edge + 原生 JS WebUI，含捆绑引擎 `libs/qq_bot_runtime`，**唯一 git 提交目标**（dist/ 已 gitignore）。部署副本均非 git、不提交：`e:\qq_bot`(纯引擎，多 ~27 个游戏自动化 `mc_*`/`pc_*`/`pvz_*`，**同步保留不删**)；`E:\feiyu_app`(App 层无 libs，`FEIYU_QQ_BOT=E:\qq_bot` 复用引擎)；`D:\testing\Fat-Fish`(**完整克隆、独立 git 仓库，与仓库同源同根提交 28a4617，可 git 三方合并**)。同步它**用 git 不用 robocopy**：它已把本仓库配成远端 `repo`，流程 `git fetch repo` + `git merge --ff-only repo/main`（有分叉才用普通 merge）。**判断领先/落后前必须先 `git fetch`（所有远端）**，否则远端追踪指针过期会算出假的分叉数（曾据此误判"领先 31 个提交"，实际 fetch 后 0/0）。
 - **同步铁律**：仓库=唯一真相源，修复一律 仓库→部署（`robocopy /E`，绝不删副本独有文件）。引擎改动同步 `e:\qq_bot`；App 层 `server.py`+`bridge`+`webui` 三处都要同步。
 - **⚠ 同步清单绝对禁止包含 `config.py`**（2026-09-29 事故：脚本把仓库纯净模板复制到 `E:\qq_bot\config.py`，覆盖了本机差异如 ffmpeg/VOXCPM 绝对路径）。部署 config 只准**追加**新配置项（用 UTF-8 的 .py 脚本读写，勿用命令行内联中文）。
 - **重启**：先 `Get-CimInstance Win32_Process` 看实际命令行（实例可能是 `E:\feiyu_app\app.py` 或 `D:\testing\Fat-Fish\app.py`，勿凭记忆）。杀整树 `taskkill /T /F /PID <父PID>`；detached 启动：`Start-Process cmd.exe -ArgumentList '/c','set FEIYU_QQ_BOT=E:\qq_bot&& E:\qq_bot\venv\Scripts\python.exe <app.py> --with-core > data\app.log 2>&1'`。venv python 进程成对正常（stub+身子）。

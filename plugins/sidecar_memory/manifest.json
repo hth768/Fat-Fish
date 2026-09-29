@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "name": "sidecar_memory",
   "title": "记忆 RPC 服务",
   "kind": "sidecar",

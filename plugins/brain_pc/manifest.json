@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "name": "brain_pc",
   "title": "电脑操控大脑",
   "kind": "brain",

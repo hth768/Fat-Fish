@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "name": "balance_monitor",
   "title": "DeepSeek 余额监控",
   "kind": "feature",
