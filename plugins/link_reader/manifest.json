@@ -1,0 +1,91 @@
+{
+  "schema_version": 2,
+  "name": "link_reader",
+  "title": "链接阅读与总结",
+  "kind": "feature",
+  "version": "1.0.0",
+  "description": "让助手能打开并读取用户发来的链接（网页 / 视频等）并总结其信息：自动识别聊天里的 http(s) 链接，抓取正文（网页正文 / B 站·YouTube 视频元数据），可选 LLM 总结后作为一条助手消息发回。自包含实现，不 import 任何引擎模块，缺依赖也能被扫描装载。",
+  "switch": "",
+  "plugin": "link_reader",
+  "author": "构建助手",
+  "config_schema": [
+    {
+      "key": "enabled",
+      "label": "启用链接阅读",
+      "type": "bool",
+      "default": true,
+      "desc": "关闭后彻底不处理任何链接"
+    },
+    {
+      "key": "auto_read",
+      "label": "自动识别并读取",
+      "type": "bool",
+      "default": true,
+      "desc": "聊天里出现链接就自动抓取总结（关掉则只保留手动入口）"
+    },
+    {
+      "key": "max_links",
+      "label": "单条消息最多读取链接数",
+      "type": "int",
+      "min": 1,
+      "max": 8,
+      "default": 2,
+      "desc": "一条消息里链接太多时，只处理前 N 个，避免刷屏/耗时"
+    },
+    {
+      "key": "max_chars",
+      "label": "正文抓取上限（字符）",
+      "type": "int",
+      "min": 500,
+      "max": 20000,
+      "default": 4000,
+      "desc": "送进 LLM / 摘录的正文最大长度"
+    },
+    {
+      "key": "timeout",
+      "label": "抓取超时（秒）",
+      "type": "int",
+      "min": 3,
+      "max": 60,
+      "default": 12,
+      "desc": "单个链接的抓取超时"
+    },
+    {
+      "key": "summarize",
+      "label": "用 LLM 总结",
+      "type": "bool",
+      "default": true,
+      "desc": "关闭则只回标题 + 正文摘录，不调用模型"
+    },
+    {
+      "key": "save_to_knowledge",
+      "label": "沉淀到知识库",
+      "type": "bool",
+      "default": false,
+      "desc": "开启后把链接要点写入 knowledge_store，便于以后回忆"
+    },
+    {
+      "key": "notify_fail",
+      "label": "失败也回一条提示",
+      "type": "bool",
+      "default": true,
+      "desc": "链接打不开时回一条简短说明，而不是静默失败"
+    },
+    {
+      "key": "watch_memory",
+      "label": "轮询会话记忆兜底",
+      "type": "bool",
+      "default": true,
+      "desc": "除文本钩子外，周期性扫描 App 会话里用户说的话，兜住钩子时机不一致的情况"
+    },
+    {
+      "key": "poll_interval",
+      "label": "轮询间隔（秒）",
+      "type": "int",
+      "min": 3,
+      "max": 120,
+      "default": 8,
+      "desc": "记忆轮询的周期"
+    }
+  ]
+}
