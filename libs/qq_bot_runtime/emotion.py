@@ -323,6 +323,25 @@ def resolve_display_name(user_id) -> str:
 
 
 # ==================================================================
+# 运行时开关（对齐新版 emotion：聊天命令 /心情 开|关 即时生效，优先级高于 config）
+# ==================================================================
+_RUNTIME_ENABLED = None
+
+
+def runtime_enabled() -> bool:
+    """情绪模块是否启用（命令覆盖 config.EMOTION_ENABLED）。"""
+    if _RUNTIME_ENABLED is not None:
+        return bool(_RUNTIME_ENABLED)
+    import config
+    return bool(getattr(config, "EMOTION_ENABLED", False))
+
+
+def set_runtime_enabled(on: bool) -> None:
+    global _RUNTIME_ENABLED
+    _RUNTIME_ENABLED = bool(on)
+
+
+# ==================================================================
 # 感知应用（每轮聊天后由 chat_service 调用）
 # ==================================================================
 def apply_mood(user_id, mood_info: dict) -> bool:

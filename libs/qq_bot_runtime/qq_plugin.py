@@ -23,6 +23,9 @@ import httpx
 import websockets
 
 import config
+import qq_guard
+import reminder
+import routine
 import voice_client
 from message_bus import InboundMessage, MessageSender, ReplyTarget
 from plugin_base import PlatformPlugin
@@ -55,6 +58,9 @@ FACE_MAP = {
     "抱拳": 81, "菜刀": 68,
 }
 
+# 系统表情标记：[表情22：白眼] / [表情22:白眼]（数字为 QQ face id，冒号全角半角均可）
+_SYS_FACE_RE = re.compile(r'^表情\s*(\d{1,3})\s*[：:]\s*(.*)$')
+
 
 def parse_reply_segments(text: str) -> list:
     """把回复文本解析成 OneBot message 段数组。
@@ -70,7 +76,12 @@ def parse_reply_segments(text: str) -> list:
         if m.start() > last:
             segments.append({"type": "text", "data": {"text": text[last:m.start()]}})
         inner = m.group(1)
-        if inner.startswith("表情包:"):
+        # 系统表情标记「[表情22：白眼]」：数字为 QQ face id，支持全角/半角冒号与可选空格
+        # （对齐新版 0.1.8 修复：早期只认半角冒号，bot 照着入站的全角写法输出会变成"不存在的表情"文本）
+        _sysface = _SYS_FACE_RE.match(inner)
+        if _sysface:
+            segments.append({"type": "face", "data": {"id": str(int(_sysface.group(1)))}})
+        elif inner.startswith("表情包:"):
             fname = inner.split(":", 1)[1].strip()
             base_dir = os.path.dirname(os.path.abspath(__file__))
             img_path = os.path.join(base_dir, config.EMOJI_DIR, fname)
@@ -252,21 +263,36 @@ class QQReplyTarget(ReplyTarget):
             await ws.send(json.dumps(payload, ensure_ascii=False))
             await asyncio.sleep(config.SEND_INTERVAL_SECONDS)
 
+    def _guard_ok(self) -> bool:
+        """发言护栏（对齐新版 groupSpeak / antiLoop）：超限则本次不发言，避免刷屏与话题死循环。"""
+        ok, why = qq_guard.allow_outgoing(self.msg.channel_type, self.msg.channel_id)
+        if not ok:
+            print(f"[QQ-GUARD] 本次发言被拦截（{self.msg.channel_type}/{self.msg.channel_id}）：{why}")
+        return ok
+
     async def reply(self, text: str):
         """回复文本。若开启 QQ_SEND_CONFIRM 且为高风险回复，先发草稿、确认后再正式发。"""
+        # 群聊限速 / 防死循环：发送前统一过护栏
+        if not self._guard_ok():
+            return
         # 可选发送确认（对齐新版 qq_draft/qq_confirm）：高风险回复先发草稿，确认后再正式发
         if getattr(config, "QQ_SEND_CONFIRM", False) and self._high_risk(text):
             # 存 (文本, 时间戳)，供 _dispatch 在过期时作废（对齐新版 onTurnEnded）
             self.plugin._confirm_pending[(self.msg.channel_type, self.msg.channel_id)] = (text, time.time())
             await self._raw_send(f"[草稿·确认后发送]\n{text}")
+            qq_guard.note_outgoing(self.msg.channel_type, self.msg.channel_id)
             return
         await self._raw_send(text)
+        qq_guard.note_outgoing(self.msg.channel_type, self.msg.channel_id)
 
     async def reply_voice(self, wav_path: str):
         """发送语音消息（QQ record 段）。本地 TTS 产出 wav，转 mp3 提升 QQ 客户端兼容性（失败回退 wav）。"""
+        if not self._guard_ok():
+            return
         ws = self.plugin.ws
         if not ws:
             return
+        qq_guard.note_outgoing(self.msg.channel_type, self.msg.channel_id)
         voice_file = await _to_qq_voice_file(wav_path)
         message_type = self.msg.channel_type
         target = self.msg.channel_id
@@ -675,6 +701,41 @@ class QQPlugin(PlatformPlugin):
         self._state_save_delay = 1.5  # debounce 秒数
         self._send_confirm_ttl = float(getattr(config, "QQ_SEND_CONFIRM_TTL", 180))
 
+    def _need_native_asr(self) -> bool:
+        """是否该在平台层做原生识别（对齐新版 voice 的 native 供应商）。
+
+        只在「云端 ASR 用不了」时走这条路：GLM Key 没配（纯净包默认）、且语音的 asr 开关开着。
+        有 Key 时优先让 chat_service 走云端 GLM ASR（识别质量更好）。
+        """
+        try:
+            import voice_client as _vca
+            if not _vca.voice_asr_enabled():
+                return False
+        except Exception:
+            pass
+        return not bool(getattr(config, "GLM_API_KEY", ""))
+
+    async def _native_asr(self, record_data: dict) -> str:
+        """用 NapCat 原生 translate_record 把语音转成文字（零第三方依赖，由服务端解码 SILK）。"""
+        file_field = (record_data.get("path") or record_data.get("url")
+                      or record_data.get("file") or "")
+        if not file_field or not self.ws:
+            return ""
+        try:
+            result = await call_action(self.ws, "translate_record",
+                                       {"file": file_field, "file_id": file_field})
+        except Exception as e:
+            print(f"[QQ-ASR] 原生识别调用失败: {e}")
+            return ""
+        try:
+            if isinstance(result, dict):
+                data = result.get("data") if isinstance(result.get("data"), dict) else {}
+                text = data.get("text") or result.get("text") or ""
+                return str(text).strip()
+        except Exception as e:
+            print(f"[QQ-ASR] 原生识别结果解析失败: {e}")
+        return ""
+
     async def start(self):
         from qq_adapter import get_qq_adapter
         from message_bus import set_sender, get_event_bus
@@ -723,6 +784,16 @@ class QQPlugin(PlatformPlugin):
                 print(f"[QQ-PLUGIN] 群监听白名单已启用（仅处理这些群）: {', '.join(sorted(wl))}")
             else:
                 print("[QQ-PLUGIN] 群监听白名单未启用：所有群均处理（QQ_GROUP_WHITELIST 为空）")
+
+        # 后台任务（对齐新版 reminder / routine）：到点提醒扫描 + 作息播报检查
+        try:
+            reminder.start_scan()
+        except Exception as e:
+            print(f"[WARN] 到点提醒扫描启动失败（忽略）: {e}")
+        try:
+            routine.start_check()
+        except Exception as e:
+            print(f"[WARN] 作息播报检查启动失败（忽略）: {e}")
         await super().start()
 
     async def stop(self):
@@ -1078,6 +1149,11 @@ class QQPlugin(PlatformPlugin):
         except Exception as e:
             print(f"[QQ-PLUGIN] 消息组装失败: {e}")
             return
+        # 发言护栏：收到对方消息 -> 清零 bot 连续发言计数（话题重新有人接了）
+        try:
+            qq_guard.note_incoming(msg.channel_type, msg.channel_id)
+        except Exception as e:
+            print(f"[WARN] 发言护栏记账失败（不影响主流程）: {e}")
         reply = QQReplyTarget(self, msg)
 
         async def _run():
@@ -1147,6 +1223,13 @@ class QQPlugin(PlatformPlugin):
         for seg in message:
             if seg.get("type") == "record":
                 msg.audio_wav = await decode_voice_wav(seg.get("data", {}))
+                # 云端 ASR 不可用时（GLM Key 没配），在平台层用 NapCat 原生识别兜底：
+                # 对齐新版 voice 的 native 供应商——免第三方 Key，由 NapCat 服务端解码 SILK。
+                if msg.audio_wav and self._need_native_asr():
+                    native_text = await self._native_asr(seg.get("data", {}))
+                    if native_text:
+                        msg.audio_wav = b""   # 已转成文字，避免上层再走云端识别
+                        msg.text = ((msg.text or "").strip() + " " + native_text).strip()
                 break
 
         # 视频

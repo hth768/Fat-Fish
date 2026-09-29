@@ -12,6 +12,8 @@ import json
 import time
 from typing import Optional
 
+import config
+import qq_guard
 from message_bus import MessageSender
 
 
@@ -67,32 +69,82 @@ class QQAdapter(MessageSender):
     def _voice_segment(wav_path: str) -> list:
         return [{"type": "record", "data": {"file": wav_path}}]
 
+    def _guard(self, channel_type: str, channel_id) -> bool:
+        """主动发送同样过发言护栏（对齐新版 groupSpeak / antiLoop：主动与回复统一节流）。"""
+        try:
+            ok, why = qq_guard.allow_outgoing(channel_type, channel_id)
+        except Exception:
+            return True
+        if not ok:
+            print(f"[QQ-GUARD] 主动发言被拦截（{channel_type}/{channel_id}）：{why}")
+        return ok
+
     async def send_private(self, user_id, text: str) -> bool:
         """发私聊消息。"""
+        if not self._guard("private", user_id):
+            return False
         payload = self._build_payload(
             "private", user_id, self._text_segment(text),
             f"feiyu-private-{int(time.time() * 1000)}")
-        return await self._send_raw(payload)
+        ok = await self._send_raw(payload)
+        if ok:
+            qq_guard.note_outgoing("private", user_id)
+        return ok
 
     async def send_group(self, group_id, text: str) -> bool:
         """发群聊消息。"""
+        if not self._guard("group", group_id):
+            return False
         payload = self._build_payload(
             "group", group_id, self._text_segment(text),
             f"feiyu-group-{int(time.time() * 1000)}")
-        return await self._send_raw(payload)
+        ok = await self._send_raw(payload)
+        if ok:
+            qq_guard.note_outgoing("group", group_id)
+        return ok
 
     async def send_voice_private(self, user_id, wav_path: str) -> bool:
         """发私聊语音消息（record 段，wav 本地路径）。"""
+        if not self._guard("private", user_id):
+            return False
         payload = self._build_payload(
             "private", user_id, self._voice_segment(wav_path),
             f"feiyu-voice-private-{int(time.time() * 1000)}")
-        return await self._send_raw(payload)
+        ok = await self._send_raw(payload)
+        if ok:
+            qq_guard.note_outgoing("private", user_id)
+        return ok
 
     async def send_voice_group(self, group_id, wav_path: str) -> bool:
         """发群聊语音消息（record 段，wav 本地路径）。"""
+        if not self._guard("group", group_id):
+            return False
         payload = self._build_payload(
             "group", group_id, self._voice_segment(wav_path),
             f"feiyu-voice-group-{int(time.time() * 1000)}")
+        ok = await self._send_raw(payload)
+        if ok:
+            qq_guard.note_outgoing("group", group_id)
+        return ok
+
+    async def send_qzone(self, content: str, images=None) -> bool:
+        """发表 QQ 空间动态（说说）。
+
+        对齐新版 qzone：best-effort，依赖 NapCat 暴露 send_qzone_msg；
+        部分版本未实现该 action 会失败（返回 False），不抛异常。
+        """
+        params = {"content": content}
+        if images:
+            params["images"] = list(images)
+        try:
+            params["permission"] = int(getattr(config, "QQ_QZONE_PERMISSION", 1))
+        except (TypeError, ValueError):
+            pass
+        payload = {
+            "action": "send_qzone_msg",
+            "params": params,
+            "echo": f"feiyu-qzone-{int(time.time() * 1000)}",
+        }
         return await self._send_raw(payload)
 
 

@@ -140,6 +140,18 @@ class _Session:
 _GROUP_MSG_BUFFER: dict = {}    # channel_id -> list[{ts, user_id, user_name, text}]
 _GROUP_TOPIC_CACHE: dict = {}   # channel_id -> {topic, ts, count}
 
+# 提醒命令的时间前缀：从「明天9点 开会」这类串里切出时间部分（其余是提醒内容）
+_TIME_PREFIX_RE = re.compile(
+    r'^(?:今天|明天|后天)?\s*'
+    r'(?:'
+    r'\d{4}-\d{2}-\d{2}[T ]?\d{0,2}:?\d{0,2}'
+    r'|\d{1,2}\s*[:：点时]\s*\d{0,2}\s*分?'
+    r'|\d+\s*(?:分钟|小时|天|秒|min|mins|minutes|hours|days|h|d)(?:\s*(?:后|以后|之后))?'
+    r'|in\s+\d+\s*[mhd]'
+    r')',
+    re.IGNORECASE,
+)
+
 
 def _record_group_message(msg) -> None:
     """把群里任意人的消息记入聚合缓冲。命令/空文本/非群聊跳过。"""
@@ -194,6 +206,12 @@ class ChatService:
             _record_group_message(msg)
         except Exception as e:
             print(f"[WARN] 群聊消息聚合失败（不影响主流程）: {e}")
+        # 发言护栏：收到对方消息 -> 清零 bot 连续发言计数（防死循环按"对方接话"重置）
+        try:
+            import qq_guard as _guard
+            _guard.note_incoming(getattr(msg, "channel_type", ""), getattr(msg, "channel_id", ""))
+        except Exception as e:
+            print(f"[WARN] 发言护栏记账失败（不影响主流程）: {e}")
         token = agent_ctx.set_agent(self.agent_id)
         try:
             return await self._dispatch_message(msg, reply)
@@ -1238,10 +1256,23 @@ class ChatService:
 
         # ---------------- AI 心情档案（emotion.py 情绪模块，全局一份心情）----------------
         if text.strip().startswith("/心情"):
-            if not getattr(config, "EMOTION_ENABLED", False):
-                await reply.reply("情绪模块没开哦，去 config.py 把 EMOTION_ENABLED 设成 True 吧~")
+            if not emotion.runtime_enabled():
+                await reply.reply("情绪模块现在是关着的~（/心情 开 打开它）")
                 return
             raw = re.sub(r'^/?心情[:：\s]*', '', text.strip())
+            # 运行时开关（对齐新版 emotion：聊天命令即时生效，优先级高于 config）
+            if raw in ("开", "on"):
+                emotion.set_runtime_enabled(True)
+                await reply.reply("好，我又能感觉到自己的情绪啦~")
+                return
+            if raw in ("关", "off"):
+                emotion.set_runtime_enabled(False)
+                await reply.reply("唔…那我先收起情绪（不再感知新消息、也不再带情绪说话）。")
+                return
+            if raw in ("状态", "status"):
+                await reply.reply(f"情绪模块当前：{'开' if emotion.runtime_enabled() else '关'}"
+                                  "（命令即时生效，重启回到 config.EMOTION_ENABLED）")
+                return
             if raw in ("重置", "清零", "和好"):
                 emotion.reset_mood()
                 await reply.reply("唔…既然你主动提了，那本鱼就当什么都没发生过好啦，心情恢复平静~")
@@ -1251,6 +1282,139 @@ class ChatService:
                                   "\n其实直接问我「你心情怎么样」也可以哦~")
                 return
             await reply.reply(emotion.describe_mood())
+            return
+
+        # ---------------- 语音运行时命令（对齐新版 voice：聊天里即时开关，优先级高于 config）----------------
+        _vs = text.strip()
+        if _vs.startswith("/语音") and not _vs.startswith("/语音对讲"):
+            import voice_client as _vc
+            arg = re.sub(r'^/?语音[:：\s]*', '', _vs).strip().lower()
+            if not arg:
+                await reply.reply(_vc.voice_status_text())
+                return
+            _onoff = {"开": True, "on": True, "关": False, "off": False}
+            if arg in _onoff:
+                _vc.set_voice_runtime("enabled", _onoff[arg])
+                await reply.reply(f"语音总开关已{'打开' if _onoff[arg] else '关闭'}~"
+                                  "（临时生效，重启回到 config 的默认值）")
+                return
+            for key, name in (("asr", "听语音(ASR)"), ("tts", "说语音(TTS)"), ("判定", "语义判定")):
+                if arg.startswith(key):
+                    sub = arg[len(key):].strip()
+                    if sub in _onoff:
+                        _vc.set_voice_runtime({"asr": "asr", "tts": "tts", "判定": "judge"}[key], _onoff[sub])
+                        await reply.reply(f"{name}已{'打开' if _onoff[sub] else '关闭'}~")
+                        return
+            await reply.reply(_vc.voice_status_text())
+            return
+
+        # ---------------- 智能体私人笔记本（notebook.py，对齐新版 notebook）----------------
+        # 注意：/记事 是闹钟（reminder）的别名，这里必须排除，否则会被笔记本抢走
+        if (text.strip().startswith("/笔记") or text.strip().startswith("/忘")
+                or (text.strip().startswith("/记") and not text.strip().startswith("/记事"))):
+            import notebook as _nb
+            raw = text.strip()
+            if raw.startswith("/忘"):
+                nid = re.sub(r'^/?忘[:：\s]*', '', raw).strip()
+                await reply.reply("已经忘掉啦~" if _nb.forget(nid) else f"没找到 {nid} 这条笔记哦")
+                return
+            if raw.startswith("/记"):
+                content = re.sub(r'^/?记[:：\s]*', '', raw).strip()
+                if not content:
+                    await reply.reply("想让我记点什么？格式：/记 <内容>")
+                    return
+                e = _nb.save(content, source="cmd")
+                await reply.reply(f"记好啦（#{e.get('id')}）：{content[:60]}")
+                return
+            argn = re.sub(r'^/?笔记[:：\s]*', '', raw).strip()
+            if argn in ("", "列表", "全部", "list"):
+                await reply.reply(_nb.list_text())
+                return
+            entry = _nb.get(argn)
+            await reply.reply(entry.get("text", "") if entry else f"没有 {argn} 这条笔记~")
+            return
+
+        # ---------------- 闹钟 / 记事本（reminder.py：到点自动提醒，对齐新版 reminder）----------------
+        if text.strip().startswith("/提醒") or text.strip().startswith("/记事"):
+            import reminder as _reminder
+            raw = re.sub(r'^/?(提醒|记事)[:：\s]*', '', text.strip()).strip()
+            low = raw.lower()
+            if low in ("", "列表", "list", "全部"):
+                await reply.reply(_reminder.list_text())
+                return
+            if low.startswith(("取消", "删除", "cancel")):
+                rid = re.sub(r'^(取消|删除|cancel)[:：\s]*', '', raw, flags=re.I).strip()
+                ok = _reminder.cancel(rid)
+                await reply.reply(f"好，已经把 {rid} 这条提醒划掉啦~"
+                                  if ok else f"没找到 id 是 {rid} 的提醒哦")
+                return
+            _m = _TIME_PREFIX_RE.match(raw)
+            when_text = _m.group(0).strip() if _m else ""
+            content = raw[_m.end():].strip() if _m else ""
+            if not when_text or not content:
+                await reply.reply("格式：/提醒 <时间> <内容>，例如：\n"
+                                  "/提醒 明天9点 开会\n/提醒 30分钟后 关火\n/提醒 15:00 喝水\n"
+                                  "查看：/提醒列表　删除：/取消提醒 <id>")
+                return
+            when_ts = _reminder.parse_when(when_text)
+            if not when_ts:
+                await reply.reply(f"时间「{when_text}」我读不懂诶，换个写法试试（明天9点 / 15:00 / 30分钟后）")
+                return
+            item = _reminder.add(content, when_ts, msg.channel_type, msg.channel_id)
+            await reply.reply(f"记好啦～{_reminder.format_when(when_ts)}提醒你：{content}\n"
+                              f"（id: {item['id']}，想删就说 /取消提醒 {item['id']}）")
+            return
+
+        # ---------------- 好感度 / 关系分（affinity.py，对齐新版 affinity）----------------
+        if text.strip().startswith("/好感"):
+            import affinity as _affinity
+            raw = re.sub(r'^/?好感[:：\s]*', '', text.strip()).strip()
+            if raw in ("列表", "全部", "总览", "所有人"):
+                await reply.reply(_affinity.list_text())
+                return
+            parts = raw.split(None, 2)
+            # 手动调整：/好感 <QQ号> +5 原因
+            if len(parts) >= 2 and re.match(r'^[+-]?\d+$', parts[1]):
+                target = parts[0] if parts[0].isdigit() else str(user_id)
+                cur = _affinity.adjust(target, int(parts[1]), reason=parts[2] if len(parts) > 2 else "")
+                await reply.reply(f"好，对 {target} 的好感度现在是 {cur['score']} 分"
+                                  f"（{_affinity.label(cur['score'])}）")
+                return
+            target = raw if raw.isdigit() else str(user_id)
+            cur = _affinity.get(target)
+            tail = f"\n最近原因：{cur['lastReason']}" if cur.get("lastReason") else ""
+            await reply.reply(f"{target} 现在 {cur['score']} 分：{_affinity.label(cur['score'])}{tail}")
+            return
+
+        # ---------------- AI 作息（routine.py，对齐新版 routine）----------------
+        if text.strip().startswith("/作息"):
+            import routine as _routine
+            await reply.reply(_routine.status_text())
+            return
+
+        # ---------------- 节日 / 节气 / 农历（festival.py，对齐新版 festival）----------------
+        if text.strip().startswith("/节日"):
+            import festival as _festival
+            await reply.reply(f"今天是：{_festival.today_festival_short()}")
+            return
+
+        # ---------------- QQ 空间动态（说说，对齐新版 qzone；需开关 + NapCat 支持）----------------
+        if text.strip().startswith("/发空间"):
+            if not getattr(config, "QQ_QZONE_ENABLED", False):
+                await reply.reply("QQ 空间没开哦（config.QQ_QZONE_ENABLED=False），"
+                                  "而且还得 NapCat 开放空间接口才能用~")
+                return
+            content = re.sub(r'^/?发空间[:：\s]*', '', text.strip()).strip()
+            if not content:
+                await reply.reply("想发点什么？格式：/发空间 <内容>")
+                return
+            try:
+                from qq_adapter import get_qq_adapter
+                ok = await get_qq_adapter().send_qzone(content)
+                await reply.reply("好，发到空间啦~" if ok
+                                  else "没发出去，多半是 NapCat 没开放空间接口，日志里有详情~")
+            except Exception as e:
+                await reply.reply(f"发空间失败：{e}")
             return
 
         # ---------------- 反思记忆（reflection_memory.py）----------------
@@ -1387,7 +1551,13 @@ class ChatService:
                 return
 
         # ---------------- 语音消息：先转文字再走正常流程 ----------------
-        if has_voice and config.ENABLE_VOICE:
+        # asr 开关（对齐新版 voice.asr）：关掉则不再识别语音，按纯语音/空消息处理
+        try:
+            import voice_client as _vc_asr
+            _asr_on = _vc_asr.voice_asr_enabled()
+        except Exception:
+            _asr_on = bool(getattr(config, "ENABLE_VOICE", False))
+        if has_voice and _asr_on:
             try:
                 record_text = await self._transcribe_voice(msg.audio_wav)
                 if record_text:
@@ -1401,7 +1571,7 @@ class ChatService:
                 return
 
         # ---------------- 心情自然语言询问（emotion.py：免指令，问「你还在生气吗」直接答）----------------
-        if (getattr(config, "EMOTION_ENABLED", False) and text.strip()
+        if (emotion.runtime_enabled() and text.strip()
                 and not msg.image_refs and not msg.has_video and not has_quote
                 and emotion.is_mood_query(text)):
             await reply.reply(emotion.describe_mood())
@@ -1827,7 +1997,14 @@ class ChatService:
             _judge_search = bool(config.AUTO_WEB_SEARCH and effective_text and not kb_context
                                   and _looks_realtime(effective_text))
             _judge_reason = bool(config.AUTO_REASONING and effective_text)
-            _judge_voice = bool(config.ENABLE_VOICE and platform_voice_ok
+            # 语义判定开关（对齐新版 voice.semanticJudge）：关掉则不问 LLM，need_voice 保持 False，
+            # 由 VOICE_AUTO_CHAT / 显式「语音」开头触发，省一次调用
+            try:
+                import voice_client as _vc_j
+                _judge_on = _vc_j.voice_tts_enabled() and _vc_j.voice_judge_enabled()
+            except Exception:
+                _judge_on = bool(getattr(config, "ENABLE_VOICE", False))
+            _judge_voice = bool(_judge_on and platform_voice_ok
                                 and not (has_voice or voice_only)
                                 and not effective_text.strip().startswith(("/", "搜索", "思考")))
             _judge_feature = bool(getattr(config, "BOT_SELF_CODING_ENABLED", False)
@@ -1964,13 +2141,50 @@ class ChatService:
                 print(f"[MC-MODS] 注入失败: {e}")
 
         # 注入心情状态（emotion.py：此刻的心情 + 该情绪下的语气指引，让回复口吻一致）
-        if getattr(config, "EMOTION_ENABLED", False) and user_id:
+        if emotion.runtime_enabled() and user_id:
             try:
                 mood_hint = emotion.build_mood_hint(user_id)
                 if mood_hint:
                     messages.append({"role": "system", "content": mood_hint})
             except Exception as e:
                 print(f"[EMOTION] 心情提示注入失败: {e}")
+
+        # 注入好感度（affinity.py：对 TA 当前的感觉与分寸，影响亲疏语气；对齐新版 affinity）
+        if getattr(config, "AFFINITY_ENABLED", False) and user_id:
+            try:
+                import affinity as _affinity_mod
+                _aff_hint = _affinity_mod.build_hint(user_id)
+                if _aff_hint:
+                    messages.append({"role": "system", "content": _aff_hint})
+            except Exception as e:
+                print(f"[AFFINITY] 好感度提示注入失败: {e}")
+
+        # 注入作息状态（routine.py：睡眠/午休影响说话节奏；对齐新版 routine）
+        try:
+            import routine as _routine_mod
+            _routine_hint = _routine_mod.build_hint()
+            if _routine_hint:
+                messages.append({"role": "system", "content": _routine_hint})
+        except Exception as e:
+            print(f"[ROUTINE] 作息提示注入失败: {e}")
+
+        # 注入私人笔记本（notebook.py：她自己的随手记，让她记性连贯；对齐新版 notebook）
+        if getattr(config, "NOTEBOOK_ENABLED", False) and getattr(config, "NOTEBOOK_CONTEXT_LINES", 0):
+            try:
+                import notebook as _notebook_mod
+                _nb_hint = _notebook_mod.tail_text(int(getattr(config, "NOTEBOOK_CONTEXT_LINES", 6)))
+                if _nb_hint:
+                    messages.append({"role": "system", "content": _nb_hint})
+            except Exception as e:
+                print(f"[NOTEBOOK] 笔记本注入失败: {e}")
+
+        # 注入节日 / 节气 / 农历（festival.py：让 AI 知道今天是什么日子；对齐新版 festival）
+        if getattr(config, "FESTIVAL_ENABLED", False):
+            try:
+                import festival as _festival_mod
+                messages.append({"role": "system", "content": _festival_mod.festival_text()})
+            except Exception as e:
+                print(f"[FESTIVAL] 节日提示注入失败: {e}")
 
         # 防串台：给每条 user 消息打上「说话人」标签。
         # 上下文虽按 (channel, channel_id, user_id) 隔离，但当 user_id 为空/被多会话共用、
@@ -2037,12 +2251,19 @@ class ChatService:
             long_term_memory.append_history(user_id, "assistant", reply_text, channel_type)
 
             # 记忆提取：一次 AI 调用，同时提取人物档案事实 + 重要信息（+ 情绪模块感知 AI 心情）
-            if text.strip() and (config.ENABLE_PROFILE or config.ENABLE_AUTO_IMPORTANT_NOTES):
+            _aff_on = bool(getattr(config, "AFFINITY_ENABLED", False))
+            _rem_on = bool(getattr(config, "REMINDER_AUTO_EXTRACT", False))
+            _nb_on = bool(getattr(config, "NOTEBOOK_ENABLED", True))
+            if text.strip() and (config.ENABLE_PROFILE or config.ENABLE_AUTO_IMPORTANT_NOTES
+                                 or _aff_on or _rem_on or _nb_on):
                 try:
                     memory_result = await extract_memory(
                         text, reply_text,
-                        include_mood=bool(getattr(config, "EMOTION_ENABLED", False)),
-                        user_id=user_id)
+                        include_mood=emotion.runtime_enabled(),
+                        user_id=user_id,
+                        include_affinity=_aff_on,
+                        include_reminder=_rem_on,
+                        include_notebook=_nb_on)
                     if config.ENABLE_PROFILE and memory_result.get("facts"):
                         merged = await merge_profile_facts(user_id, memory_result["facts"])
                         long_term_memory.replace_profile(user_id, merged)
@@ -2057,6 +2278,37 @@ class ChatService:
                             emotion.apply_mood(user_id, memory_result["mood"])
                         except Exception as e:
                             print(f"[WARN] 情绪感知写入失败: {e}")
+                    # 好感度：本次互动让好感 ±N（对齐新版 affinity，由模型自己拿捏分寸）
+                    if memory_result.get("affinity") and _aff_on and getattr(config, "AFFINITY_AUTO_ADJUST", True):
+                        try:
+                            import affinity as _affinity_mod
+                            _a = memory_result["affinity"]
+                            _maxd = max(1, int(getattr(config, "AFFINITY_MAX_DELTA", 10)))
+                            _delta = max(-_maxd, min(_maxd, int(_a.get("delta", 0))))
+                            if _delta:
+                                _affinity_mod.adjust(user_id, _delta, reason=_a.get("why", ""))
+                        except Exception as e:
+                            print(f"[WARN] 好感度写入失败: {e}")
+                    # 闹钟 / 记事本：识别到「提醒我…」就记下来（对齐新版 reminder）
+                    if memory_result.get("reminder") and _rem_on:
+                        try:
+                            import reminder as _reminder_mod
+                            _r = memory_result["reminder"]
+                            _ts = _reminder_mod.parse_when(_r.get("when_text", ""))
+                            if _ts:
+                                _reminder_mod.add(_r.get("text", ""), _ts, channel_type, channel_id)
+                                reply_text += (f"\n（顺手记好啦：{_reminder_mod.format_when(_ts)}"
+                                               f"提醒你{_r.get('text', '')}）")
+                        except Exception as e:
+                            print(f"[WARN] 提醒记录失败: {e}")
+                    # 私人笔记本：她自己想记的随手记（对齐新版 notebook，静默落盘不打扰）
+                    if memory_result.get("notes_self") and _nb_on:
+                        try:
+                            import notebook as _notebook_mod
+                            for _t in memory_result["notes_self"][:3]:
+                                _notebook_mod.save(_t, source="auto")
+                        except Exception as e:
+                            print(f"[WARN] 私人笔记写入失败: {e}")
                 except Exception as e:
                     print(f"[WARN] 记忆提取失败: {e}")
 
@@ -2106,7 +2358,13 @@ class ChatService:
         # 跳过语音意图判断（省一次 LLM 调用）与语音合成；
         # capabilities.voice_only=True 的平台（如 B 站直播）只有语音通道，恒走语音。
         want_voice = has_voice or voice_only
-        if config.ENABLE_VOICE and platform_voice_ok and not want_voice:
+        # tts 开关（对齐新版 voice.tts）：关掉则一律打字，不再念出来
+        try:
+            import voice_client as _vc_tts
+            _tts_on = _vc_tts.voice_tts_enabled()
+        except Exception:
+            _tts_on = bool(getattr(config, "ENABLE_VOICE", False))
+        if _tts_on and platform_voice_ok and not want_voice:
             if re.match(r'^/?(语音|voice)\b', text.strip()):
                 want_voice = True
             elif (getattr(config, "VOICE_AUTO_CHAT", False)
@@ -2119,7 +2377,7 @@ class ChatService:
                 # 复用上方「一次合并判断」的语音意图结果（不再单独调 wants_voice_reply）
                 want_voice = bool(_voice_judged)
 
-        if config.ENABLE_VOICE and platform_voice_ok and want_voice:
+        if _tts_on and platform_voice_ok and want_voice:
             voice_text = clean_voice_text(reply_text)
             if voice_text:
                 # 字幕挂钩：直播模型（voice_only）说出口之前先把文字推给字幕服务
@@ -2804,11 +3062,16 @@ def _build_capability_catalog() -> str:
     return "\n".join(lines)
 
 
-async def extract_memory(user_text: str, reply: str, include_mood: bool = False, user_id: str = "") -> dict:
+async def extract_memory(user_text: str, reply: str, include_mood: bool = False, user_id: str = "",
+                         include_affinity: bool = False, include_reminder: bool = False,
+                         include_notebook: bool = False) -> dict:
     """一次 AI 调用，同时提取「人物档案事实」「重要信息」，可选再加「AI 此刻的心情」。
 
     include_mood=True 时（情绪模块 emotion.py），让模型顺带分析用户这句话让 AI
     产生了什么情绪——不新增 LLM 调用，解析逻辑在 parse_memory_output()。
+    include_affinity=True 时（好感度 affinity.py），顺带判断对这位用户的好感变化。
+    include_reminder=True 时（闹钟 reminder.py），顺带识别「提醒我…」这类待办。
+    include_notebook=True 时（私人笔记本 notebook.py），顺带记下她自己想记的东西。
     user_id：当前对话用户的 ID，仅用于提示模型「正在为谁整理档案」，不参与事实内容。
     """
     subject_tip = (f"当前正在为「用户 {user_id}」整理长期记忆；下面所有「用户」都指这一位。\n\n"
@@ -2853,34 +3116,70 @@ async def extract_memory(user_text: str, reply: str, include_mood: bool = False,
             "例如：心情|开心|2|被夸是最聪明的鱼 / 心情|得意|2|他说好好好都听我的\n"
             "没有情绪变化时输出：\n【心情】\n无\n\n"
         )
+    if include_affinity:
+        prompt += (
+            "再一类【好感】：这次互动之后，你对「用户」的好感变化（可正可负，不是只增不减）。\n"
+            "聊得舒服/被夸/被关心/投缘→加；被凶/被冒犯/被敷衍/越界/让人反感→减；普通闲聊→0。\n"
+            "输出一行：好感|+5|一句话原因（原因 25 字内，AI 第一人称，不要出现「用户」二字）。\n"
+            "幅度克制：单次一般 ±1~5，特别投缘/特别过分才到 ±10。无变化输出：\n【好感】\n无\n\n"
+        )
+    if include_reminder:
+        prompt += (
+            "再一类【提醒】：用户是否说了「要你提醒 / 记得 / 别忘了 + 时间」这类需要定时提醒的事"
+            "（例如『提醒我三点开会』『明天9点记得还书』『半小时后叫我关火』）。\n"
+            "是则输出一行：提醒|时间|内容。时间必须写成能被程序直接解析的形式，"
+            "如「明天9点」「15:00」「30分钟后」「2026-09-30T09:00」；内容写要提醒的那件事。\n"
+            "只是提到某个时间点、但没有让提醒的，不要写。没有就输出：\n【提醒】\n无\n\n"
+        )
+    if include_notebook:
+        prompt += (
+            "再一类【笔记】：你自己（肥鱼娘）想记进私人笔记本的东西——灵感、吐槽、"
+            "对某个人的看法、觉得有意思的知识、不想忘的小事、刚刚答应过但不必到点提醒的约定。\n"
+            "每行一条，30 字以内，第一人称口吻；不要把用户的事实档案重复记一遍。\n"
+            "大多数对话这里都应该是：\n【笔记】\n无\n\n"
+        )
     prompt += f"用户说：{user_text}\nAI回复：{reply}"
     messages = [{"role": "user", "content": prompt}]
     try:
         ai_output = await get_llm().chat(messages, capability="chat", role="memory_extract")
         if isinstance(ai_output, dict):
             ai_output = ai_output.get("content", "") or ai_output.get("text", "") or ""
-        return parse_memory_output(str(ai_output).strip(), include_mood=include_mood)
+        return parse_memory_output(str(ai_output).strip(), include_mood=include_mood,
+                                   include_affinity=include_affinity, include_reminder=include_reminder,
+                                   include_notebook=include_notebook)
     except Exception as e:
         print(f"[WARN] 记忆提取失败: {e}")
-        return {"facts": [], "notes": [], "mood": None}
+        return {"facts": [], "notes": [], "mood": None, "affinity": None, "reminder": None, "notes_self": []}
 
 
-def parse_memory_output(ai_output: str, include_mood: bool = False) -> dict:
+def parse_memory_output(ai_output: str, include_mood: bool = False,
+                        include_affinity: bool = False, include_reminder: bool = False,
+                        include_notebook: bool = False) -> dict:
     """解析记忆提取的模型输出（纯文本处理，便于离线测试）。
 
     输出格式（模型遵循的约定）：
         【人物档案】  每行一条用户事实
         【重要信息】  每行「分类|内容」
         【心情】      一行「心情|标签|强度(1-3)|原因」（include_mood 时）
-    返回 {"facts": [...], "notes": [...], "mood": None|{"emotion","strength","why"}}
+        【好感】      一行「好感|+N|原因」（include_affinity 时）
+        【提醒】      一行「提醒|时间|内容」（include_reminder 时）
+        【笔记】      每行一条私人笔记（include_notebook 时）
+    返回 {"facts": [...], "notes": [...], "mood": None|{...},
+          "affinity": None|{"delta","why"}, "reminder": None|{"when_text","text"},
+          "notes_self": [...]}
     """
-    result = {"facts": [], "notes": [], "mood": None}
+    result = {"facts": [], "notes": [], "mood": None, "affinity": None, "reminder": None,
+              "notes_self": []}
     if not ai_output or ai_output == "无":
         return result
     section = None
     for line in ai_output.split("\n"):
         line = line.strip()
         if not line:
+            continue
+        # 【笔记】必须最先判：它的标题里不含「重要信息」等字样，但内容可能混着这些词
+        if include_notebook and line.startswith("【笔记】"):
+            section = "notebook"
             continue
         if "人物档案" in line and "【" in line:
             section = "facts"
@@ -2890,6 +3189,12 @@ def parse_memory_output(ai_output: str, include_mood: bool = False) -> dict:
             continue
         if include_mood and "心情" in line and "【" in line:
             section = "mood"
+            continue
+        if include_affinity and "好感" in line and "【" in line:
+            section = "affinity"
+            continue
+        if include_reminder and "提醒" in line and "【" in line:
+            section = "reminder"
             continue
         if line == "无":
             section = None
@@ -2911,9 +3216,50 @@ def parse_memory_output(ai_output: str, include_mood: bool = False) -> dict:
             mood = _parse_mood_line(line_clean)
             if mood:
                 result["mood"] = mood
+        elif section == "affinity":
+            aff = _parse_affinity_line(line_clean)
+            if aff:
+                result["affinity"] = aff
+        elif section == "reminder":
+            rem = _parse_reminder_line(line_clean)
+            if rem:
+                result["reminder"] = rem
+        elif section == "notebook":
+            if len(line_clean) > 1:
+                result["notes_self"].append(line_clean)
     result["facts"] = result["facts"][:10]
     result["notes"] = result["notes"][:8]
     return result
+
+
+def _parse_affinity_line(line_clean: str) -> dict:
+    """解析单行好感输出「好感|+5|原因」（容错：兼容漏掉原因/前缀）。"""
+    parts = [p.strip() for p in line_clean.split("|") if p.strip()]
+    if not parts:
+        return None
+    if parts[0].startswith("好感"):
+        parts = parts[1:]
+    if not parts:
+        return None
+    try:
+        delta = int(str(parts[0]).replace("＋", "+").replace("－", "-"))
+    except ValueError:
+        return None
+    if delta == 0:
+        return None
+    return {"delta": delta, "why": (parts[1] if len(parts) >= 2 else "")[:80]}
+
+
+def _parse_reminder_line(line_clean: str) -> dict:
+    """解析单行提醒输出「提醒|时间|内容」（容错：兼容漏掉内容）。"""
+    parts = [p.strip() for p in line_clean.split("|") if p.strip()]
+    if len(parts) < 2:
+        return None
+    if parts[0].startswith("提醒"):
+        parts = parts[1:]
+    if len(parts) < 2:
+        return None
+    return {"when_text": parts[0][:60], "text": parts[1][:200]}
 
 
 def _parse_mood_line(line_clean: str) -> dict:

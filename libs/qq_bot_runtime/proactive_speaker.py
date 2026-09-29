@@ -208,6 +208,29 @@ class ProactiveSpeaker:
             return self._warmup_prob
         return self._stable_prob
 
+    # ---- 话题相似度去重（对齐新版 proactive.topicSimilarity）----
+    @staticmethod
+    def _bigram_jaccard(a: str, b: str) -> float:
+        """字符二元组 Jaccard 相似度（0~1）。"""
+        sa = {a[i:i + 2] for i in range(max(0, len(a) - 1))}
+        sb = {b[i:i + 2] for i in range(max(0, len(b) - 1))}
+        if not sa or not sb:
+            return 0.0
+        return len(sa & sb) / len(sa | sb)
+
+    def _too_similar(self, msg: str) -> bool:
+        """与近期已发内容是否"换汤不换药"（含完全重复）。"""
+        try:
+            thr = float(getattr(config, "PROACTIVE_TOPIC_SIMILARITY", 0.6))
+        except (TypeError, ValueError):
+            thr = 0.6
+        if thr <= 0:
+            return any(msg == m for m in self._recent_msgs)
+        for old in self._recent_msgs:
+            if self._bigram_jaccard(msg, old) > thr:
+                return True
+        return False
+
     def notify_reply(self):
         """收到目标用户回复时调用，重置未回复计数。"""
         self._unreplied = 0
@@ -217,6 +240,14 @@ class ProactiveSpeaker:
         """每分钟按概率决定是否主动说话。"""
         if self._state == "silent":
             return  # 静默期不发送
+
+        # 作息（对齐新版 routine）：睡眠段暂停主动冒泡——"睡着了不主动找人，但被戳醒仍会回"
+        try:
+            import routine
+            if routine.should_pause_proactive():
+                return
+        except Exception:
+            pass
 
         now = time.time()
 
@@ -308,8 +339,8 @@ class ProactiveSpeaker:
                 model=getattr(config, "DEEPSEEK_MODEL", None), think=False,
             )
             msg = msg.strip()
-            # 去重
-            if any(msg == m for m in self._recent_msgs):
+            # 去重（含相似度去重：防止同一话题反复换汤不换药）
+            if self._too_similar(msg):
                 return ""
             return msg
         except Exception as e:
@@ -447,8 +478,8 @@ class ProactiveSpeaker:
                 model=getattr(config, "DEEPSEEK_MODEL", None), think=False,
             )
             msg = msg.strip()
-            # 去重
-            if any(msg == m for m in self._recent_msgs):
+            # 去重（含相似度去重）
+            if self._too_similar(msg):
                 return ""
             return msg
         except Exception as e:

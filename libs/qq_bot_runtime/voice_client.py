@@ -238,3 +238,74 @@ async def speech_to_text(audio_bytes: bytes, filename: str = "audio.wav", langua
         raise RuntimeError(f"ASR 失败 {resp.status_code}: {resp.text[:200]}")
     data = resp.json()
     return data.get("text", "") or ""
+
+
+# ---------------------------------------------------------------------------
+# 运行时开关（对齐新版 voice：聊天命令即时生效，优先级高于 config）
+# ---------------------------------------------------------------------------
+# 三个维度总开关语义（与新版一致）：
+#   enabled = 语音总开关；asr = 收语音转文字；tts = 发语音；judge = 用 LLM 判断"这条要不要念"
+# None = 未override，用 config 的值；True/False = 命令显式设定
+_RUNTIME = {"enabled": None, "asr": None, "tts": None, "judge": None}
+
+_PROVIDER = None   # 运行时供应商名（'auto'/'glm'/'voxcpm'/'native'），None=用 config
+
+
+def _rt(key: str, cfg_key: str, default=True):
+    v = _RUNTIME.get(key)
+    if v is not None:
+        return bool(v)
+    return bool(getattr(config, cfg_key, default))
+
+
+def voice_enabled() -> bool:
+    return _rt("enabled", "ENABLE_VOICE", True)
+
+
+def voice_asr_enabled() -> bool:
+    return voice_enabled() and _rt("asr", "ENABLE_VOICE_ASR", True)
+
+
+def voice_tts_enabled() -> bool:
+    return voice_enabled() and _rt("tts", "ENABLE_VOICE_TTS", True)
+
+
+def voice_judge_enabled() -> bool:
+    return _rt("judge", "ENABLE_VOICE_JUDGE", True)
+
+
+def voice_provider() -> str:
+    """语音供应商名（展示用）：auto=按 config.VOICE_TTS_ENGINE 自动挑，失败回退。"""
+    return _PROVIDER or "auto"
+
+
+def set_voice_runtime(key: str, value: bool | None) -> None:
+    """设置运行时开关（None=恢复用 config 的值）。"""
+    if key in _RUNTIME:
+        _RUNTIME[key] = value
+    elif key == "provider":
+        global _PROVIDER
+        _PROVIDER = value
+
+
+def set_voice_provider(name: str) -> None:
+    global _PROVIDER
+    _PROVIDER = name or None
+
+
+def voice_status_text() -> str:
+    """语音开关状态（命令展示用）。"""
+    engine = getattr(config, "VOICE_TTS_ENGINE", "glm")
+    key_ok = "已配置" if getattr(config, "GLM_API_KEY", "") else "**未配置**（云端 ASR/TTS 不可用）"
+    return (
+        f"【语音状态】\n"
+        f"总开关：{'开' if voice_enabled() else '关'}"
+        f"{'（命令覆盖）' if _RUNTIME['enabled'] is not None else ''}\n"
+        f"听语音(ASR)：{'开' if voice_asr_enabled() else '关'}\n"
+        f"说语音(TTS)：{'开' if voice_tts_enabled() else '关'}\n"
+        f"语义判定：{'开' if voice_judge_enabled() else '关'}"
+        f"（关=要发语音的一律念）\n"
+        f"TTS 引擎：{engine}　供应商：{voice_provider()}\n"
+        f"GLM Key：{key_ok}\n"
+        f"临时改：/语音 开|关、/语音 asr 开|关、/语音 tts 开|关、/语音 判定 开|关"
+    )

@@ -72,6 +72,19 @@ QQ_SEND_CONFIRM = False
 QQ_SEND_CONFIRM_TTL = 180         # 待确认草稿存活秒数，超时自动作废（对齐新版 onTurnEnded）
 # 状态落盘（对齐新版 saveState）：known_messages / vision_seen 持久化到 data/qq_plugin_state.json，重启仍有效。
 QQ_STATE_PERSIST = True
+# ---- 群聊发言频率限制（对齐新版 groupSpeak）----
+# 每个群在滑动窗口内允许发出的消息总条数（含主动与回复），超出则本次发送被拦截，防刷屏/灌水。
+QQ_GROUPSPEAK_ENABLED = True
+QQ_GROUPSPEAK_MAX_PER_WINDOW = 12     # 滑动窗口内每个群最多发几条
+QQ_GROUPSPEAK_WINDOW_SEC = 60         # 滑动窗口长度（秒）
+# ---- 话题自动结束 / 防死循环（对齐新版 antiLoop）----
+# 单会话内 bot 连续发言超上限，或对方久未接话，则本次发言被拦截并收尾（等对方开口再开新话题）。
+QQ_ANTILOOP_ENABLED = True
+QQ_ANTILOOP_MAX_BOT_TURNS = 5         # bot 连续发言上限（对方发来任意消息即清零）
+QQ_ANTILOOP_IDLE_TO_END_SEC = 300     # 对方静默超过该秒数且 bot 已发过言则收尾（0=关闭该规则）
+# ---- QQ 空间（说说）----（对齐新版 qzone：命令 /发空间 手动发表，依赖 NapCat 的空间 API）
+QQ_QZONE_ENABLED = False              # 默认关：部分 NapCat 版本未暴露空间 API
+QQ_QZONE_PERMISSION = 1               # 动态可见范围（1=好友/公开视 NapCat 版本而定）
 
 # 是否开启多轮对话记忆（按群/私聊分别保存上下文）
 ENABLE_MEMORY = True
@@ -166,6 +179,11 @@ BALANCE_ALERT_SILENT = True
 
 # 语音功能配置
 ENABLE_VOICE = True
+# 拆分开关（对齐新版 voice.asr / voice.tts / voice.semanticJudge）：分别控制收语音转文字、
+# 发语音、以及"这条要不要念"的语义判定。关掉 judge = 凡是判定要发语音的一律念出来（不再问一次 LLM）。
+ENABLE_VOICE_ASR = True
+ENABLE_VOICE_TTS = True
+ENABLE_VOICE_JUDGE = True
 # 普通闲聊是否默认发语音：
 #   False（默认）= 不强制默认语音，由语义判断（_judge_capabilities 的 need_voice）决定本条是否适合语音回复
 #                  need_voice 默认「不需要」：仅用户明确要求语音（说「用语音/念给我听」）/想听声音/要念某段才判「需要」；
@@ -255,6 +273,37 @@ EMOTION_ENABLED = True            # 总开关（可 /心情 查看与重置）
 EMOTION_FILE = ""                 # 心情档案文件（留空=脚本目录 emotion_data.json）
 EMOTION_DECAY_HOURS = 2.0         # 心情底色向平静回落的半衰期（小时）：1 个半衰期消一半
 EMOTION_LABEL_MINUTES = 40        # "此刻主导情绪"标签的基础持续分钟数（×强度 1~3）
+
+# ---- 好感度 / 关系分（对齐新版 affinity：每人独立、-100~100、可正可负）----
+# 开启后：聊天时把「你对 TA 当前的感觉 + 该把握的分寸」注入上下文，影响语气；
+# 好感度变化由每轮已有的「记忆提取」顺带判断（不新增 LLM 调用）。命令 /好感 /好感列表 始终可用。
+AFFINITY_ENABLED = True
+AFFINITY_AUTO_ADJUST = True       # 让 AI 自己按互动质量加减（False 则只能手动用命令调）
+AFFINITY_MAX_DELTA = 10           # 单轮自动加减的绝对值上限，防止一次翻脸/上头
+
+# ---- 闹钟 / 记事本（对齐新版 reminder：记下要定时做的事，到点自动提醒）----
+REMINDER_ENABLED = True           # 只控制「到点自动发提醒」；记录/查询/取消始终可用
+REMINDER_SCAN_SEC = 30            # 到点扫描间隔（秒）
+REMINDER_AUTO_EXTRACT = True      # 让 AI 从对话里自动识别「提醒我…」并记下（复用记忆提取那一次调用）
+REMINDER_RETRY_ON_FAIL = True     # 发送失败时保留、下轮重试（False=发不出去就作废，避免重启补发一堆）
+
+# ---- AI 作息（对齐新版 routine：睡眠 / 午休 / 活跃）----
+# 睡眠段暂停「主动冒泡」，被动回复照常（睡着了被戳醒仍会回）；时段切换由 LLM 现场播报一句。
+ROUTINE_ENABLED = False
+ROUTINE_SLEEP_START = "23:00"
+ROUTINE_SLEEP_END = "07:30"
+ROUTINE_LAZY_START = "12:00"
+ROUTINE_LAZY_END = "14:00"
+ROUTINE_GREET_SLEEP = "时间不早啦，我先去睡一会儿，你们也别熬太狠~有事留言，我醒了回。"
+ROUTINE_GREET_WAKE = "早呀，我醒啦，今天也要好好摸鱼。"
+ROUTINE_GREET_LAZY = "中午啦，我去扒口饭眯一眯，有事儿留言~"
+
+# ---- 私人笔记本（notebook.py，对齐新版 notebook：AI 自己的随手记）----
+NOTEBOOK_ENABLED = True           # 让 AI 在每轮记忆提取时顺带记下它想记的东西
+NOTEBOOK_CONTEXT_LINES = 6        # 注入上下文时带最近几条（0=不注入，只可命令查看）
+
+# ---- 节日 / 节气 / 农历感知（对齐新版 festival：让 AI 知道今天是什么日子）----
+FESTIVAL_ENABLED = True
 # 称呼显式覆盖：user_id -> 称呼。优先级最高，越过档案自动推断（用户明确要求的叫法）
 NAME_OVERRIDES = {
     # 纯净包：已清空。格式 "QQ号": "称呼"
@@ -281,6 +330,9 @@ ENABLE_PROACTIVE_SPEAKER =  True          # True 后启用主动说话调度器
 PROACTIVE_PRIVATE_USER_ID = ""  # 纯净包：已清空。填 QQ 号则主动私聊该对象
 PROACTIVE_GROUP_ID = ""                   # 主动说话的群号，留空则不在群里主动说
 PROACTIVE_GROUP_REPLY = False             # 群内主动接话开关
+# 主动消息与近期已发内容的相似度上限（0~1，字符二元组 Jaccard）：超过则跳过，
+# 防同一话题反复换汤不换药。0=关闭（对齐新版 proactive.topicSimilarity）
+PROACTIVE_TOPIC_SIMILARITY = 0.6
 
 # ---- 跨平台人物身份绑定（identity.py：QQ ↔ MC 游戏名记忆打通）----
 # 双向确认后，同一个人的档案/笔记/全文历史在 QQ 与游戏两侧按同一键读写，
