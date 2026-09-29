@@ -304,6 +304,37 @@ NOTEBOOK_CONTEXT_LINES = 6        # 注入上下文时带最近几条（0=不注
 
 # ---- 节日 / 节气 / 农历感知（对齐新版 festival：让 AI 知道今天是什么日子）----
 FESTIVAL_ENABLED = True
+
+# ============================================================================
+# Cortico 协议兼容层（libs/qq_bot_runtime/cortico/，api=5）
+# ============================================================================
+# 让 feiyu（Python）与 Cortico（TypeScript）双架构兼容：
+# 按 api=5 契约写的 Python World 可直接挂上来；cortico-world-* 的 TS 包经 Node 桥真跑。
+CORTICO_ENABLED = False              # 总开关（默认关：需要先有 Node 与可用的包）
+# 扩展包搜索根目录（会扫描 <root>/* 与 <root>/*/node_modules/* 下的 package.json）
+CORTICO_PACKAGE_ROOTS = []           # 例：[r"D:\testing\Cortico\extensions\node_modules"]
+# Cortico 仓库根（含 src/），用于解析 TS 包里的 `cortico/...` 裸导入
+CORTICO_CORE_ROOT = ""               # 例：r"D:\testing\Cortico"
+# Node 运行时：可执行文件、TS 加载器参数、模块搜索路径
+CORTICO_NODE_BIN = ""                # 空=自动找 PATH 里的 node
+CORTICO_NODE_LOADER = "--import tsx"  # 跑 .ts 源码需要；纯 JS 包可置空
+CORTICO_NODE_MODULES_PATHS = []      # 追加到 NODE_PATH（CJS 依赖用）
+CORTICO_NODE_CWD = ""                # Node 子进程工作目录（解析 tsx 等依赖用）；空=用 CORTICO_CORE_ROOT
+CORTICO_NODE_TIMEOUT_SEC = 30
+# World 配置段：{"dungeon": {"enabled": true, "serverUrl": "..."}, ...}（缺省由包 defaults 补）
+CORTICO_WORLDS = {}
+CORTICO_LOAD_ONLY = []               # 只装载这些包（空=全部）
+CORTICO_TIMEZONE = ""                # 空=系统本地时区
+# 世界大脑：事件唤醒 / 合批 / 工具轮数
+CORTICO_BRAIN_ENABLED = True
+CORTICO_QUIET_GAP_MS = 800
+CORTICO_MAX_BATCH = 20
+CORTICO_MAX_BATCH_AGE_MS = 6000
+CORTICO_MAX_TOOL_ROUNDS = 8
+CORTICO_CONTEXT_EVENTS = 30
+CORTICO_REPORT_TO_OWNER = False      # 模型在世界里说的话是否私聊主人
+# 是否把已挂载 World 的环境提示词注入聊天主线的 system 前缀
+CORTICO_INJECT_ENV_PROMPT = True
 # 称呼显式覆盖：user_id -> 称呼。优先级最高，越过档案自动推断（用户明确要求的叫法）
 NAME_OVERRIDES = {
     # 纯净包：已清空。格式 "QQ号": "称呼"

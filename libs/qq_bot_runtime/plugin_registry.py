@@ -210,6 +210,13 @@ SPECS: List[EntrySpec] = [
         requires={"bilibili": ">=1.0"},   # 复用 B 站会话/风控层
     ),
     EntrySpec(
+        name="cortico_worlds", title="Cortico 协议兼容层", kind="feature", version="1.0.0",
+        module="cortico.plugin", cls="CorticoWorldPlugin",
+        switch="CORTICO_ENABLED", default_on=False, order=25,
+        optional_requires=["vox_tts"],
+        extra={"protocol": "cortico-api-5"},
+    ),
+    EntrySpec(
         name="bilibili_learn_schedule", title="B 站每日自主学习", kind="feature", version="1.0.0",
         module="bili_learn_scheduler", cls="BilibiliLearnScheduler",
         switch="ENABLE_BILIBILI_LEARN_SCHEDULE", default_on=False, order=24,

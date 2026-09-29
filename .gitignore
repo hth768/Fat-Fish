@@ -24,6 +24,8 @@ pvz_games/
 libs/qq_bot_runtime/agents/*/memory/
 # 引擎运行数据（bots.json / affinity.json / reminders.json / notebook.jsonl / qq_plugin_state.json 等）
 libs/qq_bot_runtime/data/
+# Cortico 事件库（事件账本，运行期生成）
+libs/qq_bot_runtime/cortico_events.jsonl
 
 # ===== 构建产物 =====
 _build/

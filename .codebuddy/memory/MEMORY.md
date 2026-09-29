@@ -50,6 +50,8 @@
 - QQ 插件对齐 cortico-world-qq（移植非替换）：`QQ_WS_MODE`/`known_messages`+`QQ_SERIAL_PER_CONV`/`QQ_VISION_ON_IMAGE`+`QQ_VISION_RECALL`/`QQ_FORWARD_EXPAND`/`QQ_SEND_CONFIRM`+`QQ_SEND_CONFIRM_TTL`/引用 `get_quoted_message`+`QQ_STATE_PERSIST` 落盘 `data/qq_plugin_state.json`。
 - **已对齐到新版 `D:\testing\Cortico-QQ-World\cortico-world-qq-better`(v0.1.31)**（2026-09-29）：新增模块 `festival.py`(节日/节气/农历)、`affinity.py`(好感度±100)、`reminder.py`(闹钟+`parse_when`+后台扫描)、`routine.py`(作息睡眠/午休/LLM 播报)、`qq_guard.py`(群限速 groupSpeak+防死循环 antiLoop，**拦截时计数保持，只有用户消息才清零**)；命令 `/提醒 /好感 /作息 /节日 /发空间`；`extract_memory` 加 `include_affinity/include_reminder`（复用同一次调用）；`PROACTIVE_TOPIC_SIMILARITY` 二元组 Jaccard 主动去重；`[表情22：白眼]` 全角冒号解析。所有新配置用 `getattr` 读，缺省可跑。测试 `tests/test_qq_align.py`。
 - 坑：PowerShell 单行命令传中文给 `python -c` 会被 GBK 破坏（曾把部署 config 追加成乱码）→ 改配置一律写 `.py` 脚本用 UTF-8 读写。
+- **Cortico 双架构兼容层**（2026-09-29 新增，默认关）：`libs/qq_bot_runtime/cortico/` 实现 Cortico `api=5` 扩展契约的 Python 镜像 + Node 运行时桥（stdio JSON-RPC 真跑 TS world 包）；装配层 `registry.WorldAssembly` 对齐 `cortico/src/world.ts`；`brain.CorticoWorldBrain` 事件驱动。开关 `config.CORTICO_ENABLED`，World 经 `plugin_registry` 条目 `cortico_worlds` 挂载。契约源：`D:\testing\Cortico\src\core\types.ts` 与 `src/world.ts`。首个落地 World：cortico-world-dungeon@0.1.2（需 CORTICO_PACKAGE_ROOTS + CORTICO_CORE_ROOT）。
+- Node 钩子坑：Windows `--import` 只认 `file://` URL（入口脚本反而用普通路径）；钩子必须 `register()`；必须同时导出 `resolve`+`resolveSync`（tsx 走同步链）。
 
 ## 8. 用户偏好（按权重定，勿把旧事实写死）
 - 语音加权真相：早期要语音能用且好听 + 后期嫌磨叽 → 取中间态（可用 + 语义择机触发 + 回复简短）。勿写死"强烈偏好/讨厌语音"。

@@ -175,6 +175,14 @@ class AgentCore:
             self._brains = BrainManager(self)
         m = self._brains
         m.register(ChatBrain(self))
+        # Cortico 协议兼容层的大脑（api=5 World 事件驱动）。注册但不随核心自启，
+        # 由 CorticoWorldPlugin 在有已挂载 World 时拉起（auto_start_on_core=False）。
+        try:
+            from cortico.plugin import get_brain as _cortico_brain
+            if _cortico_brain() is not None:
+                m.register(_cortico_brain())
+        except Exception as e:
+            print(f"[CORE][WARN] Cortico 世界大脑注册失败: {e}")
         # mc_mod/mc_bot/pc/pvz 大脑已随插件分发（brain_* 插件包自带大脑类），
         # 由插件装载（pkg_manager.attach_to -> create_brain）时注册，此处不再内建。
     # ---- 插件注册 ----

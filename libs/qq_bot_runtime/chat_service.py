@@ -2178,6 +2178,17 @@ class ChatService:
             except Exception as e:
                 print(f"[NOTEBOOK] 笔记本注入失败: {e}")
 
+        # 注入 Cortico World 环境提示词（cortico/：已挂载 World 的环境描述，让聊天也"知道"世界）
+        if getattr(config, "CORTICO_ENABLED", False) and getattr(config, "CORTICO_INJECT_ENV_PROMPT", True):
+            try:
+                from cortico.plugin import env_prompt_segments as _cortico_env
+                _segs = await _cortico_env()
+                for _s in _segs:
+                    if _s.get("text"):
+                        messages.append({"role": "system", "content": _s["text"]})
+            except Exception as e:
+                print(f"[CORTICO] 环境提示词注入失败: {e}")
+
         # 注入节日 / 节气 / 农历（festival.py：让 AI 知道今天是什么日子；对齐新版 festival）
         if getattr(config, "FESTIVAL_ENABLED", False):
             try:
