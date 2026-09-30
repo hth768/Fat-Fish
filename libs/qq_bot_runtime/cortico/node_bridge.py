@@ -23,8 +23,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from .manifest import CorticoManifest
-from .types import (ConfigGroup, PromptDocDecl, ToolCallContext, ToolDef, ToolOutcome,
-                    World, WorldConsoleDecl, WorldHost)
+from .types import (ConfigGroup, EventEnvelope, PromptDocDecl, ToolCallContext, ToolDef,
+                    ToolOutcome, World, WorldConsoleDecl, WorldHost)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _NODE_DIR = os.path.join(_HERE, "node")
@@ -187,7 +187,7 @@ class NodeWorldBridge:
         if not self._proc or self._proc.stdin is None:
             raise BridgeError("Node 子进程未启动")
         try:
-            self._proc.stdin.write((json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8"))
+            self._proc.stdin.write((json.dumps(msg, ensure_ascii=False, default=_json_default) + "\n").encode("utf-8"))
         except Exception as e:
             raise BridgeError(f"写入 Node 失败: {e}")
 
@@ -389,3 +389,21 @@ class NodeWorld(World):
 
     def console(self, language: str = "zh") -> Optional[WorldConsoleDecl]:
         return self._console
+
+
+def _json_default(obj: Any) -> Any:
+    """JSON-RPC 帧的兜底编码：把契约数据类转成可序列化结构。
+
+    - EventEnvelope -> 其 to_dict()（带 cursor/contextDelivery 等字段）
+    - 其它 dataclass -> asdict 兜底
+    - 其余 -> str() 兜底，避免整帧发送失败（Node 侧会忽略不认识的字段）
+    """
+    if isinstance(obj, EventEnvelope):
+        return obj.to_dict()
+    try:
+        from dataclasses import asdict, is_dataclass
+        if is_dataclass(obj):
+            return asdict(obj)
+    except Exception:
+        pass
+    return str(obj)

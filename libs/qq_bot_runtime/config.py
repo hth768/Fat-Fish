@@ -30,6 +30,7 @@ AI_CAPABILITY_ROUTING = {
     "chat": [],
     "reasoning": [],
     "vision": [],
+    "tools": [],
 }
 AI_VISION_ROUTING = {
     "image":  ["glm", "gemini"],
@@ -333,6 +334,15 @@ CORTICO_MAX_BATCH_AGE_MS = 6000
 CORTICO_MAX_TOOL_ROUNDS = 8
 CORTICO_CONTEXT_EVENTS = 30
 CORTICO_REPORT_TO_OWNER = False      # 模型在世界里说的话是否私聊主人
+# 自主游玩：空闲一段时间后主动推进游戏（像 Cortico 的 onIdle）
+CORTICO_SELF_PLAY = True             # 是否开启空闲自驱（她能自己玩）
+CORTICO_SELF_PLAY_IDLE_S = 30        # 空闲多少秒后触发一次自主行动
+CORTICO_SELF_PLAY_PACE_S = 5         # 两次自主行动之间的间隔
+# 记忆：把宿主记忆注入世界上下文，并把游戏内容回写记忆
+CORTICO_MEMORY_INJECT = True         # 是否把宿主记忆注入世界系统前缀
+CORTICO_INJECT_MEMORY_FROM = ""      # 注入来源 user_id（空=自动取主人 QQ）
+CORTICO_MEMORY_WRITEBACK = True      # 是否把游戏内容写回记忆系统
+CORTICO_MEMORY_WRITE_TO = ""         # 回写目标 user_id（空=按世界自动命名）
 # 是否把已挂载 World 的环境提示词注入聊天主线的 system 前缀
 CORTICO_INJECT_ENV_PROMPT = True
 # 称呼显式覆盖：user_id -> 称呼。优先级最高，越过档案自动推断（用户明确要求的叫法）

@@ -61,7 +61,7 @@ class CorticoWorldPlugin(FeaturePlugin):
             cfg={"worlds": dict(getattr(cfg, "CORTICO_WORLDS", {}) or {})},
             deliver=self._deliver,
             paused=lambda: bool(_brain and _brain.is_paused),
-            timezone=str(getattr(cfg, "CORTICO_TIMEZONE", "") or ""),
+            timezone=str(getattr(cfg, "CORTICO_TIMEZONE", "") or "Asia/Shanghai"),
             bot_name=str(getattr(cfg, "DISPLAY_NAME", "") or getattr(cfg, "BOT_NAME", "") or ""),
         )
         _brain = CorticoWorldBrain(self.core, _assembly)

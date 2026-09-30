@@ -110,6 +110,16 @@ async def run_tool_turn(messages: List[Dict[str, Any]],
             msg = await _chat(llm, messages, [], role=role)
             final = str(msg.get("content") or "")
             break
+    # 轮数耗尽仍未拿到正文（最后一次是工具调用、且工具没 ends_turn）：
+    # 补一次纯文本收尾，让 agent 把刚才的行动叙述出来（对齐 Cortico 的 agent 叙事）
+    if not final:
+        try:
+            narr = list(messages)
+            narr.append({"role": "user", "content":
+                "请基于以上行动与结果，用第一人称简短叙述你刚刚在游戏里做了什么、看到了什么。"})
+            final = await _plain_chat(narr, role)
+        except Exception as e:
+            print(f"[CORTICO][DBG] 收尾叙述失败: {e!r}")
     return final
 
 
